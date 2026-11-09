@@ -1,0 +1,270 @@
+/*
+ * Structural variants of the shell.
+ *
+ * Every rule here is scoped to `html[data-shell-variant="..."]`, which only
+ * the mock entry ever sets. The product never renders these.
+ *
+ * The selectors name the shell's own blocks, so a variant rearranges the
+ * REAL components instead of redrawing them.
+ */
+
+/* ── 侧栏置顶 ─────────────────────────────────────────────────────────── */
+
+/*
+ * The sidebar moves to the TOP of the window as a horizontal band.
+ *
+ * The product's sidebar is a tall column: a switcher, a nav list, then a
+ * scrolling session list. Lifting it verbatim would push the chat out of
+ * the viewport — the column's height is its CONTENT's height, so a column
+ * full of sessions is a column as tall as the window.
+ *
+ * So the variant does what the structure asks for: the rail stays on the
+ * left, and the sidebar becomes a BAND of a fixed height whose blocks sit
+ * side by side. The chat keeps the rest of the window.
+ */
+
+html[data-shell-variant="sidebar-top"] .app-body {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-columns: 1fr;
+  align-items: stretch;
+}
+
+html[data-shell-variant="sidebar-top"] .app-sidebar-column {
+  flex-direction: row;
+  align-items: stretch;
+  width: 100%;
+  max-height: 132px;
+  border-right: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+html[data-shell-variant="sidebar-top"] .app-sidebar-column > .app-sidebar {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
+  /* The band holds its blocks side by side, so it scrolls HORIZONTALLY. */
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 0.75rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+html[data-shell-variant="sidebar-top"] .app-sidebar-column > .app-sidebar > .sidebar-top {
+  flex: 0 0 auto;
+  align-self: stretch;
+}
+
+html[data-shell-variant="sidebar-top"] .app-sidebar-column > .app-sidebar > .sidebar-primary-group {
+  flex: 0 0 auto;
+  align-self: stretch;
+}
+
+html[data-shell-variant="sidebar-top"] .app-sidebar-column > .app-sidebar > .flex-1 {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  /* The session list scrolls sideways inside the band, not downwards. */
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+html[data-shell-variant="sidebar-top"] .app-rail {
+  flex-direction: column;
+  height: auto;
+  width: 56px;
+  flex: 0 0 56px;
+}
+
+html[data-shell-variant="sidebar-top"] .sidebar-edge-resizer {
+  display: none;
+}
+
+/* ── 面板下沉 ─────────────────────────────────────────────────────────── */
+
+html[data-shell-variant="panel-bottom"] .app-workspace-row {
+  flex-direction: column;
+}
+
+html[data-shell-variant="panel-bottom"] .app-workspace-row > .panel-zone {
+  flex: 0 0 40%;
+  width: 100%;
+  border-left: 0;
+  border-top: 1px solid var(--border);
+}
+
+html[data-shell-variant="panel-bottom"] .app-workspace-row > .panel-zone.panel-zone-expanded {
+  position: static;
+  height: 100%;
+}
+
+/* ── 窄栏模式 ─────────────────────────────────────────────────────────── */
+
+html[data-shell-variant="rail-only"] .app-sidebar-column {
+  width: 56px;
+  flex: 0 0 56px;
+}
+
+html[data-shell-variant="rail-only"] .app-sidebar-column > .app-sidebar {
+  display: none;
+}
+
+html[data-shell-variant="rail-only"] .app-rail {
+  flex-direction: column;
+  width: 56px;
+  height: auto;
+}
+
+html[data-shell-variant="rail-only"] .sidebar-edge-resizer {
+  display: none;
+}
+
+/* ── mock-only chrome ────────────────────────────────────────────────── */
+
+/*
+ * The variant switcher. It floats over the product so the two structures can
+ * be compared side by side without leaving the page.
+ */
+
+.mock-switcher {
+  position: fixed;
+  z-index: 9999;
+  right: 16px;
+  bottom: 16px;
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-button);
+  background: var(--panel-bg-solid);
+  box-shadow: var(--shadow-elevated);
+}
+
+.mock-switcher-item {
+  padding: 4px 10px;
+  border-radius: var(--radius-button-compact);
+  color: var(--muted);
+  font-size: 12px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.mock-switcher-item:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.mock-switcher-item[data-active="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* The schematic: the shell's blocks, drawn. */
+
+.mock-schematic {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 12px;
+  height: 100vh;
+  padding: 16px;
+  background: var(--bg-canvas);
+  color: var(--text);
+  font-family: var(--font-sans);
+}
+
+.mock-schematic-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.mock-schematic-header strong {
+  font-size: 15px;
+  color: var(--text);
+}
+
+/*
+ * The body is one grid with explicit tracks, so every block sits where the
+ * product puts it: rail, sidebar, then the content column (title bar, chat
+ * and panel side by side, status bar underneath).
+ *
+ * The tracks are FLEXIBLE at both ends: a fixed 300px sidebar plus a fixed
+ * 320px panel leaves nothing for the chat in a narrow window, and a diagram
+ * that squeezes its own subject out of view is worse than no diagram.
+ */
+.mock-schematic-body {
+  display: grid;
+  grid-template-columns:
+    56px
+    minmax(150px, 300px)
+    minmax(220px, 1fr)
+    minmax(180px, 320px);
+  grid-template-rows: 56px minmax(0, 1fr) 40px;
+  grid-template-areas:
+    "rail sidebar titlebar titlebar"
+    "rail sidebar chat panel"
+    "rail sidebar status status";
+  gap: 8px;
+  min-height: 0;
+}
+
+.mock-schematic-rail {
+  grid-area: rail;
+}
+.mock-schematic-sidebar {
+  grid-area: sidebar;
+}
+.mock-schematic-titlebar {
+  grid-area: titlebar;
+}
+.mock-schematic-chat {
+  grid-area: chat;
+}
+.mock-schematic-panel {
+  grid-area: panel;
+}
+.mock-schematic-status {
+  grid-area: status;
+}
+
+.mock-schematic-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-element);
+  background: var(--surface);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.mock-schematic-label {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.mock-schematic-hint {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.mock-schematic-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mock-schematic-lines i {
+  display: block;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--surface-hover);
+}

@@ -73,6 +73,15 @@ interface ChatViewProps {
   sessionId: string;
   messages: Message[];
   /**
+   * The transcript is readable, the composer is closed.
+   *
+   * Used for a project working session the user has not taken over: looking
+   * at a session the Coordinator owns must not silently take it away from the
+   * Coordinator. The same closure the archived preview uses, for the same
+   * reason — the composer is where an unwanted append would happen.
+   */
+  readOnly?: boolean;
+  /**
    * The user-chosen permission mode (Ask/Auto/Bypass) rides along on each send
    * as a per-turn override; a live change mid-work is applied to the running
    * agent through `onLivePermissionChange`.
@@ -147,6 +156,7 @@ function ContextCompressionToast({ message }: { message: string }) {
 export function ChatView({
   sessionId,
   messages,
+  readOnly = false,
   onSendMessage,
   onLivePermissionChange,
   allowPermissionModeChange = true,
@@ -286,6 +296,11 @@ export function ChatView({
     () => archivedThreads.some((t) => t.id === sessionId),
     [archivedThreads, sessionId],
   );
+  // A closed composer, for either reason. The archived preview and the
+  // project working session are the same situation from the composer's
+  // point of view: the transcript is readable, and appending to it would
+  // append to a session the reader does not own.
+  const composerDisabled = isArchivedSession || readOnly;
   const setThreadWorkingDirectory = useConversationStore(s => s.setThreadWorkingDirectory);
   const setThreadModel = useConversationStore(s => s.setThreadModel);
   const addProjectFolder = useConversationStore(s => s.addProjectFolder);
@@ -1387,9 +1402,13 @@ export function ChatView({
                 onRecapRequest={requestRecap}
                 onStop={handleStop}
                 onClearMessages={handleClearMessages}
-                disabled={isArchivedSession}
+                disabled={composerDisabled}
                 placeholder={
-                  isArchivedSession ? t('chat.archivedReadonlyPlaceholder') : t('chat.typeMessage')
+                  isArchivedSession
+                    ? t('chat.archivedReadonlyPlaceholder')
+                    : readOnly
+                      ? t('project.workspace.readOnlyPlaceholder')
+                      : t('chat.typeMessage')
                 }
                 suggestion={turnSuggestion ?? undefined}
                 isStreaming={isStreaming}

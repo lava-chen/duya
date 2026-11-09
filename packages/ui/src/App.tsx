@@ -2,6 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState, useMemo } fro
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useShallow } from "zustand/react/shallow";
 import { useConversationStore } from "@/stores/conversation-store";
+import { useProjectWorkspaceStore, isLocalUserLease } from "@/stores/project-workspace-store";
 import { useTranslation } from "@/hooks/useTranslation";
 import { initMailboxEventListener } from "@/stores/mailbox-store";
 import { useSessionSeenStore } from "@/stores/session-seen-store";
@@ -72,6 +73,8 @@ const SkillsView = lazy(() => import("@/components/skills/SkillsView").then((m) 
 const AutomationView = lazy(() => import("@/components/automation/AutomationView").then((m) => ({ default: m.AutomationView })));
 const WorkflowPage = lazy(() => import("@/components/workflow/WorkflowPage").then((m) => ({ default: m.WorkflowPage })));
 const ProjectsView = lazy(() => import("@/components/projects/ProjectsView").then((m) => ({ default: m.ProjectsView })));
+const ProjectWorkspaceView = lazy(() => import("@/components/projects/ProjectWorkspaceView").then((m) => ({ default: m.ProjectWorkspaceView })));
+const ProjectSessionBanner = lazy(() => import("@/components/projects/ProjectSessionBanner").then((m) => ({ default: m.ProjectSessionBanner })));
 const ExtensionsPage = lazy(() => import("@/components/extensions/ExtensionsPage").then((m) => ({ default: m.ExtensionsPage })));
 const MiniAppsView = lazy(() => import("@/components/plugin-apps/MiniAppsView").then((m) => ({ default: m.MiniAppsView })));
 const SettingsView = lazy(() => import("@/components/settings/SettingsView").then((m) => ({ default: m.SettingsView })));
@@ -197,7 +200,7 @@ function AppShellInner({ onReady, uiServices }: { onReady?: () => void; uiServic
   // State: individual field subscriptions to avoid subscribing to the
   // entire store. threadMessages is derived here so only the active
   // thread's message-array changes trigger re-renders of child ChatViews.
-  const { currentView, isHydrated, isNewChatDrafting, newChatSourceSessionId, activeThreadId, messages } =
+  const { currentView, isHydrated, isNewChatDrafting, newChatSourceSessionId, activeThreadId, messages, activeProjectId } =
     useConversationStore(
       useShallow((s) => ({
         currentView: s.currentView,
@@ -206,6 +209,7 @@ function AppShellInner({ onReady, uiServices }: { onReady?: () => void; uiServic
         newChatSourceSessionId: s.newChatSourceSessionId,
         activeThreadId: s.activeThreadId,
         messages: s.messages,
+        activeProjectId: s.activeProjectId,
       }))
     );
   const selectedThreadRef = useRef(activeThreadId);
@@ -373,6 +377,33 @@ function AppShellInner({ onReady, uiServices }: { onReady?: () => void; uiServic
     if (!uiServices || hostRunSnapshot?.sessionId !== activeThreadId) return durable;
     return mergeRunSessionRows(durable, hostRunSnapshot);
   }, [activeThreadId, hostRunSnapshot, messages, uiServices]);
+
+  // A working session of the open project, and whether the user holds it.
+  //
+  // The lease is the authority on this: while the user holds it, the
+  // Coordinator cannot send the session a new instruction, and the composer
+  // opens. Without the lease the session is readable and nothing more.
+  const projectWorkSessions = useProjectWorkspaceStore((s) => s.snapshot?.workSessions);
+  const projectSessionLeases = useProjectWorkspaceStore((s) => s.leases);
+  const isProjectWorkSession = useMemo(
+    () => !!activeThreadId && (projectWorkSessions ?? []).some((s) => s.sessionId === activeThreadId),
+    [activeThreadId, projectWorkSessions],
+  );
+  const holdsProjectSessionLease = !!activeThreadId && isLocalUserLease(projectSessionLeases[activeThreadId]);
+
+  // Re-read the project when the renderer has lost it.
+  //
+  // The project's state lives in memory while the navigation state is
+  // persisted, so a restart can leave the user inside one of the project's
+  // working sessions with no project state in the renderer. The session then
+  // looks like an ordinary chat: no project banner, no takeover affordance and
+  // no way back to the project. Reading the project again restores all three.
+  useEffect(() => {
+    if (!activeProjectId) return;
+    const workspace = useProjectWorkspaceStore.getState();
+    if (workspace.snapshot || workspace.loading) return;
+    void workspace.openProject(activeProjectId);
+  }, [activeProjectId, activeThreadId]);
   const hostPermission = useMemo(() => {
     const permission = hostRunSnapshot?.permissions.find((item) => item.awaitingAnswer);
     if (permission) {
@@ -1216,27 +1247,56 @@ function AppShellInner({ onReady, uiServices }: { onReady?: () => void; uiServic
             <GroupRoomChatView key={activeThreadId} sessionId={activeThreadId} />
           )}
           {currentView === 'chat' && resolveChatMode(activeThreadId) === 'workspace' && (
-            <ChatView
-              key={activeThreadId}
-              sessionId={activeThreadId}
-              messages={threadMessages}
-              onSendMessage={handleSendMessage}
-              onInterrupt={handleInterrupt}
-              isStreaming={isStreaming || isFinalizing}
-              isFinalizing={isFinalizing}
-              hostRunActive={uiServices !== null && (hostRunSnapshot?.run.status === 'pending' || hostRunSnapshot?.run.status === 'running')}
-              hostSendError={hostSendError}
-              hostPermission={hostPermission}
-              onHostPermissionResponse={respondToHostPermission}
-              allowPermissionModeChange={uiServices?.capabilities.turnConfiguration !== false}
-              hasQueuedMessages={hasQueuedMessages(activeThreadId)}
-              onLivePermissionChange={uiServices === null ? (mode) => {
-                // The legacy path persists the mode on the session row through
-                // the Electron channel. A Host-backed surface carries the mode
-                // with the TURN instead, so there is nothing to persist here.
-                const agentMode = mode === 'bypass' ? 'bypassPermissions' : mode === 'ask' ? 'default' : 'auto';
-                void window.electronAPI?.agent?.setAgentPermissionMode(activeThreadId, agentMode);
-              } : undefined}
+            <>
+              {/* A working session opened from a project says what it is:
+                  readable, and the user's to take or leave. The composer is
+                  closed until the user holds the lease. */}
+              <ProjectSessionBanner sessionId={activeThreadId} />
+              <ChatView
+                key={activeThreadId}
+                sessionId={activeThreadId}
+                messages={threadMessages}
+                readOnly={isProjectWorkSession && !holdsProjectSessionLease}
+                onSendMessage={handleSendMessage}
+                onInterrupt={handleInterrupt}
+                isStreaming={isStreaming || isFinalizing}
+                isFinalizing={isFinalizing}
+                hostRunActive={uiServices !== null && (hostRunSnapshot?.run.status === 'pending' || hostRunSnapshot?.run.status === 'running')}
+                hostSendError={hostSendError}
+                hostPermission={hostPermission}
+                onHostPermissionResponse={respondToHostPermission}
+                allowPermissionModeChange={uiServices?.capabilities.turnConfiguration !== false}
+                hasQueuedMessages={hasQueuedMessages(activeThreadId)}
+                onLivePermissionChange={uiServices === null ? (mode) => {
+                  // The legacy path persists the mode on the session row through
+                  // the Electron channel. A Host-backed surface carries the mode
+                  // with the TURN instead, so there is nothing to persist here.
+                  const agentMode = mode === 'bypass' ? 'bypassPermissions' : mode === 'ask' ? 'default' : 'auto';
+                  void window.electronAPI?.agent?.setAgentPermissionMode(activeThreadId, agentMode);
+                } : undefined}
+              />
+            </>
+          )}
+          {currentView === 'project' && activeThreadId && (
+            <ProjectWorkspaceView
+              chat={{
+                sessionId: activeThreadId,
+                messages: threadMessages,
+                onSendMessage: handleSendMessage,
+                onInterrupt: handleInterrupt,
+                isStreaming: isStreaming || isFinalizing,
+                isFinalizing: isFinalizing,
+                hostRunActive: uiServices !== null && (hostRunSnapshot?.run.status === 'pending' || hostRunSnapshot?.run.status === 'running'),
+                hostSendError: hostSendError,
+                hostPermission: hostPermission,
+                onHostPermissionResponse: respondToHostPermission,
+                allowPermissionModeChange: uiServices?.capabilities.turnConfiguration !== false,
+                hasQueuedMessages: hasQueuedMessages(activeThreadId),
+                onLivePermissionChange: uiServices === null ? (mode) => {
+                  const agentMode = mode === 'bypass' ? 'bypassPermissions' : mode === 'ask' ? 'default' : 'auto';
+                  void window.electronAPI?.agent?.setAgentPermissionMode(activeThreadId, agentMode);
+                } : undefined,
+              }}
             />
           )}
           {currentView === 'skills' && <SkillsView />}

@@ -12,6 +12,7 @@ import type {
   UnassignTeammateTasksResult,
 } from '@duya/agent-protocol';
 import type { CoreDataHostStores } from '@duya/data/core-data-host';
+import type { ProjectStore } from '@duya/data/project-store';
 
 export class HostTaskApiError extends Error {
   constructor(readonly code: 'task_conflict', message: string) {
@@ -47,6 +48,7 @@ function isUniqueConstraintError(error: unknown): boolean {
 /** Build the transport-neutral task service over the Host-owned task store. */
 export function createHostTaskApi(
   stores: Pick<CoreDataHostStores, 'tasks'>,
+  projects?: Pick<ProjectStore, 'getTaskLink' | 'appendActivity'>,
 ): HostTaskApiV1 {
   return {
     async getTask(taskId) {
@@ -88,6 +90,12 @@ export function createHostTaskApi(
 
     async updateTask(taskId, updates: TaskUpdateInput) {
       const task = stores.tasks.update(taskId, updates);
+      if (task && updates.status !== undefined) {
+        const link = projects?.getTaskLink(task.id);
+        if (link) projects?.appendActivity({ project_id: link.project_id, event_type: 'task.status', task_id: task.id,
+          session_id: link.work_session_id, run_id: null, source_type: 'task', source_id: task.id,
+          payload: JSON.stringify({ status: task.status }) });
+      }
       return task ? toProtocolTask(task) : null;
     },
 

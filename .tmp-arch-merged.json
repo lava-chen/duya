@@ -1,0 +1,15 @@
+{
+  "counts": {
+    "cycle": 1,
+    "module-dependency": 95,
+    "module-dependency-permitted": 3006,
+    "package-boundary-escape": 14
+  },
+  "total": 3116,
+  "blocking": 0,
+  "tolerated": 3116,
+  "baselineSize": 3116,
+  "resolvedFromBaseline": 0,
+  "scope": null,
+  "violations": []
+}

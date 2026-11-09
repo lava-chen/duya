@@ -21,6 +21,7 @@ import type { WorkerSubagentEngineSession } from './engine-run.js'
 import { inferProvider } from '@duya/ai'
 import { setMaxListeners } from 'node:events'
 import { resolveAgentTools, SUBAGENT_FORBIDDEN_TOOLS } from './tool-utils.js'
+import { authorizeSubagentTools } from './tool-authorization.js'
 import type { SubagentToolOverlay } from '@duya/capabilities/SubagentTool'
 import { ToolRegistry } from '../worker-tool-registry.js'
 import { getPromptProfileForSubagentType } from '../worker-prompts/modes/index.js'
@@ -221,41 +222,6 @@ function getAgentSystemPrompt(
   }
 }
 
-interface ToolOverlayResult {
-  tools: Tool[]
-  /** Tool names the overlay named but that were not in the resolved list. */
-  dropped: string[]
-}
-
-/**
- * Apply the per-call `tools: { allow?, deny? }` overlay on top of the tool
- * list the agent definition already resolved to.
- *
- * `deny` is applied last and wins, so a model that lists the same tool in
- * both `allow` and `deny` still loses it — the conservative reading of an
- * ambiguous instruction. Unknown names in `allow` are reported as `dropped`
- * so the caller can warn the model instead of silently ignoring it.
- */
-function applyToolOverlay(tools: Tool[], overlay: SubagentToolOverlay | undefined): ToolOverlayResult {
-  if (!overlay) return { tools, dropped: [] }
-  const available = new Set(tools.map((t) => t.name))
-  const dropped: string[] = []
-  let result = tools
-
-  if (overlay.allow?.length) {
-    const allowSet = new Set(overlay.allow)
-    for (const name of overlay.allow) {
-      if (!available.has(name)) dropped.push(name)
-    }
-    result = result.filter((t) => allowSet.has(t.name))
-  }
-  if (overlay.deny?.length) {
-    const denySet = new Set(overlay.deny)
-    result = result.filter((t) => !denySet.has(t.name))
-  }
-  return { tools: result, dropped }
-}
-
 /**
  * Runs an agent with the given parameters.
  * Returns an async generator of messages.
@@ -303,12 +269,10 @@ export async function* runAgent({
     hasDescription: Boolean(description),
   }, 'SubAgent')
 
-  // Resolve tools for this agent
-  const { resolvedTools } = resolveAgentTools(agentDefinition, availableTools)
-
-  // Per-call `tools: { allow?, deny? }` overlay (plan 571). `deny` wins over
-  // `allow` so a model that lists a tool in both still loses it.
-  const toolOverlayResult = applyToolOverlay(resolvedTools, toolOverlay)
+  // Resolve the tools for this agent. The agent DEFINITION owns the bound;
+  // the per-call overlay narrows it. `deny` wins over `allow` so a model that
+  // lists a tool in both still loses it.
+  const { resolvedTools, hasWildcard } = resolveAgentTools(agentDefinition, availableTools)
 
   // Determine the model to use
   const agentModel = model || agentDefinition.model || toolUseContext.options.mainLoopModel
@@ -392,22 +356,14 @@ export async function* runAgent({
   // imports `builtin.js`, which was one of the two edges closing the
   // runAgent <-> SubagentTool cycle.
   const registry = createToolRegistry()
-  const allTools = registry.getAllTools()
-  const toolNames = new Set(toolOverlayResult.tools.map(t => t.name))
-  let toolsToUse = toolNames.size > 0
-    ? allTools.filter(t => toolNames.has(t.name))
-    : allTools
-
-  // Prevent recursive agent calls - strip every agent-orchestration tool
-  // (subagent spawn, inter-agent messaging, background-task management) from
-  // sub-agents so a sub-agent can never spawn or delegate to another agent.
-  toolsToUse = toolsToUse.filter(t => !SUBAGENT_FORBIDDEN_TOOLS.has(appToolOriginalName(t.name)))
 
   // Inherit the parent's live MCP tools when the agent opts in via `mcpTools`.
   // The parent captures the MCP client inside the executor closure, so the
   // sub-agent reuses the already-connected runtime instead of reconnecting
-  // servers. Definition + executor are merged into the sub-agent's registry
-  // and tool surface; forbidden orchestration tools are still withheld.
+  // servers. Definition + executor are merged into the sub-agent's registry;
+  // whether the tool SURVIVES the authorization below is decided there, so
+  // an overlay's `deny` reaches an inherited MCP tool exactly as it reaches a
+  // builtin one.
   if (agentDefinition.mcpTools) {
     const mcpExecutors = toolUseContext.options.mcpToolExecutors
     const mcpTools = availableTools.filter(
@@ -417,11 +373,29 @@ export async function* runAgent({
       const executor = mcpExecutors?.get(mcpTool.name)
       if (!executor) continue
       registry.registerWithKey(mcpTool.internalKey ?? mcpTool.name, mcpTool, executor)
-      if (!toolsToUse.some((t) => t.name === mcpTool.name)) {
-        toolsToUse.push(mcpTool)
-      }
     }
   }
+
+  // Resolve the effective tool set and NARROW THE REGISTRY to it.
+  //
+  // The registry is the execution authority: the engine advertises the
+  // child's tools from it and dispatches through it, so a restriction that
+  // stopped at a `Tool[]` was a comment. Narrowing the registry is what makes
+  // a denied tool undiscoverable AND unexecutable, and the `allowedTools` the
+  // driver carries makes the visibility filter agree with it.
+  //
+  // There is no allow-all fallback: a bound that resolves to nothing means
+  // the child runs no tools.
+  const authorization = authorizeSubagentTools({
+    registryToolNames: registry.getAllTools().map((t) => t.name),
+    definitionToolNames: resolvedTools.map((t) => t.name),
+    definitionIsWildcard: hasWildcard,
+    ...(toolOverlay === undefined ? {} : { overlay: toolOverlay }),
+    forbiddenTools: SUBAGENT_FORBIDDEN_TOOLS,
+  })
+  const allowedToolNames = new Set(authorization.allowed)
+  registry.unregisterAll((_key, definition) => !allowedToolNames.has(definition.name))
+  const toolsToUse = registry.getAllTools()
 
   const omitAgentsMd =
     agentDefinition.omitClaudeMd === true &&
@@ -495,8 +469,8 @@ export async function* runAgent({
     subAgentSessionId: sessionId,
     ...(effort ? { effort } : {}),
     ...(permissionMode ? { permissionMode } : {}),
-    ...(toolOverlayResult.dropped.length
-      ? { toolOverlayDropped: toolOverlayResult.dropped }
+    ...(authorization.dropped.length
+      ? { toolOverlayDropped: authorization.dropped }
       : {}),
     ...(workingDirectoryOverride ? { isolatedWorkingDirectory: workingDirectory } : {}),
   }, 'SubAgent')
@@ -589,6 +563,12 @@ export async function* runAgent({
           systemPrompt,
           tools: toolsToUse,
           toolRegistry: registry,
+          // The narrowed set, spelled out for the visibility filter. The
+          // registry is already narrowed, so this is belt-and-braces for the
+          // two things the registry alone cannot do: promote a DEFERRED tool
+          // the caller named into the direct toolset, and hide a tool that
+          // something registers into the registry AFTER this point.
+          allowedTools: [...authorization.allowed],
           // Kept in the options bag as well as handed to the driver, because the
           // worker entry does the same and something downstream of the options
           // reads it there. The DRIVER's own `maxTurns` is what becomes the

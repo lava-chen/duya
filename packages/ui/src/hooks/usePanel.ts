@@ -268,11 +268,22 @@ function dedupKey(pageId: PageId, params?: Record<string, unknown>): string {
       // and folding them in here would stack a second tab for the same run
       // every time an emitter re-sent them.
       return `session::${(params?.sessionId as string | undefined) ?? ""}`;
-    case "plugin-app":
+    case "plugin-app": {
       // Surface Apps dedup on the surface id; entry Apps carry no surface, so
       // their appId closes the key — one tab per App of a plugin either way.
+      //
+      // The binding is part of the identity: since an App tab no longer
+      // follows the selected chat, the same App bound to another chat is a
+      // different tab. Without this, opening the App from chat B would focus
+      // the tab bound to chat A and silently act on the wrong session.
+      const binding = params?.binding;
+      const boundSession = typeof binding === "object" && binding !== null && !Array.isArray(binding)
+        ? (binding as Record<string, unknown>).sessionId
+        : undefined;
       return `plugin-ui::${(params?.pluginId as string | undefined) ?? ""}`
-        + `::${(params?.surfaceId as string | undefined) ?? (params?.appId as string | undefined) ?? ""}`;
+        + `::${(params?.surfaceId as string | undefined) ?? (params?.appId as string | undefined) ?? ""}`
+        + `::${typeof boundSession === "string" ? boundSession : ""}`;
+    }
     default:
       return `${pageId}::${JSON.stringify(params ?? {})}`;
   }

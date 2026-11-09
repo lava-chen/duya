@@ -388,15 +388,62 @@ export function NewChatView({ onSendMessage, workspaceSelectionEnabled = true }:
           }
         }
 
+        // A Project has one durable coordination conversation. Re-entering a
+        // Project from the new-chat surface resumes that Session instead of
+        // creating a second coordinator or making a personal Bot its owner.
+        let projectEntityId: string | undefined;
+        let existingCoordinatorSessionId: string | undefined;
+        if (workingDirectory) {
+          try {
+            const result = await window.electronAPI?.projects?.list?.();
+            if (result?.success) {
+              const normalize = (value: string) => value.replace(/[\\/]+$/, '').replace(/\\/g, '/').toLocaleLowerCase();
+              const selectedPath = normalize(workingDirectory);
+              const project = result.projects.find((candidate) =>
+                normalize(candidate.canonical_root) === selectedPath
+                || candidate.paths.some((entry) => normalize(entry.path) === selectedPath),
+              );
+              projectEntityId = project?.project_id;
+              existingCoordinatorSessionId = project?.coordinator_session_id ?? undefined;
+            }
+          } catch (error) {
+            console.warn('[NewChatView] Could not resolve project coordinator session', error);
+          }
+        }
+
+        if (existingCoordinatorSessionId) {
+          clearNewChatDraft();
+          await setActiveThread(existingCoordinatorSessionId);
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              onSendMessageRef.current?.(
+                content, actualModel, files, 'project-coordinator', outputStyleConfig,
+                mode, effort, displayContent, undefined, permissionMode,
+              );
+            });
+          });
+          return;
+        }
+
+        const profileId = projectEntityId ? 'project-coordinator' : getProfileIdForMode('main');
+
         const thread = await createThread({
           workingDirectory,
           projectName,
           noProject: !workingDirectory,
           providerId: effectiveProviderId || undefined,
           model: actualModel || undefined,
-          agentProfileId: getProfileIdForMode('main'),
+          agentProfileId: profileId,
         });
         if (!thread) return;
+
+        if (projectEntityId) {
+          const binding = await window.electronAPI?.projects?.bindCoordinatorSession?.(projectEntityId, thread.id);
+          if (!binding?.success) {
+            console.error('[NewChatView] Failed to bind Project coordinator Session',
+              binding && 'error' in binding ? binding.error : 'binding API unavailable');
+          }
+        }
 
         // Persist the composer's permission choice into the session row so
         // ChatView's selector restores it and later turns keep using it.
@@ -442,7 +489,7 @@ export function NewChatView({ onSendMessage, workspaceSelectionEnabled = true }:
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
             const send = onSendMessageRef.current;
-            send?.(content, actualModel, files, getProfileIdForMode('main'), outputStyleConfig, mode, effort, displayContent, undefined, permissionMode);
+            send?.(content, actualModel, files, profileId, outputStyleConfig, mode, effort, displayContent, undefined, permissionMode);
           });
         });
       } catch (error) {

@@ -17,6 +17,7 @@ import type { CommandLocale } from '@duya/command-catalog';
 import type { HostSessionHttpClient } from '@duya/host/http-client';
 import type { TuiChoice, TuiSettingsRow, RichPanelHandle } from '../TUIApp.js';
 import type { ToolGroupMode } from '../transcript-view.js';
+import type { StatuslineProfile } from '../preferences.js';
 import type { RichPanelTab, WindowItem } from '../window.js';
 import type { ActionDef } from '../actions.js';
 
@@ -101,6 +102,7 @@ export interface TuiSlashHost {
     readonly toolGroupMode?: ToolGroupMode;
     readonly completionRows?: number;
     readonly inputRows?: number;
+    readonly statusline?: StatuslineProfile;
   }): void;
   /** The live preferences, so a menu row can describe what is actually in force. */
   liveTuiPreferences?(): {
@@ -111,6 +113,7 @@ export interface TuiSlashHost {
     readonly toolGroupMode: ToolGroupMode;
     readonly completionRows: number;
     readonly inputRows: number;
+    readonly statusline?: StatuslineProfile;
   };
   /** The effective key bindings, so `/hotkeys` quotes what is really bound. */
   effectiveKeyBindings?(): readonly ActionDef[];
@@ -159,6 +162,12 @@ export interface TuiSlashActions {
    * switch. The caller names the session it wants re-read.
    */
   reloadTranscript: (sessionId: string) => Promise<void>;
+  /** Search visible transcript blocks; results are concise, numbered rows. */
+  searchTranscript?: (query: string) => readonly string[];
+  /** Copy the latest submitted prompt into the composer for editing. */
+  editPreviousPrompt?: () => boolean;
+  /** Put a prompt template into the composer without submitting it. */
+  insertPrompt?: (text: string) => void;
 }
 
 export type TuiSlashOutcome =

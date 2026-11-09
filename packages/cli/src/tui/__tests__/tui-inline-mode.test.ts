@@ -176,7 +176,10 @@ describe('inline mode', () => {
     // The bang is the prompt now, and it is RED: the reader must see that the
     // draft runs on their machine instead of going to the model. The colour
     // is asserted as terminal bytes, because that is what reaches the screen.
-    expect(out.text()).toMatch(/\x1b\[(?:91|38;5;9)m!\x1b\[m echo hi/u);
+    // The composer's band rides along in the same parameter list, so the red
+    // may be followed by a background.
+    expect(out.text()).toMatch(/\x1b\[(?:91|38;5;9)(?:;48;5;\d+)?m!/u);
+    expect(out.text()).toContain(' echo hi');
   });
 
   it('keeps the double bang visible as a red prompt', async () => {
@@ -190,17 +193,17 @@ describe('inline mode', () => {
     app.stop();
     // `!!` opts the run out of the next message's context, and the prompt says
     // so: both bangs are drawn, in red.
-    expect(out.text()).toMatch(/\x1b\[(?:91|38;5;9)m!!\x1b\[m/u);
+    expect(out.text()).toMatch(/\x1b\[(?:91|38;5;9)(?:;48;5;\d+)?m!!\x1b\[(?:48;5;\d+)?m/u);
   });
 
   it('lists pending drafts above the composer, one row each and three at most', async () => {
     const out = sink();
     const drafts = [
-      { text: 'first', mode: 'queue' as const },
-      { text: 'second', mode: 'queue' as const },
-      { text: 'third', mode: 'steer' as const },
-      { text: 'fourth', mode: 'queue' as const },
-      { text: 'fifth', mode: 'steer' as const },
+      { text: 'first' },
+      { text: 'second' },
+      { text: 'third' },
+      { text: 'fourth' },
+      { text: 'fifth' },
     ];
     const app = new TUIApp({
       output: out.stream,
@@ -216,12 +219,12 @@ describe('inline mode', () => {
     // The budget is fixed: this block is chrome, and a queue that grows would
     // push the composer down a row per draft until the terminal ran out.
     expect(text).toContain('… 2 earlier');
-    // A steer is already with the running turn, so the row says so. Painting
-    // it as a queued draft made a message the user had sent look like one
-    // that never left.
-    expect(text).toContain('↳ sent · third');
+    // Every row in this block means "still waiting for its turn". A steer is
+    // filtered out before it gets here — it is already in the transcript, and
+    // a second copy under the composer was read as a message that had not
+    // been sent.
     expect(text).toContain('⧗ queued · fourth');
-    expect(text).toContain('↳ sent · fifth');
+    expect(text).toContain('⧗ queued · fifth');
     // The two oldest drafts are behind the summary row, not in it.
     expect(text).not.toContain('· first');
     expect(text).not.toContain('· second');

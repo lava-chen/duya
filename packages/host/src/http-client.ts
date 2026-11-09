@@ -142,10 +142,19 @@ import type {
   HostProjectCreateInput,
   HostProjectPatch,
   HostProjectRecord,
+  HostProjectState,
+  HostProjectTaskLink,
   HostLockAcquireInput,
   HostLockRenewInput,
   HostLockReleaseInput,
   LockOrigin,
+} from '@duya/agent-protocol';
+import type {
+  SessionControlLease,
+  SessionControlLeaseRequest,
+  SessionInputReceipt,
+  SessionInputRequest,
+  HostSessionInputApiV1,
 } from '@duya/agent-protocol';
 import type {
   HostCheckoutObserved,
@@ -416,6 +425,7 @@ export class HostSessionHttpClient implements
   HostRunApiV1,
   HostProjectApiV1,
   HostResearchApiV1,
+  HostSessionInputApiV1,
   HostHealthApiV1,
   HostLocalProviderManagementApiV1 {
   constructor(
@@ -2411,6 +2421,146 @@ export class HostSessionHttpClient implements
       `/v1/projects/${encodeURIComponent(projectId)}`,
     );
     return result.deleted;
+  }
+
+  async bindCoordinatorSession(projectId: string, sessionId: string): Promise<HostProjectRecord | null> {
+    const result = await this.request<{ project: HostProjectRecord | null }>(
+      'PUT', `/v1/projects/${encodeURIComponent(projectId)}/coordinator`, { sessionId });
+    return result.project;
+  }
+
+  async listProjectTasks(projectId: string): Promise<readonly HostProjectTaskLink[]> {
+    const result = await this.request<{ tasks: readonly HostProjectTaskLink[] }>(
+      'GET', `/v1/projects/${encodeURIComponent(projectId)}/tasks`);
+    return result.tasks;
+  }
+
+  async bindProjectTask(projectId: string, taskId: string, coordinatorSessionId: string): Promise<HostProjectTaskLink> {
+    const result = await this.request<{ task: HostProjectTaskLink }>(
+      'POST', `/v1/projects/${encodeURIComponent(projectId)}/tasks`, { taskId, coordinatorSessionId });
+    return result.task;
+  }
+
+  async bindWorkSession(projectId: string, taskId: string, workSessionId: string): Promise<HostProjectTaskLink | null> {
+    const result = await this.request<{ task: HostProjectTaskLink | null }>(
+      'PUT', `/v1/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}/work-session`, { workSessionId });
+    return result.task;
+  }
+
+  async getProjectContinuity(projectId: string, options: { afterCursor?: number; limit?: number } = {}) {
+    const query = new URLSearchParams();
+    if (options.afterCursor !== undefined) query.set('after', String(options.afterCursor));
+    if (options.limit !== undefined) query.set('limit', String(options.limit));
+    const suffix = query.size ? `?${query}` : '';
+    const result = await this.request<{ continuity: import('@duya/agent-protocol/projects').ProjectContinuitySnapshot | null }>(
+      'GET', `/v1/projects/${encodeURIComponent(projectId)}/continuity${suffix}`);
+    return result.continuity;
+  }
+
+  async getProjectContext(projectId: string, taskId?: string, maxCharacters?: number) {
+    const query = new URLSearchParams();
+    if (taskId) query.set('taskId', taskId);
+    if (maxCharacters !== undefined) query.set('maxCharacters', String(maxCharacters));
+    const suffix = query.size ? `?${query}` : '';
+    const result = await this.request<{ context: { text: string; sourceRefs: readonly { type: string; id: string }[] } | null }>(
+      'GET', `/v1/projects/${encodeURIComponent(projectId)}/context${suffix}`);
+    return result.context;
+  }
+
+  async updateProjectState(input: { projectId: string; expectedRevision: number; currentState: string; nextStep: string; source: { type: string; id: string } }) {
+    const { projectId, ...body } = input;
+    const result = await this.request<{ state: import('@duya/agent-protocol/projects').ProjectContinuityState | null }>(
+      'PUT', `/v1/projects/${encodeURIComponent(projectId)}/state`, body);
+    return result.state;
+  }
+
+  async updateProjectDecision(input: { projectId: string; key: string; content: string; status: 'proposed' | 'accepted' | 'superseded'; expectedRevision: number; source: { type: string; id: string } }) {
+    const { projectId, key, ...body } = input;
+    const result = await this.request<{ decision: import('@duya/agent-protocol/projects').ProjectDecision | null }>(
+      'PUT', `/v1/projects/${encodeURIComponent(projectId)}/decisions/${encodeURIComponent(key)}`, body);
+    return result.decision;
+  }
+
+  async updateProjectMemory(input: { projectId: string; key: string; content: string; status: 'candidate' | 'active' | 'superseded' | 'retired'; expectedRevision: number; source: { type: string; id: string } }) {
+    const { projectId, key, ...body } = input;
+    const result = await this.request<{ memory: import('@duya/agent-protocol/projects').ProjectMemory | null }>(
+      'PUT', `/v1/projects/${encodeURIComponent(projectId)}/memory/${encodeURIComponent(key)}`, body);
+    return result.memory;
+  }
+
+  async updateProjectTaskAcceptance(input: { projectId: string; taskId: string; status: 'accepted' | 'rejected'; source: { type: string; id: string } }) {
+    const { projectId, taskId, ...body } = input;
+    const result = await this.request<{ task: HostProjectTaskLink | null }>(
+      'PUT', `/v1/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}/acceptance`, body);
+    return result.task;
+  }
+
+  async listProjectMemoryHistory(projectId: string, key: string, limit = 20) {
+    const result = await this.request<{ records: readonly import('@duya/agent-protocol/projects').ProjectMemory[] }>(
+      'GET', `/v1/projects/${encodeURIComponent(projectId)}/memory/${encodeURIComponent(key)}/history?limit=${Math.max(1, Math.min(100, limit))}`);
+    return result.records;
+  }
+
+  async listProjectDecisionHistory(projectId: string, key: string, limit = 20) {
+    const result = await this.request<{ records: readonly import('@duya/agent-protocol/projects').ProjectDecision[] }>(
+      'GET', `/v1/projects/${encodeURIComponent(projectId)}/decisions/${encodeURIComponent(key)}/history?limit=${Math.max(1, Math.min(100, limit))}`);
+    return result.records;
+  }
+
+  async getProjectState(projectId: string): Promise<HostProjectState | null> {
+    const result = await this.request<{ state: HostProjectState | null }>(
+      'GET', `/v1/projects/${encodeURIComponent(projectId)}/state`);
+    return result.state;
+  }
+
+  // ── R1.2: durable Session inputs and the per-session control lease ────
+  //
+  // The lease is the authority on who may direct a session, so a client that
+  // wants to take over a working session asks the Host for it. A refused
+  // grant is an ordinary outcome and comes back as `null`, not as an error:
+  // somebody else already holds the session.
+
+  async submitInput(request: SessionInputRequest): Promise<SessionInputReceipt> {
+    const result = await this.request<{ receipt: SessionInputReceipt }>('POST', '/v1/session-inputs', {
+      sessionId: request.sessionId,
+      requestId: request.requestId,
+      intent: request.intent,
+      content: request.content,
+    });
+    return result.receipt;
+  }
+
+  async readInputReceipt(sessionId: string, requestId: string): Promise<SessionInputReceipt | null> {
+    const result = await this.request<{ receipt: SessionInputReceipt | null }>(
+      'GET',
+      `/v1/session-inputs/receipt?sessionId=${encodeURIComponent(sessionId)}&requestId=${encodeURIComponent(requestId)}`,
+    );
+    return result.receipt;
+  }
+
+  async acquireControlLease(request: SessionControlLeaseRequest): Promise<SessionControlLease | null> {
+    const result = await this.request<{ lease: SessionControlLease | null }>('POST', '/v1/session-inputs/lease', {
+      sessionId: request.sessionId,
+      requestId: request.requestId,
+      ...(request.expectedRevision === undefined ? {} : { expectedRevision: request.expectedRevision }),
+      ttlMs: request.ttlMs,
+    });
+    return result.lease;
+  }
+
+  async releaseControlLease(sessionId: string, revision: number): Promise<boolean> {
+    const result = await this.request<{ released: boolean }>('POST', '/v1/session-inputs/lease/release', {
+      sessionId,
+      revision,
+    });
+    return result.released;
+  }
+
+  async readControlLease(sessionId: string): Promise<SessionControlLease | null> {
+    const result = await this.request<{ lease: SessionControlLease | null }>(
+      'GET', `/v1/session-inputs/lease?sessionId=${encodeURIComponent(sessionId)}`,
+    );
+    return result.lease;
   }
 
   // ── Plan 621: checkout and integration observations ───────────────────

@@ -295,6 +295,10 @@
       "types": "./dist/session-tool.d.ts",
       "import": "./dist/session-tool.js"
     },
+    "./project": {
+      "types": "./dist/project/index.d.ts",
+      "import": "./dist/project/index.js"
+    },
     "./agent-management-tool": {
       "types": "./dist/agent-management-tool.d.ts",
       "import": "./dist/agent-management-tool.js"

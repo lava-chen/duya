@@ -37,6 +37,20 @@ function input(): PassThrough {
 }
 
 /**
+ * The visible text of a captured frame, with the styling removed.
+ *
+ * A styled run reaches the stream as `ESC[…]m` + text + `ESC[0m`, so a phrase
+ * the reader sees as one string is several runs in the bytes. Assertions about
+ * WORDS have to look past the frames; assertions about colour read the frames
+ * themselves (`tui-codex-surface.test.ts` does that).
+ */
+function plainText(bytes: string): string {
+  return bytes
+    .replace(/\u001b\][^\u0007]*\u0007/gu, '')
+    .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/gu, '');
+}
+
+/**
  * Let blessed's output buffer drain.
  *
  * `Program.prototype._buffer` holds a frame in `_buf` and flushes it on
@@ -225,7 +239,9 @@ describe('TUIApp integration', () => {
     // "You ran", not the agent's `bash(...)`: the reader must see whose
     // command produced the output.
     expect(out.text()).toContain('You ran');
-    expect(out.text()).toContain('git status');
+    // The command itself is syntax-coloured, so it reaches the terminal as
+    // several styled runs; the assertion is about the words, not the frames.
+    expect(plainText(out.text())).toContain('git status');
     app.stop();
   });
 
@@ -242,8 +258,9 @@ describe('TUIApp integration', () => {
     app.stop();
     // The full-screen composer paints its body without the rules, so the
     // prompt row is a different row than in inline mode. The colour is the
-    // same fact either way.
-    expect(out.text()).toMatch(/\x1b\[(?:91|38;5;9)m!/u);
+    // same fact either way — and the composer's band rides along in the same
+    // parameter list, so the red may be followed by a background.
+    expect(out.text()).toMatch(/\x1b\[(?:91|38;5;9)(?:;48;5;\d+)?m!/u);
   });
 
   // The user-visible half of the keymap validator. `interrupt` is dispatched

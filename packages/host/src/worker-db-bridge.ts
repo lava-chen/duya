@@ -40,6 +40,7 @@ import type {
 } from '@duya/agent-protocol';
 import type { RunRepository } from './repository-port.js';
 import { createRunControlPlaneActions, type RunControlPlaneLogger } from './run-control-plane.js';
+import type { ProjectToolService } from './project/tool-service.js';
 import { createHostToolApprovalApi } from './tool-approval-api.js';
 import type { WorkerDbBridge } from './run-execution.js';
 import type { createHostSessionService, SessionServiceCaller } from './session-service.js';
@@ -175,6 +176,14 @@ export interface HostWorkerDbBridgeOptions {
   readonly lockApi?: HostLockApiV1;
   readonly modeStateApi?: HostModeStateApiV1;
   readonly taskApi?: HostTaskApiV1;
+  /**
+   * Project tool service — serves the `project:tool` domain.
+   *
+   * The Coordinator reads and maintains durable project continuity through
+   * this tool. The service resolves the project from the trusted caller and
+   * refuses statuses only a user can authorize.
+   */
+  readonly projectToolApi?: ProjectToolService;
   readonly pluginAppInvocationApi?: HostPluginAppInvocationInternalApi;
   /**
    * Host mailbox API — serves the `mailbox:*` domain.
@@ -507,6 +516,24 @@ export function createHostWorkerDbBridge(options: HostWorkerDbBridgeOptions): Wo
           if (!options.sessionService) throw new WorkerDbBridgeError('unimplemented_domain', 'Session delegation requires the Host session service.');
           if (!caller) throw new WorkerDbBridgeError('invalid_payload', 'Session delegation requires trusted worker context.');
           return options.sessionService.dispatch(action, payload, caller);
+        }
+        case 'project:tool': {
+          if (options.projectToolApi === undefined) {
+            throw new WorkerDbBridgeError('unimplemented_domain', 'Project tools require the Host project tool service.');
+          }
+          if (!caller) {
+            throw new WorkerDbBridgeError('invalid_payload', 'Project tools require trusted worker context.');
+          }
+          const toolAction = requireString(payload, 'action', action);
+          const toolPayload = payload.payload;
+          if (toolPayload !== undefined && (typeof toolPayload !== 'object' || toolPayload === null || Array.isArray(toolPayload))) {
+            throw new WorkerDbBridgeError('invalid_payload', 'project:tool payload must be an object.');
+          }
+          return options.projectToolApi.dispatch({
+            action: toolAction,
+            payload: (toolPayload ?? {}) as Record<string, unknown>,
+            callerSessionId: caller.sessionId,
+          });
         }
         case 'session:checkoutControl': {
           if (!options.checkoutService) throw new WorkerDbBridgeError('unimplemented_domain', 'Checkout controls are unavailable.');

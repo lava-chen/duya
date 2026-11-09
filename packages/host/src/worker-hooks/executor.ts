@@ -397,6 +397,10 @@ export function executeHookBackground(
       shell: spec.shell ?? false,
       cwd: opts.cwd,
       detached: false,
+      // A hook command may itself be a console program; the Host that runs it
+      // can be console-less (the detached `duya serve` the TUI starts), and a
+      // console child of a console-less parent opens a window.
+      windowsHide: true,
       ...(resolved.env ? { env: resolved.env } : {}),
     });
   } catch (err) {

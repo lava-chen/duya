@@ -19,6 +19,9 @@ import { exitPlanModeTool } from '@duya/host/worker-tool-bindings/exit-plan-mode
 import { switchModeTool } from '@duya/host/worker-tool-bindings/switch-mode';
 import { skillTool } from '@duya/host/worker-tool-bindings/skill';
 import { briefTool } from '@duya/capabilities/BriefTool/BriefTool';
+import { sessionSearchTool } from '@duya/host/worker-tool-bindings/session-search';
+import { sessionTool } from '@duya/host/worker-tool-bindings/session';
+import { projectTool } from '@duya/host/worker-tool-bindings/project';
 import { VisionTool } from '@duya/capabilities/VisionTool/VisionTool';
 import { imageGenerateTool } from '@duya/host/worker-image-generation';
 import { askUserQuestionTool } from '@duya/capabilities';
@@ -80,6 +83,12 @@ export function createBuiltinRegistry( services: BuiltinRegistryServices, deps: 
     registry.register(switchModeTool, switchModeTool, { exposure: 'deferred' });
     registry.register(skillTool, skillTool, { exposure: 'eager' });
     registry.register(briefTool, briefTool, { exposure: 'deferred' });
+    registry.register(sessionSearchTool.toTool(), sessionSearchTool, { exposure: 'deferred' });
+    registry.register(sessionTool.toTool(), sessionTool, { exposure: 'deferred' });
+    registry.register(projectTool.toTool(), projectTool, {
+      exposure: 'deferred',
+      inputSchemaSummary: 'get project state/tasks/decisions/memories/activity, context, update_state, record_decision, record_memory',
+    });
     const visionTool = new VisionTool();
     registry.register(visionTool, visionTool, { exposure: 'eager' });
     registry.register(imageGenerateTool.toTool(), imageGenerateTool, {

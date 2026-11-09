@@ -43,6 +43,14 @@
       "types": "./dist/session-input-service.d.ts",
       "import": "./dist/session-input-service.js"
     },
+    "./session-service": {
+      "types": "./dist/session-service.d.ts",
+      "import": "./dist/session-service.js"
+    },
+    "./project/*": {
+      "types": "./dist/project/*.d.ts",
+      "import": "./dist/project/*.js"
+    },
     "./local-session-api": {
       "types": "./dist/local-session-api.d.ts",
       "import": "./dist/local-session-api.js"
@@ -178,6 +186,10 @@
     "./project-api": {
       "types": "./dist/project-api.d.ts",
       "import": "./dist/project-api.js"
+    },
+    "./session-input-api": {
+      "types": "./dist/session-input-api.d.ts",
+      "import": "./dist/session-input-api.js"
     },
     "./research-api": {
       "types": "./dist/research-api.d.ts",
