@@ -10,7 +10,7 @@
 
 | 范围 | 入口 | 下一动作 |
 | --- | --- | --- |
-| CLI TUI 全屏框架 | [2026-11-11 TUI 全屏框架先进化](active/2026-11-11-tui-fullscreen-framework.md) | S1 全屏转录搜索（Ctrl+F、行内高亮、n/N 导航）已实现并过门禁；基于 #624 的 stacked PR，待终端实机验收与 review/CI |
+| CLI TUI 全屏框架 | [2026-11-11 TUI 全屏框架先进化](active/2026-11-11-tui-fullscreen-framework.md) | S1 全屏转录搜索（Ctrl+F、行内高亮、导航）已实现并过门禁；[stacked draft PR #625](https://github.com/lava-chen/duya/pull/625)（base #624），待终端实机验收与 review/CI |
 | CLI TUI 学习 Pi | [2026-11-10 CLI Pi 工作台](active/2026-11-10-cli-pi-workbench.md) | CLI 组件点击、回底与显示策略已实现；静态检查通过，侧栏及拖动调宽已实现，静态复核通过；[draft PR #624](https://github.com/lava-chen/duya/pull/624)，待终端验收和 review/CI |
 | 后台任务重复轮询硬停止 | [2026-11-04 后台任务重复轮询硬停止](active/2026-11-04-background-task-poll-loop.md) | JSONL 确认为 45 次轮询、最长连续 15 次；Host 接通硬停止并加 `get_task_output` 专用阈值；PR #617 draft |
 | Session 工具迁移 | [Session tools as a `duya_app` MCP capability group](active/2026-11-02-session-tools-duya-app.md) | Host-owned `duya_app` 覆盖与集成测试已实现；PR #579 待授权集成 |

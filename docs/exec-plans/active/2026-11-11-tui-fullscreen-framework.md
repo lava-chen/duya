@@ -70,3 +70,9 @@ Pi 已有、Duya 缺失的全屏能力：
 | S1 全部改动 | `node scripts/build-cli-bundle.mjs` | exit 0，`packages/cli/bundle/cli.cjs` 4.75 MB |
 
 已实现 / 已验证 / 未验证：S1 代码与单测已实现并验证（上述门禁）；终端实机（高亮观感、流式期间搜索、CJK 宽字符命中、Windows/ConPTY、`Ctrl+F` 实键派发）未验证，PR 保持 draft 待真机验收。搜索条颜色（58/100/229/186）为静态选择，真机如刺眼按主题 token 调整即可。
+
+## 远程交付
+
+- S1 代码提交：`8abd2f8ac`（`feat(cli): add fullscreen transcript search with paint-time highlights`），+807/−10，10 文件。
+- 分支 `codex/tui-fullscreen-framework` 已推送（exit 0）；stacked draft PR：[lava-chen/duya#625](https://github.com/lava-chen/duya/pull/625)，base `codex/cli-pi-workbench`（#624 合并后随 GitHub 改投 master），未合并。
+- worktree 保留在 `.claude/worktrees/tui-fullscreen-framework`，等待实机验收与 review/CI；下一动作是 S2 比例滚动条（等 #624/#625 验收反馈后开工）。
