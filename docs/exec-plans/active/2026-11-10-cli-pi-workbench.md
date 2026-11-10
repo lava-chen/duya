@@ -69,7 +69,7 @@ inline 保留终端 scrollback 与原生选择；可点击历史发生在 fullsc
 | `npm run -w @duya/cli typecheck` | exit 0 |
 | `npm run architecture:check` | exit 0，无新增违规；未写 baseline |
 | `npm run typecheck:all` | 首次依赖构建停于缺失 `@types/picomatch`；独立 `/tmp/duya-cli-pi-deps` 安装 lock 中的 4.0.3，再在本检出 overlay 链接，未修改共享依赖或 lock |
-| 重跑聚合门禁 | build:packages 的 22 包构建完成；protocol/client-core/core/workflow/runtime/web/electron/cli/web-app/voice 类型环节完成；在尾部 `node --test` 前停止组合命令，不把它报告为整体 exit 0 |
+| 重跑聚合门禁 | build:packages 的 22 包构建完成；protocol/client-core/core/workflow/runtime/web/electron/cli/web-app/voice 类型环节完成；在尾部 `node --test` 前停止组合命令，组合进程 exit 143，不把它报告为整体 exit 0 |
 | `npm run typecheck:evals` | 单独 exit 0，既有 Electron 类型 baseline 未增加 |
 | `git diff --check` | exit 0 |
 
@@ -79,4 +79,16 @@ inline 保留终端 scrollback 与原生选择；可点击历史发生在 fullsc
 尚未实施：常驻 SESSIONS/CTX/VIEW 侧栏、拖动调宽与宽度持久化、会话置顶/批量清理、通用 UI 扩展合同。
 这些仍属于本任务后续，不能声称 Pi 工作台已经全部完成。
 
-下一动作：先完成本切片 draft PR 的终端验收；随后按 reference 中 Host 投影/布局合同实现侧栏，不迁移旧 terminal-app 或 legacy Agent 代码。
+## 交付阻塞
+
+代码提交：`ce04b8c83`（`feat(cli): add pointer interactions and transcript view modes`）。
+tracked 源码已提交；未跟踪项仅本工作树依赖链接，不进入提交。
+
+尝试 `git push -u origin codex/cli-pi-workbench` 被自动审批拒绝，未执行推送。
+理由：用户尚未明确授权将该具体代码发送到 `lava-chen/duya` 并创建远程分支。
+已向用户说明私有代码外发风险，并请求允许推送该任务分支与创建 draft PR；
+未用其他工具绕过拒绝，未创建 PR，未合并。仓库规则要求通过 PR 交付，故本地
+实现和静态结果不等于已经交付/合入。
+
+下一动作：用户授权后推送本任务分支并创建 draft PR；继续按 reference 中 Host
+投影/布局合同实现侧栏。终端实机验收待执行，不迁移旧 terminal-app 或 legacy Agent 代码。
