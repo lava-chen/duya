@@ -91,6 +91,7 @@ Pi 已有、Duya 缺失的全屏能力：
 - S3 代码提交：见 git log（`feat(cli): jump between prompts with alt+up and alt+down`）。
 - 分支 `codex/tui-fullscreen-framework` 已推送（exit 0）；stacked draft PR：[lava-chen/duya#625](https://github.com/lava-chen/duya/pull/625)，base `codex/cli-pi-workbench`（#624 合并后随 GitHub 改投 master），未合并。
 - worktree 保留在 `.claude/worktrees/tui-fullscreen-framework`，等待实机验收与 review/CI；下一动作是 S3 回合跳转。
+- **接续（2026-11-11 停点）**：S1–S3 已全部交付（5 commits，PR #625）；已向用户发出实机验收请求（运行 `DUYA_TUI_INLINE=0 duya tui`：滚动条拖拽 / Ctrl+F 搜索 / Alt+Up/Down 跳转 / #624 点击与侧栏），**尚未收到反馈**。S4 翻转评估被该反馈阻塞；[渲染统一计划](2026-11-11-tui-render-unification.md)已另立（P0–P3），按其依赖条款在 #624/#625 验收集成前不开工。下一条动作：收到验收结果 → 执行 S4（翻转或记录不翻转）→ 按裁定推进 #624/#625 集成与 S5 开工。
 
 ## S2 设计决定
 
