@@ -32,6 +32,9 @@
   transcript/input/status/overlay/completion 五区域从 `geometry.ts` 常量迁移为
   树上布局；`visibleTranscriptRows()` 等行预算算术改为读树。验收：全屏视觉
   零变化（帧级对比测试）、inline 不动。
+  **已开工（2026-11-11）**：`core/layout.ts` 纯分发器落地（basis/grow/shrink/
+  min/max + 精确和不变量，`layout.test.ts` 8/8 含 54 项 total 扫描），未接线——
+  P0 余下部分（五区域迁移）在 #624/#625 集成后继续。
 - **P1 inline chrome 组件化**：working tail、task view、queue preview、composer、
   footer 各自成为 `UIComponent`，`paintInline` 退化为「按序收集组件行」；
   inline 与全屏从此渲染同一组件实例。验收：inline 全部既有测试不改断言通过，
