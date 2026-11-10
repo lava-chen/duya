@@ -84,7 +84,7 @@ Pi 已有、Duya 缺失的全屏能力：
 | S3 全部改动 | `npm run architecture:check` | exit 0，无新增违规、未写 baseline |
 | S3 全部改动 | `node scripts/build-cli-bundle.mjs` | exit 0，`packages/cli/bundle/cli.cjs` 4.76 MB |
 | S3 全部改动 | `npm run typecheck:all` | exit 0（结果随提交记录核对） |
-| S1 修复 + PTY 冒烟 | `python3 /tmp/duya-tui-smoke.py …`（pty 驱动 `DUYA_TUI_INLINE=0` bundle，本地 `duya serve` @ `DUYA_DATA_ROOT=/tmp/duya-smoke-data`） | **7/7 PASS**：启动+侧栏、Ctrl+F 打开、查询回显、高亮 SGR、Esc 关闭、Alt+Up/Down no-op、干净退出 |
+| S1 修复 + PTY 冒烟 | `python3 scripts/smoke-tui-pty.py functional …`（pty 驱动 `DUYA_TUI_INLINE=0` bundle，本地 `duya serve` @ `DUYA_DATA_ROOT=/tmp/duya-smoke-data`；harness 已入库，含 content 模式） | **7/7 PASS**：启动+侧栏、Ctrl+F 打开、查询回显、高亮 SGR、Esc 关闭、Alt+Up/Down no-op、干净退出 |
 | S1 修复 | `npx vitest run packages/cli/src/tui/__tests__/` | 同 2 基线失败（同签名），0 新增；1185 passed |
 | S1 修复 | `npm run -w @duya/cli typecheck` / `npm run architecture:check` | exit 0 / exit 0 无新增违规 |
 | S4 翻转 | `npx vitest run packages/cli/src/tui/__tests__/ packages/cli/src/__tests__/inline-tui-switch.test.ts` | 同 2 基线失败（同签名），0 新增；1188+3 passed；新增默认值 pin（`displayMode === 'fullscreen'`）与 `DUYA_TUI_INLINE` 双向逃生舱断言 |
