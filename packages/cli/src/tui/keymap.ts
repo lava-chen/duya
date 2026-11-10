@@ -49,6 +49,7 @@ export const REBINDABLE_ACTIONS: ReadonlySet<string> = new Set([
   'transcript-previous',
   'transcript-next',
   'transcript-toggle-block',
+  'transcript-search',
 ]);
 
 /**
