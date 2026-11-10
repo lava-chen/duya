@@ -22,7 +22,9 @@ Pi 已有、Duya 缺失的全屏能力：
 
 - [x] S1 全屏转录搜索（本 PR）：`Ctrl+F` 打开、输入框内首行搜索条、可见行高亮、
       `Enter`/`↓` 下一个、`↑` 上一个、自动滚动到当前匹配、`Esc` 关闭。
-- [ ] S2 比例滚动条（fullscreen transcript 右缘，`auto/always/hidden`，先指示后拖拽）。
+- [x] S2 比例滚动条（本 PR）：fullscreen transcript 右缘独立一列，thumb 比例尺寸
+      与位置、pointer 点击寻址 + 拖拽（grab offset），`DUYA_TUI_SCROLLBAR=off|
+      always|auto`（默认 auto：仅离开尾部时显示）。
 - [ ] S3 回合跳转（`Ctrl+Shift+Up/Down` 按 user block 锚点跳转；OSC 133 输出另列）。
 - [ ] S4 默认显示模式翻转评估：等 S1–S3 实机验收后，与用户确认是否把 fullscreen
       设为默认（pi 1.0 的做法）；inline 保留为显式选择。
@@ -68,11 +70,37 @@ Pi 已有、Duya 缺失的全屏能力：
 | S1 全部改动 | `npm run architecture:check` | exit 0，无新增违规、未写 baseline |
 | S1 全部改动 | `npm run typecheck:all` | exit 0（含 `build:packages` 22 包与尾部 `eval:agent:core:check` 4/4——即聚合命令的尾部 `node --test`，本次实际执行并通过） |
 | S1 全部改动 | `node scripts/build-cli-bundle.mjs` | exit 0，`packages/cli/bundle/cli.cjs` 4.75 MB |
+| S2 全部改动 | `npx vitest run packages/cli/src/tui/__tests__/` | 同 2 个基线失败（同签名），**0 新增失败**；1176 passed / 1179 total（新增 `scrollbar.test.ts` 12 项全过） |
+| S2 全部改动 | `npm run -w @duya/cli typecheck` | exit 0，0 error |
+| S2 全部改动 | `npm run architecture:check` | exit 0，无新增违规、未写 baseline |
+| S2 全部改动 | `node scripts/build-cli-bundle.mjs` | exit 0，`packages/cli/bundle/cli.cjs` 4.76 MB |
+| S2 全部改动 | `npm run typecheck:all` | exit 0（含 `build:packages` 与尾部 `eval:agent:core:check` 4/4） |
 
 已实现 / 已验证 / 未验证：S1 代码与单测已实现并验证（上述门禁）；终端实机（高亮观感、流式期间搜索、CJK 宽字符命中、Windows/ConPTY、`Ctrl+F` 实键派发）未验证，PR 保持 draft 待真机验收。搜索条颜色（58/100/229/186）为静态选择，真机如刺眼按主题 token 调整即可。
 
 ## 远程交付
 
 - S1 代码提交：`8abd2f8ac`（`feat(cli): add fullscreen transcript search with paint-time highlights`），+807/−10，10 文件。
+- S2 代码提交：见下方证据表（`feat(cli): add a proportional scrollbar to the fullscreen transcript`）。
 - 分支 `codex/tui-fullscreen-framework` 已推送（exit 0）；stacked draft PR：[lava-chen/duya#625](https://github.com/lava-chen/duya/pull/625)，base `codex/cli-pi-workbench`（#624 合并后随 GitHub 改投 master），未合并。
-- worktree 保留在 `.claude/worktrees/tui-fullscreen-framework`，等待实机验收与 review/CI；下一动作是 S2 比例滚动条（等 #624/#625 验收反馈后开工）。
+- worktree 保留在 `.claude/worktrees/tui-fullscreen-framework`，等待实机验收与 review/CI；下一动作是 S3 回合跳转。
+
+## S2 设计决定
+
+- **独立一列，不遮挡**：pi/CC 的滚动条都是覆盖在内容最后一列上的瞬态条，需要
+  show-then-fade 定时器才诚实。duya 已有 HStack 槽位机制（侧栏），滚动条作为
+  `HStack[pane flex, scrollbar 1]` 的第二槽：条升起时内容精确窄一列，什么都不被
+  盖住。`auto` 模式只在 `follow=false` 时付这一列的成本（正是需要方位感的时候）。
+- **pointer 合同**：复用 #624 的 `HitRegion.drag`——按下即寻址（`drag('start')`
+  立即回调，绕过 280ms 多击延迟），保留 grab offset（按住 thumb 中部不会瞬移到
+  光标下），`move` 续拖，`end/cancel` 收尾。region 从提交帧的 `scrollbarLayout`
+  构建，点击永远落在画出来的条上。
+- **数学**：thumb 尺寸 = 可见份额（`round(rows/total × trackRows)`，至少 1 行），
+  位置 = `scrollTop/maxScroll × (trackRows − size)`，`maxScroll` 时 thumb 底边贴
+  track 末行；逆映射用于拖拽，量化桶性质由测试 pin（按下即松开 thumb 不动）。
+- **字形**：`█`/`░` 沿用 capacity-bar 验证过的宽度表 + Windows Terminal 一致性
+  先例；组件在绘制前运行时复核宽度表，不为 1 就画空（画歪不如不画）。
+- **模式开关**：`DUYA_TUI_SCROLLBAR=off|always|auto`（缺省 auto）；`/settings`
+  行留到 S4 与全屏设置面一起做，避免触碰 settings-panel 既有失败用例的数据面。
+- `follow` 期间 `scrollTop` 是陈旧值——thumb 用 `effectiveScrollTop()`（follow 时
+  取 `total − rows`），拖拽把 `follow` 置 false，尾部恢复仍走 `Ctrl+End`。

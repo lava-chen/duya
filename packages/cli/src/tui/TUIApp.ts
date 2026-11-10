@@ -56,6 +56,12 @@ import { resolveDisplayProfile } from './display-profiles.js';
 import { StatusBar } from './components/status-bar.js';
 import { renderTree, type UIComponent } from './core/component.js';
 import { PointerDispatcher, type HitRegion } from './core/pointer.js';
+import {
+  ScrollbarColumn,
+  scrollTopForThumbStart,
+  scrollbarThumb,
+  type ScrollbarThumb,
+} from './scrollbar.js';
 import { tagViewOf, spansToTags } from './markdown/inline.js';
 import { DeltaBuffer, DEFAULT_STALE_MS } from './delta-buffer.js';
 import { RenderScheduler } from './render-scheduler.js';
@@ -811,6 +817,17 @@ export class TUIApp {
   private lastPaneWidth = 0;
   /** Inline Ctrl+F is answered once with where search lives, not on every press. */
   private inlineSearchNoticeShown = false;
+  /** The fullscreen transcript's scrollbar column; present once created, fed per frame. */
+  private scrollbarColumn: ScrollbarColumn | null = null;
+  /**
+   * Where the scrollbar column sits in the committed frame, relative to the
+   * transcript region's inner left, plus its track height. Null when the bar
+   * is not up this frame; the pointer region is built from exactly this, so
+   * clicks can never land on a bar that is not painted.
+   */
+  private scrollbarLayout: { column: number; height: number } | null = null;
+  /** Rows between the drag's press point and the thumb's top, held while dragging. */
+  private scrollbarDragOffset: number | null = null;
   private lastCtrlCAt = Number.NEGATIVE_INFINITY;
   private running = false;
   /** Lines committed to the model but not yet accounted for by a render. */
@@ -2102,7 +2119,9 @@ export class TUIApp {
 
   private transcriptContentWidth(): number {
     const total = transcriptWidth(this.fullScreen.measure('transcript'), this.terminalSize().columns);
-    return Math.max(1, total - this.workbenchColumns(total));
+    // The pane paints one column narrower while the scrollbar is up; the
+    // disclosure targets must address rows in the document as painted.
+    return Math.max(1, total - this.workbenchColumns(total) - (this.scrollbarLayout !== null ? 1 : 0));
   }
 
   /**
@@ -2121,10 +2140,6 @@ export class TUIApp {
       : transcriptWidth(this.fullScreen.measure('transcript'), columns);
     const sidebarWidth = this.workbenchColumns(totalWidth);
     const width = totalWidth - sidebarWidth;
-    // Navigation (search jumps, block selection) reads the match list at this
-    // width: the assembled document — and therefore every match's line number
-    // — depends on it.
-    this.lastPaneWidth = width;
     const pane = this.transcriptPane;
     pane.props = {
       renderer: this.transcript,
@@ -2147,6 +2162,23 @@ export class TUIApp {
     }
     this.sidebarLayout = null;
     let content: UIComponent = pane;
+    // The scrollbar is one HStack column, not an overlay: the pane rewraps by
+    // exactly one column while the bar is up, and nothing it paints is hidden
+    // behind the thumb. The search index and the disclosure targets must see
+    // the SAME narrowed width the pane paints at — hence lastPaneWidth below.
+    const trackRows = this.visibleTranscriptRows();
+    const thumb = this.scrollbarThumbForFrame(trackRows);
+    this.scrollbarLayout = null;
+    if (thumb !== null) {
+      const column = this.scrollbarColumn ?? (this.scrollbarColumn = new ScrollbarColumn({ thumb: null, track: '', thumbTag: '' }));
+      column.props = { thumb, track: this.theme.tags.muted, thumbTag: '' };
+      content = new HStack('transcript-scrollbar', [{ component: pane, size: 'flex' }, { component: column, size: 1 }]);
+      this.scrollbarLayout = { column: width - 1, height: trackRows };
+    }
+    // Navigation (search jumps, block selection, scrollbar drags) reads the
+    // match list at this width: the assembled document — and therefore every
+    // match's line number — depends on it.
+    this.lastPaneWidth = width - (thumb !== null ? 1 : 0);
     if (sidebarWidth > 0) {
       const model = this.options.modelLabel?.();
       const tools = this.model.blocks.filter((block) => block.kind === 'tool');
@@ -2168,7 +2200,7 @@ export class TUIApp {
       };
       if (this.sidebar === null) this.sidebar = new WorkbenchSidebar(props);
       else this.sidebar.props = props;
-      const split = new HStack('workbench', [{ component: pane, size: 'flex' }, { component: this.sidebar, size: sidebarWidth }]);
+      const split = new HStack('workbench', [{ component: content, size: 'flex' }, { component: this.sidebar, size: sidebarWidth }]);
       const slot = split.arrange({ row: 0, column: 0, width: totalWidth, height: this.visibleTranscriptRows() })[1];
       if (slot) this.sidebarLayout = { column: slot.viewport.column, width: slot.viewport.width, height: slot.viewport.height };
       content = split;
@@ -5012,6 +5044,82 @@ exportHistory(): string[] {
     return { line, cursorCol: 2 + visibleWidth(query) };
   }
 
+  // ── Fullscreen transcript scrollbar (DUYA_TUI_SCROLLBAR) ────────────────
+
+  /**
+   * `auto` shows the bar only while the reader is away from the tail — that
+   * is when orientation matters; `always` keeps it up; anything else is off.
+   * An environment switch until the fullscreen settings surface lands (plan S4).
+   */
+  private scrollbarMode(): 'auto' | 'always' | 'hidden' {
+    const raw = process.env['DUYA_TUI_SCROLLBAR'];
+    if (raw === 'always') return 'always';
+    if (raw === 'off' || raw === 'hidden') return 'hidden';
+    return 'auto';
+  }
+
+  /**
+   * The scroll offset the viewport actually shows: while `follow` is on, the
+   * window is pinned to the tail and the stored `scrollTop` is stale.
+   */
+  private effectiveScrollTop(): number {
+    if (!this.follow) return this.scrollTop;
+    return Math.max(0, this.transcript.totalLines(this.model, this.renderOptions()) - this.visibleTranscriptRows());
+  }
+
+  /** The thumb for the bar as this frame should draw it, or null when hidden. */
+  private scrollbarThumbForFrame(trackRows: number): ScrollbarThumb | null {
+    const mode = this.scrollbarMode();
+    if (this.inlineSurface !== null || mode === 'hidden') return null;
+    if (mode === 'auto' && this.follow) return null;
+    return scrollbarThumb(
+      this.transcript.totalLines(this.model, this.renderOptions()),
+      trackRows,
+      this.effectiveScrollTop(),
+      trackRows,
+    );
+  }
+
+  /**
+   * Pointer drag on the scrollbar column. Pressing anywhere on the track
+   * seeks there (keeping where inside the thumb the grab landed, so pressing
+   * the thumb's middle does not teleport it under the cursor), moving
+   * continues the seek, releasing ends it.
+   */
+  private scrollbarDrag(phase: 'start' | 'move' | 'end' | 'cancel', y: number): void {
+    if (phase === 'start') {
+      const trackRows = this.visibleTranscriptRows();
+      const thumb = scrollbarThumb(
+        this.transcript.totalLines(this.model, this.renderOptions()),
+        trackRows,
+        this.effectiveScrollTop(),
+        trackRows,
+      );
+      if (thumb === null) {
+        this.scrollbarDragOffset = null;
+        return;
+      }
+      this.scrollbarDragOffset = Math.max(0, Math.min(thumb.size, y - thumb.start));
+      this.scrollbarSeek(y - this.scrollbarDragOffset);
+      return;
+    }
+    if (phase === 'move' && this.scrollbarDragOffset !== null) {
+      this.scrollbarSeek(y - this.scrollbarDragOffset);
+      return;
+    }
+    this.scrollbarDragOffset = null;
+  }
+
+  /** Put the thumb's top at `thumbStart`; the tail resumes only via Ctrl+End. */
+  private scrollbarSeek(thumbStart: number): void {
+    const rows = this.visibleTranscriptRows();
+    const total = this.transcript.totalLines(this.model, this.renderOptions());
+    const top = scrollTopForThumbStart(thumbStart, total, rows, rows);
+    this.follow = false;
+    this.scrollTop = Math.max(0, Math.min(Math.max(0, total - rows), top));
+    this.scheduler.requestImmediate();
+  }
+
   private scrollBy(pages: number): void {
     this.pointer.cancel();
     const rows = this.visibleTranscriptRows();
@@ -5219,6 +5327,18 @@ exportHistory(): string[] {
           }
         }, sessionId);
       }
+    }
+    // The scrollbar column: press seeks (keeping the grab offset inside the
+    // thumb), drag continues, release ends. A raw hit like the sidebar's
+    // divider because it spans the whole track height, not one row.
+    if (this.scrollbarLayout !== null && geometry?.laidOut) {
+      const layout = this.scrollbarLayout;
+      hits.push({
+        id: 'transcript-scrollbar', row: geometry.top + geometry.innerTop,
+        column: geometry.left + geometry.innerLeft + layout.column, width: 1, height: layout.height,
+        activate: () => {},
+        drag: (phase, point) => this.scrollbarDrag(phase, point.y),
+      });
     }
     if (!this.follow)
       add('follow-tail', this.fullScreen.measure('status'), 0, 0, visibleWidth('[↓ Latest]'), () => this.actionHandlers.get('follow-tail')?.());
