@@ -90,6 +90,7 @@ Pi 已有、Duya 缺失的全屏能力：
 | S4 翻转 | `npx vitest run packages/cli/src/tui/__tests__/ packages/cli/src/__tests__/inline-tui-switch.test.ts` | 同 2 基线失败（同签名），0 新增；1188+3 passed；新增默认值 pin（`displayMode === 'fullscreen'`）与 `DUYA_TUI_INLINE` 双向逃生舱断言 |
 | S4 翻转 | `npm run -w @duya/cli typecheck` / `npm run architecture:check` | exit 0 / exit 0（随提交核对） |
 | 基线失败清零 | `npx vitest run packages/cli/src/tui/__tests__/` | **91 文件全过，1196 passed / 0 失败**（1 expected fail 为既有故意标记）。两个基线失败是 #624 增补 focus/folded/hidden 后测试导航步数过期（列表序 +3），pin 的行为向量本就正确——按新列表序修正步数（Live only 3→5、toolGroupMode 7→10），断言未动 |
+| 内容级 PTY 冒烟 | pty 驱动 + 本地 `!seq`/`!echo` 命令造真实块（无 provider）：滚动条渲染、SGR 鼠标点击寻址、跳转、搜索 | **5/7 PASS**：命令卡渲染 ✓、滚离后 thumb/track 实绘 ✓、`[paused]` ✓、**SGR 鼠标点击滚动条寻址实测生效** ✓、Ctrl+F 对真实内容搜索（计数 1/1）✓、干净退出 ✓；2 项为测试前提错误而非 bug——①短文档（折叠卡 ≈20 行 < 视口）下滚动条**正确缺席**（`Ctrl+T` 展开后出现）；②`!` 命令只产 tool 块不产 user 块（`echoSubmitted: false` + `beginLocalShell` 仅 upsertTool），无 provider 环境锚点正确为空、跳转正确 no-op——**真实回合跳转仍需用户实机**（需真实 provider 对话） |
 
 已实现 / 已验证 / 未验证：S1 代码与单测已实现并验证（上述门禁）；**功能级 PTY 冒烟已验证**（2026-11-11，本地 Host + 空会话，`python3` pty 驱动真实按键、断言真实 ANSI 帧）：TUI 全屏启动与侧栏渲染、`Ctrl+F` 实键派发（own parser `\x06`→`C-f`）打开搜索条、查询回显与计数（`/ du · 1/1`）、`searchMatchBg` 高亮 SGR 实际输出（`48;5;58`）、`Esc` 关闭、`Alt+Up/Down` 无锚点 no-op 不崩溃、干净退出。**冒烟实锤并修复一个真 bug**：搜索条打开与 0 匹配编辑时不重绘（`searchJumpToCursor` 在无匹配时提前 return、不调度帧，而 keypressHandler 的同步帧在状态变更前跑完——症状是首按无效、第二次按键才出现搜索条；修复为状态变更后显式 `requestImmediate`）。**观感级验收仍待用户**：配色观感、CJK 宽字符命中、流式期间搜索、真实回合跳转（需真实对话内容）、Windows/ConPTY、#624 的点击与侧栏实操。PR 保持 draft。
 
