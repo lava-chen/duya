@@ -91,7 +91,7 @@ inline 保留终端 scrollback 与原生选择；可点击历史发生在 fullsc
 绕过拒绝，未合并。仓库规则要求通过 PR 交付，故本地
 实现和静态结果不等于已经交付/合入。
 
-下一动作：已获用户授权，提交侧栏切片后推送本任务分支并创建 draft PR；侧栏代码与静态证据见下节。终端实机验收待执行，不迁移旧 terminal-app 或 legacy Agent 代码。
+下一动作：跟进 draft PR 的 review/CI 与终端实机验收；不迁移旧 terminal-app 或 legacy Agent 代码。
 
 ## 侧栏切片（推送等待授权期间继续本地实现）
 
@@ -103,3 +103,13 @@ inline 保留终端 scrollback 与原生选择；可点击历史发生在 fullsc
 - 低于 120 列或历史空间不足 6 行时收起，不覆写宽度；F7 换页，F8 临时显示/隐藏，`DUYA_TUI_SIDEBAR=0` 禁用。
 - 仅同步现有菜单/快捷键断言的数据清单，未新增用例或执行测试。
 - CLI 单包类型检查与 4.52 MB bundle 构建通过；全仓静态环节按原顺序重跑，明确不执行聚合尾部 `node --test`。退出码 0；原始聚合尾部测试仍未运行。架构复核 exit 0，无新增违规。
+
+## 远程交付结果（2026-11-11，Asia/Shanghai）
+
+- source head：`4582c595e`；此前提交 `ce04b8c83`、`48c13d303` 均在同一任务分支。
+- 在用户明确授权后，`git push -u origin codex/cli-pi-workbench` exit 0。
+- draft PR：[github.com/lava-chen/duya/pull/624](https://github.com/lava-chen/duya/pull/624)，base `master`；未合并。
+- 全仓静态阶段按 `typecheck:all` 的原始顺序执行并 exit 0，仅明确跳过末尾 `node --test`；未新增测试用例、未运行测试套件。
+- 最后 CLI 类型检查、CLI 4.52 MB bundle、架构审计、TS 抑制指令静态检查均 exit 0；架构 baseline 未修改。
+- tracked 源码和文档已保存；未跟踪项为本检出的依赖链接，未提交。保留工作树与分支等待验收和 review/CI。
+- 终端实机、Windows/ConPTY、文字选择与真实权限提交仍未验收，PR 保持 draft。高级差距仍按本计划上列清单记录。
