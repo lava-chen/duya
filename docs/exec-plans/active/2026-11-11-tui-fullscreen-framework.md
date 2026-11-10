@@ -81,8 +81,11 @@ Pi 已有、Duya 缺失的全屏能力：
 | S3 全部改动 | `npm run architecture:check` | exit 0，无新增违规、未写 baseline |
 | S3 全部改动 | `node scripts/build-cli-bundle.mjs` | exit 0，`packages/cli/bundle/cli.cjs` 4.76 MB |
 | S3 全部改动 | `npm run typecheck:all` | exit 0（结果随提交记录核对） |
+| S1 修复 + PTY 冒烟 | `python3 /tmp/duya-tui-smoke.py …`（pty 驱动 `DUYA_TUI_INLINE=0` bundle，本地 `duya serve` @ `DUYA_DATA_ROOT=/tmp/duya-smoke-data`） | **7/7 PASS**：启动+侧栏、Ctrl+F 打开、查询回显、高亮 SGR、Esc 关闭、Alt+Up/Down no-op、干净退出 |
+| S1 修复 | `npx vitest run packages/cli/src/tui/__tests__/` | 同 2 基线失败（同签名），0 新增；1185 passed |
+| S1 修复 | `npm run -w @duya/cli typecheck` / `npm run architecture:check` | exit 0 / exit 0 无新增违规 |
 
-已实现 / 已验证 / 未验证：S1 代码与单测已实现并验证（上述门禁）；终端实机（高亮观感、流式期间搜索、CJK 宽字符命中、Windows/ConPTY、`Ctrl+F` 实键派发）未验证，PR 保持 draft 待真机验收。搜索条颜色（58/100/229/186）为静态选择，真机如刺眼按主题 token 调整即可。
+已实现 / 已验证 / 未验证：S1 代码与单测已实现并验证（上述门禁）；**功能级 PTY 冒烟已验证**（2026-11-11，本地 Host + 空会话，`python3` pty 驱动真实按键、断言真实 ANSI 帧）：TUI 全屏启动与侧栏渲染、`Ctrl+F` 实键派发（own parser `\x06`→`C-f`）打开搜索条、查询回显与计数（`/ du · 1/1`）、`searchMatchBg` 高亮 SGR 实际输出（`48;5;58`）、`Esc` 关闭、`Alt+Up/Down` 无锚点 no-op 不崩溃、干净退出。**冒烟实锤并修复一个真 bug**：搜索条打开与 0 匹配编辑时不重绘（`searchJumpToCursor` 在无匹配时提前 return、不调度帧，而 keypressHandler 的同步帧在状态变更前跑完——症状是首按无效、第二次按键才出现搜索条；修复为状态变更后显式 `requestImmediate`）。**观感级验收仍待用户**：配色观感、CJK 宽字符命中、流式期间搜索、真实回合跳转（需真实对话内容）、Windows/ConPTY、#624 的点击与侧栏实操。PR 保持 draft。
 
 ## 远程交付
 

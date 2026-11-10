@@ -4948,7 +4948,12 @@ exportHistory(): string[] {
     const availableRows = Math.max(1, this.terminalSize().rows - this.footerRows() - this.popupRows());
     if (availableRows < 4) return;
     this.search = { ...this.search, active: true };
+    // Schedule HERE, not only in searchJumpToCursor: with no matches yet that
+    // one returns early, and a state change that never repaints means the bar
+    // appears only on the NEXT unrelated keypress — measured in the PTY smoke
+    // (plan 2026-11-11, S1 verification).
     this.searchJumpToCursor();
+    this.scheduler.requestImmediate();
   }
 
   /** Close the search bar. The viewport stays where the search left it; Ctrl+End is the way home. */
@@ -4963,7 +4968,10 @@ exportHistory(): string[] {
     const clean = text.replace(/[\r\n\0\x1b]/gu, '');
     if (clean === '') return;
     this.search = { ...this.search, query: this.search.query + clean, cursor: 0 };
+    // A zero-match query must still repaint the bar (the counter says 0/0);
+    // searchJumpToCursor alone would skip the frame.
     this.searchJumpToCursor();
+    this.scheduler.requestImmediate();
   }
 
   /** Remove the last code point of the query. */
@@ -4972,6 +4980,7 @@ exportHistory(): string[] {
     if (chars.length === 0) return;
     this.search = { ...this.search, query: chars.slice(0, -1).join(''), cursor: 0 };
     this.searchJumpToCursor();
+    this.scheduler.requestImmediate();
   }
 
   /** Step the cursor through the match list and bring the hit on screen. */
