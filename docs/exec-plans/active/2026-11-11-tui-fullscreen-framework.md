@@ -25,7 +25,8 @@ Pi 已有、Duya 缺失的全屏能力：
 - [x] S2 比例滚动条（本 PR）：fullscreen transcript 右缘独立一列，thumb 比例尺寸
       与位置、pointer 点击寻址 + 拖拽（grab offset），`DUYA_TUI_SCROLLBAR=off|
       always|auto`（默认 auto：仅离开尾部时显示）。
-- [ ] S3 回合跳转（`Ctrl+Shift+Up/Down` 按 user block 锚点跳转；OSC 133 输出另列）。
+- [x] S3 回合跳转（本 PR）：`Alt+Up`/`Alt+Down` 在 user block 锚点间跳转；视口
+      位置即游标（无存储态）。OSC 133 输出另列（属 S5 渲染统一的终端集成面）。
 - [ ] S4 默认显示模式翻转评估：等 S1–S3 实机验收后，与用户确认是否把 fullscreen
       设为默认（pi 1.0 的做法）；inline 保留为显式选择。
 - [ ] S5 渲染管线统一（pi 式 `TuiMainScreen`/`TuiAltScreen` 双面同组件树）：大改，
@@ -75,13 +76,19 @@ Pi 已有、Duya 缺失的全屏能力：
 | S2 全部改动 | `npm run architecture:check` | exit 0，无新增违规、未写 baseline |
 | S2 全部改动 | `node scripts/build-cli-bundle.mjs` | exit 0，`packages/cli/bundle/cli.cjs` 4.76 MB |
 | S2 全部改动 | `npm run typecheck:all` | exit 0（含 `build:packages` 与尾部 `eval:agent:core:check` 4/4） |
+| S3 全部改动 | `npx vitest run packages/cli/src/tui/__tests__/` | 同 2 个基线失败（同签名），**0 新增失败**；1185 passed / 1188 total（新增 `turn-navigation.test.ts` 9 项全过） |
+| S3 全部改动 | `npm run -w @duya/cli typecheck` | exit 0，0 error |
+| S3 全部改动 | `npm run architecture:check` | exit 0，无新增违规、未写 baseline |
+| S3 全部改动 | `node scripts/build-cli-bundle.mjs` | exit 0，`packages/cli/bundle/cli.cjs` 4.76 MB |
+| S3 全部改动 | `npm run typecheck:all` | exit 0（结果随提交记录核对） |
 
 已实现 / 已验证 / 未验证：S1 代码与单测已实现并验证（上述门禁）；终端实机（高亮观感、流式期间搜索、CJK 宽字符命中、Windows/ConPTY、`Ctrl+F` 实键派发）未验证，PR 保持 draft 待真机验收。搜索条颜色（58/100/229/186）为静态选择，真机如刺眼按主题 token 调整即可。
 
 ## 远程交付
 
 - S1 代码提交：`8abd2f8ac`（`feat(cli): add fullscreen transcript search with paint-time highlights`），+807/−10，10 文件。
-- S2 代码提交：见下方证据表（`feat(cli): add a proportional scrollbar to the fullscreen transcript`）。
+- S2 代码提交：`bdfdfe0c7`（`feat(cli): add a proportional scrollbar to the fullscreen transcript`），+428/−8。
+- S3 代码提交：见 git log（`feat(cli): jump between prompts with alt+up and alt+down`）。
 - 分支 `codex/tui-fullscreen-framework` 已推送（exit 0）；stacked draft PR：[lava-chen/duya#625](https://github.com/lava-chen/duya/pull/625)，base `codex/cli-pi-workbench`（#624 合并后随 GitHub 改投 master），未合并。
 - worktree 保留在 `.claude/worktrees/tui-fullscreen-framework`，等待实机验收与 review/CI；下一动作是 S3 回合跳转。
 
@@ -104,3 +111,19 @@ Pi 已有、Duya 缺失的全屏能力：
   行留到 S4 与全屏设置面一起做，避免触碰 settings-panel 既有失败用例的数据面。
 - `follow` 期间 `scrollTop` 是陈旧值——thumb 用 `effectiveScrollTop()`（follow 时
   取 `total − rows`），拖拽把 `follow` 置 false，尾部恢复仍走 `Ctrl+End`。
+
+## S3 设计决定
+
+- **弦**：`Alt+Up`/`Alt+Down`。pi 的 `Ctrl+Shift+方向键` 在本键位系统不可表达
+  （`normalizeChord` 明确拒绝 shifted control 弦——多数终端无法区分送达），own
+  解析器对 `\x1b[1;3A` 产出 `{name:'up', meta:true}`（既有测试 pin），故以
+  `M-up`/`M-down` 送达；`toBlessedKey` 的 alt 分支为此扩展导航名。
+- **锚点**：user block 在渲染文档中的首个非空行（提示带本身，而非其块的
+  leading gap 行）；profile 过滤计入——隐藏块不渲染即不占行，锚点随之移动。
+  与搜索索引一样按 documentKey 记忆化。
+- **无游标状态**：previous = 严格高于视口顶的最后一个锚点；next = 视口顶下方
+  context rows（=2，`ANCHOR_CONTEXT_ROWS`，与搜索跳转共用）之后的第一个锚点。
+  落定的锚点不会成为自己的下一个目标（数学性质，测试 pin）；手动滚动与跳转
+  永远一致。跳转置 `follow=false` 并取消 pointer 手势。
+- **inline 不跳**：终端拥有 scrollback、应用无法重绘已提交行（与 inline 无
+  app 滚动的同一条理由），动作静默 no-op——与 PgUp/PgDn 的 inline 语义一致。

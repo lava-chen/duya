@@ -62,6 +62,7 @@ import {
   scrollbarThumb,
   type ScrollbarThumb,
 } from './scrollbar.js';
+import { nextTurnAnchor, previousTurnAnchor } from './turn-navigation.js';
 import { tagViewOf, spansToTags } from './markdown/inline.js';
 import { DeltaBuffer, DEFAULT_STALE_MS } from './delta-buffer.js';
 import { RenderScheduler } from './render-scheduler.js';
@@ -206,11 +207,11 @@ const COMPOSER_INSET = 2;
 /** Transcript lines moved per wheel tick. Three is the conventional step. */
 const WHEEL_STEP_LINES = 3;
 /**
- * Context rows kept ABOVE the line a search jump lands on. A hit glued to the
- * top edge reads as if something were cut off; two rows of what came before
- * give the hit its place in the conversation.
+ * Context rows kept ABOVE the line a jump lands on — a search hit or a turn
+ * anchor glued to the top edge reads as if something were cut off; two rows
+ * of what came before give the target its place in the conversation.
  */
-const SEARCH_CONTEXT_ROWS = 2;
+const ANCHOR_CONTEXT_ROWS = 2;
 
 /** How long a second Ctrl+C stays lethal. */
 const DOUBLE_CTRL_C_MS = 2000;
@@ -4073,6 +4074,8 @@ exportHistory(): string[] {
     });
     this.bindAction('transcript-previous', () => selectBlock(-1));
     this.bindAction('transcript-next', () => selectBlock(1));
+    this.bindAction('transcript-previous-turn', () => this.jumpTurn(-1));
+    this.bindAction('transcript-next-turn', () => this.jumpTurn(1));
     this.bindAction('transcript-search', () => {
       if (this.interactivePrompt === null && !this.overlay.isActive) this.openTranscriptSearch();
     });
@@ -4997,7 +5000,7 @@ exportHistory(): string[] {
     const maxTop = Math.max(0, total - this.visibleTranscriptRows());
     this.pointer.cancel();
     this.follow = false;
-    this.scrollTop = Math.max(0, Math.min(maxTop, target.line - SEARCH_CONTEXT_ROWS));
+    this.scrollTop = Math.max(0, Math.min(maxTop, target.line - ANCHOR_CONTEXT_ROWS));
     this.scheduler.requestImmediate();
   }
 
@@ -5117,6 +5120,33 @@ exportHistory(): string[] {
     const top = scrollTopForThumbStart(thumbStart, total, rows, rows);
     this.follow = false;
     this.scrollTop = Math.max(0, Math.min(Math.max(0, total - rows), top));
+    this.scheduler.requestImmediate();
+  }
+
+  // ── Turn navigation (Alt+Up / Alt+Down, full-screen) ────────────────────
+
+  /**
+   * Jump to the previous / next user prompt.
+   *
+   * The viewport position is the cursor (see turn-navigation.ts): no stored
+   * index to go stale. Inline mode deliberately does nothing — the terminal
+   * owns its scrollback, and an app that cannot repaint committed rows cannot
+   * jump either (the same reason inline has no app-owned PgUp).
+   */
+  private jumpTurn(direction: -1 | 1): void {
+    if (this.interactivePrompt !== null || this.overlay.isActive || this.windowMgr.isActive) return;
+    if (this.inlineSurface !== null) return;
+    const anchors = this.transcriptPane.turnAnchors(this.lastPaneWidth);
+    if (anchors.length === 0) return;
+    const anchor = direction === -1
+      ? previousTurnAnchor(anchors, this.effectiveScrollTop())
+      : nextTurnAnchor(anchors, this.effectiveScrollTop(), ANCHOR_CONTEXT_ROWS);
+    if (anchor === null) return;
+    this.pointer.cancel();
+    this.follow = false;
+    const total = this.transcript.totalLines(this.model, this.renderOptions());
+    const maxTop = Math.max(0, total - this.visibleTranscriptRows());
+    this.scrollTop = Math.max(0, Math.min(maxTop, anchor.line - ANCHOR_CONTEXT_ROWS));
     this.scheduler.requestImmediate();
   }
 

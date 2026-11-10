@@ -43,6 +43,7 @@ import {
   type SearchMatch,
 } from '../transcript-search.js';
 import type { SpanTagView } from '../markdown/inline.js';
+import type { TurnAnchor } from '../turn-navigation.js';
 
 export interface TranscriptPaneProps {
   readonly renderer: TranscriptRenderer;
@@ -97,6 +98,8 @@ export class TranscriptPane implements UIComponent<TranscriptPaneProps> {
   private document: { readonly key: string; readonly lines: readonly string[] } | null = null;
   /** The search index, memoised on (document key, query) — never on options. */
   private searchMemo: { readonly key: string; readonly index: SearchIndex } | null = null;
+  /** The prompt anchors, memoised on the document key like the search index. */
+  private turnMemo: { readonly key: string; readonly anchors: readonly TurnAnchor[] } | null = null;
 
   constructor(props: TranscriptPaneProps, id = 'transcript') {
     this.id = id;
@@ -143,6 +146,35 @@ export class TranscriptPane implements UIComponent<TranscriptPaneProps> {
   /** The flat hit list navigation walks; empty while search is closed. */
   searchMatches(width: number): readonly SearchMatch[] {
     return this.searchIndex(width).matches;
+  }
+
+  /**
+   * The document line every user prompt's band starts on, in the rendered
+   * document at `width` — the same assembled document `paint` walks, profile
+   * filtering included: a hidden block shifts nothing because it renders as
+   * nothing. The anchor is the block's first NON-EMPTY row: a block opens
+   * with its stanza gap, and the gap belongs to the document's rhythm, not
+   * to the prompt a jump is supposed to land on.
+   */
+  turnAnchors(width: number): readonly TurnAnchor[] {
+    const key = this.documentKey(width);
+    if (this.turnMemo !== null && this.turnMemo.key === key) return this.turnMemo.anchors;
+    const options = this.optionsFor(width);
+    const visible = visibleBlocks(this.props.model.blocks, options);
+    const rendered = this.props.renderer.blocks(this.props.model, options);
+    const anchors: TurnAnchor[] = [];
+    let line = 0;
+    for (let index = 0; index < visible.length; index += 1) {
+      const block = visible[index];
+      const blockLines = rendered[index] ?? [];
+      if (block?.kind === 'user') {
+        const at = blockLines.findIndex((row) => row !== '');
+        anchors.push({ blockId: block.id, line: line + (at === -1 ? 0 : at) });
+      }
+      line += blockLines.length;
+    }
+    this.turnMemo = { key, anchors };
+    return anchors;
   }
 
   /**
