@@ -35,6 +35,16 @@
   **已开工（2026-11-11）**：`core/layout.ts` 纯分发器落地（basis/grow/shrink/
   min/max + 精确和不变量，`layout.test.ts` 8/8 含 54 项 total 扫描），未接线——
   P0 余下部分（五区域迁移）在 #624/#625 集成后继续。
+  **Step 2（2026-11-11）**：`screen/own/layout-tree.ts` `regionBoxes` 落地——
+  五区域作为一棵布局树（transcript flex / composer / popup / status 自底向上
+  dock），以 `layoutRegion` patch 算术为 ground truth 的黄金对拍测试
+  （`layout-tree.test.ts` 6/6，可行域 sweep + 邻接 + overlay 居中公式），仍零
+  接线。对拍发现并钉住一处语义分歧：不可行域（dock 高于终端）下 patch 算术
+  滑入负 top，树则自底向上压缩——保留哪个属 step 3 决策。**开单顺序澄清**：
+  依赖条款约束的是 MERGE 顺序（P0 不得先于 #624/#625 合入 master），不是开工
+  顺序；本切片在其独立分支/PR 上交付，可独立 review。
+  **Step 3 待做**：Surface 消费 `regionBoxes`（换核）+ 帧级视觉对拍 + 不可行域
+  行为裁定。
 - **P1 inline chrome 组件化**：working tail、task view、queue preview、composer、
   footer 各自成为 `UIComponent`，`paintInline` 退化为「按序收集组件行」；
   inline 与全屏从此渲染同一组件实例。验收：inline 全部既有测试不改断言通过，
