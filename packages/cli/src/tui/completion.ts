@@ -84,6 +84,10 @@ const CLOSED: CompletionState = {
 };
 
 export class CompletionController {
+  select(index: number): void {
+    if (index >= 0 && index < this.state.items.length) this.state = { ...this.state, selectedIndex: index };
+  }
+
   private state: CompletionState = { ...CLOSED, items: [] };
   /** Keep an explicitly dismissed/Tab-accepted menu closed until text changes. */
   private suppressedText: string | null = null;

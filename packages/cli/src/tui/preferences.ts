@@ -165,11 +165,11 @@ export const COMPLETION_ROWS_RANGE = { min: 3, max: 12 } as const;
 export const INPUT_ROWS_RANGE = { min: 2, max: 16 } as const;
 
 /** The tool-group modes, in the order the `/settings` row cycles them. */
-export const TOOL_GROUP_MODES: readonly ToolGroupMode[] = ['full', 'names', 'running'];
+export const TOOL_GROUP_MODES: readonly ToolGroupMode[] = ['full', 'names', 'running', 'focus', 'hidden'];
 
 /** Unknown values fall back: a mode the renderer does not implement is worse than the one it does. */
 function parseToolGroupMode(value: string | undefined, fallback: ToolGroupMode): ToolGroupMode {
-  return value === 'full' || value === 'names' || value === 'running' ? value : fallback;
+  return TOOL_GROUP_MODES.find((mode) => mode === value) ?? fallback;
 }
 
 /** `'false' | '0' | 'off'` are the ways a setting endpoint can say no. */
@@ -340,6 +340,8 @@ export function describeRows(value: number): string {
 
 /** Menu spelling of the tool-group mode: what the reader will see per batch. */
 export function describeToolGroupMode(mode: ToolGroupMode): string {
+  if (mode === 'focus') return 'Focus: reasoning open';
+  if (mode === 'hidden') return 'Hidden';
   if (mode === 'names') return 'Names only';
   if (mode === 'running') return 'Running only';
   return 'All calls';

@@ -10,6 +10,7 @@
 
 | 范围 | 入口 | 下一动作 |
 | --- | --- | --- |
+| CLI TUI 学习 Pi | [2026-11-10 CLI Pi 工作台](active/2026-11-10-cli-pi-workbench.md) | CLI 组件点击、回底与显示策略已实现；静态检查通过，待终端验收；常驻侧栏与 UI 扩展合同后续推进 |
 | 后台任务重复轮询硬停止 | [2026-11-04 后台任务重复轮询硬停止](active/2026-11-04-background-task-poll-loop.md) | JSONL 确认为 45 次轮询、最长连续 15 次；Host 接通硬停止并加 `get_task_output` 专用阈值；PR #617 draft |
 | Session 工具迁移 | [Session tools as a `duya_app` MCP capability group](active/2026-11-02-session-tools-duya-app.md) | Host-owned `duya_app` 覆盖与集成测试已实现；PR #579 待授权集成 |
 | Worktree 根目录与清理（635） | [2026-11-03 Worktree 设置与自动清理](active/2026-11-03-worktree-settings-and-auto-cleanup.md) | P1–P6 已实现并过门禁；PR #594 待集成 |

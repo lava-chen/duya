@@ -69,80 +69,70 @@ const MIN_WRAP_WIDTH = 1;
  * An empty input yields one empty row rather than zero rows, because an editor
  * with no text still has a row to put a cursor on.
  */
-export function wrapWithCursor(
-  text: string,
-  width: number,
-  cursorIndex: number,
-): WrappedText {
+export function wrapWithCursor(text: string, width: number, cursorIndex: number): WrappedText {
+  const { rows, cursorRow, cursorCol } = wrapWithSource(text, width, cursorIndex);
+  return { rows, cursorRow, cursorCol };
+}
+
+/** Code-point boundaries of each painted row in the original, unmodified draft. */
+export interface SourceWrappedText extends WrappedText {
+  readonly sourceOffsets: readonly (readonly number[])[];
+}
+
+/** Keep source positions through word wrapping, including discarded break spaces. */
+export function wrapWithSource(text: string, width: number, cursorIndex: number): SourceWrappedText {
   const limit = Math.max(MIN_WRAP_WIDTH, Math.floor(width));
   const rows: string[] = [];
-
-  // Where the cursor falls, tracked as it is consumed rather than searched for
-  // afterwards: a search would have to re-derive the same break decisions.
-  let cursorRow = 1;
-  let cursorCol = 0;
-  let cursorPlaced = cursorIndex <= 0;
+  const sourceOffsets: number[][] = [];
+  let paragraphStart = 0;
+  const emit = (row: readonly { text: string; offset: number }[], emptyOffset: number): void => {
+    rows.push(row.map((cell) => cell.text).join(''));
+    sourceOffsets.push(row.length === 0 ? [emptyOffset]
+      : [...row.map((cell) => cell.offset), row[row.length - 1]!.offset + 1]);
+  };
 
   for (const paragraph of text.split('\n')) {
     const codePoints = Array.from(paragraph);
-    // The row under construction, as code points. An array rather than a
-    // string because a break index has to be counted in code points, and
-    // recomputing that from the string each character would make wrapping
-    // quadratic in the length of the line.
-    let row: string[] = [];
+    let row: Array<{ text: string; offset: number }> = [];
     let rowWidth = 0;
-    // Index into `row` of the last space, or -1. A space at index 0 is not a
-    // break opportunity: breaking there would emit an empty row.
     let breakAt = -1;
-
     for (let i = 0; i < codePoints.length; i += 1) {
-      const cp = codePoints[i] as string;
-
-      if (!cursorPlaced && i === cursorIndex) {
-        cursorRow = rows.length + 1;
-        cursorCol = rowWidth;
-        cursorPlaced = true;
-      }
-
+      const cp = codePoints[i]!;
       const cpWidth = codePointWidth(cp);
-
-      // The character does not fit. Break at the last space when there is one,
-      // otherwise break here so an over-long token still makes progress.
       if (rowWidth + cpWidth > limit && row.length > 0) {
         const head = breakAt > 0 ? row.slice(0, breakAt) : row;
-        const tail = breakAt > 0 ? row.slice(breakAt).filter((c) => c !== ' ') : [];
-        rows.push(head.join(''));
-        if (!cursorPlaced && cursorIndex <= i) {
-          cursorRow = rows.length;
-          cursorCol = visibleWidth(head.join(''));
-          cursorPlaced = true;
-        }
+        const tail = breakAt > 0 ? row.slice(breakAt).filter((cell) => cell.text !== ' ') : [];
+        emit(head, paragraphStart + i);
         row = tail;
-        rowWidth = visibleWidth(row.join(''));
+        rowWidth = visibleWidth(row.map((cell) => cell.text).join(''));
         breakAt = -1;
       }
-
-      row.push(cp);
+      row.push({ text: cp, offset: paragraphStart + i });
       rowWidth += cpWidth;
-      if (cp === ' ' && row.length > 1) {
-        breakAt = row.length - 1;
+      if (cp === ' ' && row.length > 1) breakAt = row.length - 1;
+    }
+    emit(row, paragraphStart + codePoints.length);
+    paragraphStart += codePoints.length + 1;
+  }
+
+  const requested = Number.isFinite(cursorIndex) ? Math.max(0, Math.min(Array.from(text).length, cursorIndex)) : 0;
+  let distance = Number.POSITIVE_INFINITY;
+  let cursorRow = 1;
+  let cursorCol = 0;
+  sourceOffsets.forEach((offsets, rowIndex) => {
+    const cells = Array.from(rows[rowIndex]!);
+    let column = 0;
+    offsets.forEach((offset, index) => {
+      const nextDistance = Math.abs(offset - requested);
+      if (nextDistance < distance) {
+        distance = nextDistance;
+        cursorRow = rowIndex + 1;
+        cursorCol = column;
       }
-    }
-
-    rows.push(row.join(''));
-    if (!cursorPlaced && cursorIndex >= codePoints.length) {
-      cursorRow = rows.length;
-      cursorCol = rowWidth;
-      cursorPlaced = true;
-    }
-  }
-
-  if (!cursorPlaced) {
-    cursorRow = rows.length;
-    cursorCol = visibleWidth(rows[rows.length - 1] ?? '');
-  }
-
-  return { rows, cursorRow, cursorCol };
+      if (index < cells.length) column += codePointWidth(cells[index]!);
+    });
+  });
+  return { rows, cursorRow, cursorCol, sourceOffsets };
 }
 
 /**

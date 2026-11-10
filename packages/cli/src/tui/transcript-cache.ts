@@ -47,6 +47,7 @@
 import type { TranscriptModel } from './blocks.js';
 import {
   blockExpanded,
+  thinkingExpanded,
   planKey,
   planTranscript,
   renderPlannedBlock,
@@ -105,7 +106,7 @@ export class TranscriptRenderer {
       const key = [
         block.kind,
         planKey(plan),
-        blockExpanded(block.id, options) ? 'e' : '-',
+        (block.kind === 'thinking' ? thinkingExpanded(block.id, options) : blockExpanded(block.id, options)) ? 'e' : '-',
         options.showToolResults ? 'r' : '-',
         options.toolGroupMode ?? 'full',
         String(options.toolResultLines),

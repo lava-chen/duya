@@ -25,7 +25,9 @@
  * arithmetic, not rendering.
  */
 
-import type { RenderOptions } from '../transcript-view.js';
+import { planTranscript, visibleBlocks, type RenderOptions } from '../transcript-view.js';
+import { tagsToSpans } from '../core/tags.js';
+import { visibleWidth } from '../width.js';
 import type { TranscriptModel } from '../blocks.js';
 import { renderOptionsKey, type TranscriptRenderer } from '../transcript-cache.js';
 import { visibleWindow, type VisibleWindow } from '../core/visible-window.js';
@@ -140,6 +142,32 @@ export class TranscriptPane implements UIComponent<TranscriptPaneProps> {
     }
     this.stats.blocksPainted = painted;
     this.stats.linesPainted = linesPainted;
+  }
+
+  /** Disclosure targets share the exact block plan and viewport used by paint. */
+  disclosureTargets(width: number, rows: number): readonly { id: string; row: number; width: number }[] {
+    const options = this.optionsFor(width);
+    const blocks = visibleBlocks(this.props.model.blocks, options);
+    const plans = planTranscript(blocks);
+    const rendered = this.props.renderer.blocks(this.props.model, options);
+    const window = visibleWindow(rendered.map((lines) => lines.length), rows, this.props.scrollTop, this.props.following);
+    const targets: Array<{ id: string; row: number; width: number }> = [];
+    let documentRow = 0;
+    blocks.forEach((block, index) => {
+      const lines = rendered[index] ?? [];
+      const plan = plans[index];
+      if (documentRow < window.lineEnd && plan && options.toolGroupMode !== 'hidden' && (block.kind === 'tool' || block.kind === 'thinking')) {
+        // A batch summary is not the first call's own disclosure row.
+        const header = (plan.gap ? 1 : 0) + (plan.role === 'group-head' ? 1 : 0);
+        const row = documentRow + header - window.lineStart;
+        if (header < lines.length && row >= 0 && row < rows) {
+          const text = tagsToSpans(lines[header]!).map((span) => span.text).join('');
+          targets.push({ id: block.id, row, width: visibleWidth(text) });
+        }
+      }
+      documentRow += lines.length;
+    });
+    return targets;
   }
 
   private optionsFor(width: number): RenderOptions {

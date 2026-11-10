@@ -52,6 +52,7 @@ import { ActivityTracker } from './components/activity.js';
 import { TranscriptPane } from './components/transcript-pane.js';
 import { StatusBar } from './components/status-bar.js';
 import { renderTree } from './core/component.js';
+import { PointerDispatcher, type HitRegion } from './core/pointer.js';
 import { tagViewOf, spansToTags } from './markdown/inline.js';
 import { DeltaBuffer, DEFAULT_STALE_MS } from './delta-buffer.js';
 import { RenderScheduler } from './render-scheduler.js';
@@ -72,6 +73,7 @@ import {
 import { OverlayState, isDestructiveRequest, type PermissionDecision, type QuestionAnswers } from './overlay.js';
 import {
   DEFAULT_RENDER_OPTIONS,
+  thinkingExpanded,
   escapeTags,
   stylesOf,
   type RenderOptions,
@@ -88,7 +90,7 @@ import {
   type TerminalInputDriver,
 } from './terminal/input-driver.js';
 import { popKittyKeyboardFlags, pushKittyKeyboardFlags } from './terminal/ansi.js';
-import { buildComposerLayout } from './composer-layout.js';
+import { buildComposerLayout, type ComposerLayout } from './composer-layout.js';
 import { paintComposerRow, NO_SHELL_PROMPT, type ShellPrompt } from './composer-paint.js';
 import { shellDraftOf } from './shell-command.js';
 import { LOCAL_SHELL_TOOL } from './tool-render.js';
@@ -590,6 +592,17 @@ export interface TuiLivePreferences {
 }
 
 export class TUIApp {
+  private mouseReporting = false;
+  private composerPointerRows: ComposerLayout['pointerRows'] = [];
+  private readonly pointer = new PointerDispatcher();
+  private readonly actionHandlers = new Map<string, () => void>();
+  private pointerCompletion: Array<{ row: number; index: number }> = [];
+  private pointerPrompt: Array<{ row: number; index: number }> = [];
+  private get mouseMode(): 'off' | 'wheel' | 'all' {
+    const value = process.env['DUYA_TUI_MOUSE'];
+    return value === 'off' || value === 'wheel' ? value : 'all';
+  }
+
   private readonly options: TUIAppOptions;
   /**
    * Null in inline mode until an overlay needs it.
@@ -1041,11 +1054,14 @@ export class TUIApp {
    */
   private ensureAltScreen(): void {
     this.fullScreen.ensure();
+    this.setMouseReporting(this.mouseMode !== 'off');
   }
 
   /** Leave the modal buffer without destroying the shared input Program. */
   private suspendAltScreen(): void {
     this.fullScreen.leave();
+    this.setMouseReporting(false);
+    this.pointer.clear();
     this.inlineSurface?.invalidate();
   }
 
@@ -1077,6 +1093,7 @@ export class TUIApp {
     if (this.disposed) return;
     this.disposed = true;
     this.running = false;
+    this.pointer.clear();
     this.settleInteractivePrompt(null);
     this.overlay.abortAll();
     this.windowMgr.close();
@@ -1685,6 +1702,7 @@ export class TUIApp {
       this.paintStatus();
       this.paintOverlay();
       this.fullScreen.render();
+      this.commitPointerRegions();
       this.placeCursor();
     } finally {
       this.output.write(SYNC_END);
@@ -1717,6 +1735,7 @@ export class TUIApp {
     if (this.fullScreen.ready && !this.fullScreen.suspended) {
       this.paintOverlay();
       this.fullScreen.render();
+      this.commitPointerRegions();
       this.placeCursor();
       return;
     }
@@ -2208,6 +2227,7 @@ export class TUIApp {
       ...(draft === null ? {} : { shellPrefix: draft }),
       ...(this.options.turnSuggestion?.() ? { placeholder: this.options.turnSuggestion!() ?? undefined } : {}),
     });
+    this.composerPointerRows = layout.pointerRows;
     const borderRows = layout.lines.length - layout.bodyRows;
     const shellGlyph = draft?.glyph ?? '';
     if (!inline) {
@@ -2457,6 +2477,7 @@ export class TUIApp {
  * completing against.
  */
   private paintCompletion(): void {
+    this.pointerCompletion = [];
     const state = this.completion.snapshot;
     // A secondary page owns the slot the popup would open into. Hiding rather
     // than closing keeps the popup's state intact for a window opened over
@@ -2482,6 +2503,7 @@ export class TUIApp {
     for (let i = first; i < first + visible; i += 1) {
       const entry = state.items[i];
       if (entry === undefined) continue;
+      this.pointerCompletion.push({ row: rows.length + (first > 0 ? 1 : 0), index: i });
       const selected = i === state.selectedIndex;
       const marker = selected ? '❯' : ' ';
       const head = `${marker} ${entry.label}`;
@@ -2620,15 +2642,16 @@ export class TUIApp {
     const badgePlain = badge === null ? '' : `${badge.plain}${badge.hint}`;
     const badgeWidth = badgePlain === '' ? 0 : visibleWidth(badgePlain) + 1;
     const showBadge = badge !== null && badgeWidth < width;
+    const jump = this.follow ? '' : '[↓ Latest] ';
     const activity = '{gray-fg}' + escapeTags(compactActivity(
       fixed,
-      Math.max(1, width - (showBadge ? badgeWidth : 0)),
+      Math.max(1, width - (showBadge ? badgeWidth : 0) - visibleWidth(jump)),
     )) + '{/gray-fg}';
     const badgeTagged = badge === null || !showBadge
       ? ''
       : ' ' + taggedWith(this.theme.tags, badge.token, escapeTags(badgePlain));
     this.fullScreen.update('status', {
-      lines: [activity + badgeTagged],
+      lines: [(jump ? taggedWith(this.theme.tags, 'accent', escapeTags(jump)) : '') + activity + badgeTagged],
     });
   }
 
@@ -2831,6 +2854,7 @@ export class TUIApp {
   }
 
   private renderInteractivePrompt(prompt: InteractivePrompt, width: number, maxRows: number): string {
+    this.pointerPrompt = [];
     const lines = [`{bold}{cyan-fg}${escapeTags(prompt.title)}{/cyan-fg}{/bold}`, ''];
     // Title, a blank, the ellipsis markers and the hint row: the list gets
     // whatever is left of the slot the composer would have occupied.
@@ -2846,6 +2870,7 @@ export class TUIApp {
       for (let i = first; i < Math.min(count, first + visibleChoices); i += 1) {
         const choice = prompt.choices[i];
         if (choice === undefined) continue;
+        this.pointerPrompt.push({ row: lines.reduce((count, line) => count + line.split('\n').length, 0), index: i });
         const selected = i === prompt.selectedIndex;
         const label = escapeTags(compactActivity(choice.label, Math.max(12, maxLineChars - 14)));
         const descriptionLimit = Math.max(0, maxLineChars - Array.from(label).length - 4);
@@ -3449,6 +3474,7 @@ export class TUIApp {
    * and a broken chord in config is the user's own to notice.
    */
   private bindAction(id: string, handler: () => void): void {
+    this.actionHandlers.set(id, handler);
     if (!REBINDABLE_ACTIONS.has(id)) return;
     const def = this.actionDefs.find((candidate) => candidate.id === id);
     if (def === undefined) return;
@@ -3497,6 +3523,7 @@ export class TUIApp {
   private dispatchInput(event: InputEvent): void {
     switch (event.kind) {
       case 'key': {
+        this.pointer.cancel();
         this.keypressHandler?.(event.key.ch ?? '', event.key);
         const handlers = this.keyHandlers.get(event.key.full);
         if (handlers === undefined) return;
@@ -3504,6 +3531,7 @@ export class TUIApp {
         return;
       }
       case 'paste':
+        this.pointer.clear();
         this.handleBracketedPaste(event.text);
         return;
       case 'mouse':
@@ -3553,6 +3581,10 @@ export class TUIApp {
       }
       lines.push('');
     }
+    lines.push(styles.accent('Mouse (fullscreen)'));
+    lines.push('  Click options or tool/thinking titles; drag does not activate.');
+    lines.push('  Shift+drag selects text in terminals with a mouse override.');
+    lines.push('  DUYA_TUI_MOUSE=off restores terminal mouse handling.');
     this.windowMgr.open({ title: 'Key bindings', lines, footer: 'F1 / Esc close' });
     this.scheduler.requestImmediate();
   }
@@ -3892,20 +3924,9 @@ exportHistory(): string[] {
     this.bindAction('transcript-previous', () => selectBlock(-1));
     this.bindAction('transcript-next', () => selectBlock(1));
     this.bindAction('transcript-toggle-block', () => {
-      if (this.interactivePrompt !== null || this.swallowForWindow()) return;
-      const id = this.selectedBlockId;
-      if (id === undefined) return;
-      if (this.collapsedBlockIds.has(id)) {
-        this.collapsedBlockIds.delete(id);
-        this.expandedBlockIds.add(id);
-      } else if (this.expandedBlockIds.has(id) || this.expanded) {
-        this.expandedBlockIds.delete(id);
-        this.collapsedBlockIds.add(id);
-      } else {
-        this.expandedBlockIds.add(id);
+      if (this.interactivePrompt === null && !this.swallowForWindow() && this.selectedBlockId) {
+        this.toggleTranscriptBlock(this.selectedBlockId);
       }
-      this.noteTranscriptMutation();
-      this.scheduler.requestImmediate();
     });
 
     // Ctrl+C is deliberately NOT rebindable: it is the interrupt-and-exit
@@ -3917,8 +3938,8 @@ exportHistory(): string[] {
     // reporting ENABLED the terminal ships the wheel as SGR sequences instead
     // of scrolling its own scrollback — and instead of a terminal like Warp
     // translating it into ↑/↓, which would recall input history. Only the
-    // wheel is consumed; clicks stay with the terminal so text selection keeps
-    // working.
+    // wheel and component clicks are consumed. Native selection uses the
+    // terminal's override modifier (usually Shift); DUYA_TUI_MOUSE=off opts out.
     //
     // Inline mode deliberately does the opposite. There the terminal owns the
     // scrollback (that is the point of the mode), and the live area is only one
@@ -3926,18 +3947,22 @@ exportHistory(): string[] {
     // the wheel would take scrolling away from the one buffer that has the
     // history. The popup windows lose wheel scrolling in inline; they still
     // page with PgUp/PgDn.
-    if (this.inlineSurface === null) {
-      this.output.write(enableMouseReporting());
+    this.setMouseReporting(this.inlineSurface === null && this.mouseMode !== 'off');
+    if (this.mouseMode !== 'off') {
       this.onMouse((event) => {
-        const action = event.action;
-        if (action !== 'wheelup' && action !== 'wheeldown') return;
-        if (this.interactivePrompt !== null || this.overlay.isActive) return;
-        if (this.windowMgr.isActive) {
-          this.windowMgr.handleKey(action === 'wheelup' ? 'up' : 'down');
-          this.scheduler.requestImmediate();
+        const wheel = event.action === 'wheelup' || event.action === 'wheeldown';
+        if (wheel) {
+          this.pointer.cancel();
+          if (this.interactivePrompt !== null || this.overlay.isActive) return;
+          if (this.windowMgr.isActive) {
+            this.windowMgr.handleKey(event.action === 'wheelup' ? 'up' : 'down');
+            this.scheduler.requestImmediate();
+            return;
+          }
+          this.scrollByLines(event.action === 'wheelup' ? -WHEEL_STEP_LINES : WHEEL_STEP_LINES);
           return;
         }
-        this.scrollByLines(action === 'wheelup' ? -WHEEL_STEP_LINES : WHEEL_STEP_LINES);
+        if (this.mouseMode === 'all') this.pointer.handle(event);
       });
     }
     this.bindKey(['left'], () => {
@@ -4607,6 +4632,7 @@ exportHistory(): string[] {
   }
 
   private followTail(): void {
+    this.pointer.clear();
     this.exitTaskView();
     this.follow = true;
     this.scrollTop = 0;
@@ -4711,6 +4737,7 @@ exportHistory(): string[] {
   }
 
   private scrollBy(pages: number): void {
+    this.pointer.cancel();
     const rows = this.visibleTranscriptRows();
     const total = this.transcript.totalLines(this.model, this.renderOptions());
     const maxTop = Math.max(0, total - rows);
@@ -4732,6 +4759,7 @@ exportHistory(): string[] {
    * `scrollBy` — reaching the newest line resumes following.
    */
   private scrollByLines(lines: number): void {
+    this.pointer.cancel();
     const total = this.transcript.totalLines(this.model, this.renderOptions());
     const maxTop = Math.max(0, total - this.visibleTranscriptRows());
     // Negative lines scroll UP: `scrollTop` counts from the top of the
@@ -4741,6 +4769,136 @@ exportHistory(): string[] {
     this.scrollTop = next;
     this.follow = next >= maxTop;
     this.scheduler.requestImmediate();
+  }
+
+  private toggleTranscriptBlock(id: string): void {
+    const block = this.model.blocks.find(item => item.id === id);
+    if (!block || !['tool', 'thinking'].includes(block.kind))
+      return;
+    this.selectedBlockId = id;
+    if (this.collapsedBlockIds.has(id)) {
+      this.collapsedBlockIds.delete(id);
+      this.expandedBlockIds.add(id);
+    }
+    else if (block.kind === 'thinking' ? thinkingExpanded(id, this.renderOptions()) : this.expandedBlockIds.has(id) || this.expanded) {
+      this.expandedBlockIds.delete(id);
+      this.collapsedBlockIds.add(id);
+    }
+    else
+      this.expandedBlockIds.add(id);
+    this.noteTranscriptMutation();
+    this.scheduler.requestImmediate();
+  }
+
+  private setMouseReporting(enabled: boolean): void {
+    if (enabled === this.mouseReporting) return;
+    this.mouseReporting = enabled;
+    this.output.write(enabled ? enableMouseReporting() : disableMouseReporting());
+  }
+
+  private commitPointerRegions(): void {
+    if (!this.mouseReporting || this.mouseMode !== 'all') {
+      this.pointer.clear();
+      return;
+    }
+    const hits: HitRegion[] = [];
+    const add = (id: string, region: RegionMetrics | null, row: number, column: number, width: number, activate: HitRegion['activate'], revision?: string | number) => {
+      if (!region?.laidOut || row < 0 || row >= region.height - region.innerHeight || width <= 0)
+        return;
+      hits.push({ id, row: region.top + region.innerTop + row, column: region.left + region.innerLeft + column, width: Math.min(width, region.width - region.innerWidth - column), height: 1, activate, revision });
+    };
+    if (this.overlay.isActive) {
+      const geometry = this.fullScreen.measure('overlay'), id = this.overlay.request?.requestId;
+      for (const target of this.overlay.pointerTargets())
+        add(`approval:${id}:${target.key}`, geometry, target.row, target.column ?? 0, target.width ?? geometry?.width ?? 0, () => {
+          if (this.overlay.request?.requestId !== id || !(this.options.canAnswerPermissions?.() ?? false))
+            return;
+          if (target.key === 'confirm-back' || target.key === 'confirm-proceed') {
+            this.overlay.handleKey({ name: target.key === 'confirm-back' ? 'up' : 'down' });
+            this.overlay.handleKey({ name: 'return' });
+          }
+          else if (target.key.startsWith('option:')) {
+            this.overlay.handleKey({ optionIndex: Number(target.key.slice('option:'.length)) });
+          }
+          else {
+            this.overlay.handleKey(target.key === 'return' ? { name: 'return' } : { ch: target.key });
+          }
+          this.scheduler.requestImmediate();
+        }, id);
+      this.pointer.commit(hits);
+      return;
+    }
+    const input = this.fullScreen.measure('input');
+    if (this.interactivePrompt) {
+      const prompt = this.interactivePrompt;
+      if (prompt.kind === 'select')
+        for (const target of this.pointerPrompt)
+          add(`prompt:${target.index}`, input, target.row, 0, input?.width ?? 0, () => {
+            if (this.interactivePrompt !== prompt)
+              return;
+            prompt.selectedIndex = target.index;
+            this.handleInteractivePromptKey('return');
+            this.scheduler.requestImmediate();
+          }, prompt.title);
+      this.pointer.commit(hits);
+      return;
+    }
+    if (this.windowMgr.isActive) {
+      const revision = this.windowMgr.pointerRevision;
+      for (const target of this.windowMgr.pointerTargets())
+        add(`window:${target.id}`, input, target.row, target.column, target.width ?? input?.width ?? 0, () => {
+          if (this.windowMgr.pointerRevision !== revision)
+            return;
+          target.activate();
+          this.scheduler.requestImmediate();
+        }, revision);
+      this.pointer.commit(hits);
+      return;
+    }
+    if (this.completion.isOpen) {
+      const geometry = this.fullScreen.measure('completion');
+      const snapshot = this.completion.snapshot;
+      for (const target of this.pointerCompletion) {
+        const item = snapshot.items[target.index];
+        if (!item)
+          continue;
+        add(`completion:${snapshot.mode}:${item.value}`, geometry, target.row, 0, geometry?.width ?? 0, () => {
+          const current = this.completion.snapshot;
+          if (current.items[target.index] !== item)
+            return;
+          this.completion.select(target.index);
+          this.routeContended('return');
+          this.scheduler.requestImmediate();
+        }, this.editor.text);
+      }
+    }
+    const draft = this.editor.text;
+    this.composerPointerRows.forEach((boundaries, row) => {
+      if (boundaries.length === 0 || input === null)
+        return;
+      add(`editor:${row}`, input, row, 0, input.width - input.innerWidth, (point) => {
+        if (this.editor.text !== draft)
+          return;
+        const column = point.x - input.left - input.innerLeft;
+        let nearest = boundaries[0]!;
+        for (const boundary of boundaries) {
+          if (Math.abs(boundary.column - column) < Math.abs(nearest.column - column))
+            nearest = boundary;
+        }
+        this.editor.moveTo(nearest.offset);
+        this.focus = 'input';
+        this.refreshCompletion();
+        this.scheduler.requestImmediate();
+      }, draft);
+    });
+    const geometry = this.fullScreen.measure('transcript');
+    const width = transcriptWidth(geometry, this.terminalSize().columns);
+    for (const target of this.transcriptPane.disclosureTargets(width, this.visibleTranscriptRows())) {
+      add(`block:${target.id}`, geometry, target.row, 0, target.width, () => this.toggleTranscriptBlock(target.id));
+    }
+    if (!this.follow)
+      add('follow-tail', this.fullScreen.measure('status'), 0, 0, visibleWidth('[↓ Latest]'), () => this.actionHandlers.get('follow-tail')?.());
+    this.pointer.commit(hits);
   }
 
   // ------------------------------------------------------------------ plumbing
@@ -4753,6 +4911,7 @@ exportHistory(): string[] {
 
   private bindResize(): void {
     this.writer.on('resize', () => {
+      this.pointer.clear();
       this.scheduler.requestImmediate();
     });
   }

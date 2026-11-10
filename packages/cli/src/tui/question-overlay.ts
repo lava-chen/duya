@@ -202,8 +202,12 @@ export class QuestionAskState {
    * typed into a note stays literal text. Everything unrecognised is reported
    * so the caller can keep swallowing it.
    */
-  handleKey(input: { readonly name?: string; readonly ch?: string }): boolean {
+  handleKey(input: { readonly name?: string; readonly ch?: string; readonly optionIndex?: number }): boolean {
     if (this.confirming) return this.handleConfirmKey(input);
+    if (input.optionIndex !== undefined) {
+      this.focus = 'options';
+      return this.pickOption(input.optionIndex);
+    }
     const name = input.name ?? '';
 
     if (name === 'escape') return false; // OverlayState owns cancel.
@@ -231,12 +235,7 @@ export class QuestionAskState {
       // Quick-pick: a digit accepts that option row in one keystroke.
       const digit = /^([1-9])$/.exec(name !== '' ? name : input.ch ?? '');
       if (digit !== null) {
-        const target = Number(digit[1]) - 1;
-        const rows = questionRows(this.questions[this.index] as ParsedQuestion);
-        if (target >= rows.length) return false;
-        this.cursor = target;
-        if (this.questions[this.index]?.multiSelect === true) return this.toggleMulti();
-        return this.commit();
+        return this.pickOption(Number(digit[1]) - 1);
       }
     }
 
@@ -280,6 +279,14 @@ export class QuestionAskState {
     const rows = questionRows(this.questions[this.index] as ParsedQuestion);
     this.cursor = (this.cursor + delta + rows.length) % rows.length;
     return true;
+  }
+
+  private pickOption(index: number): boolean {
+    const rows = questionRows(this.questions[this.index] as ParsedQuestion);
+    if (!Number.isInteger(index) || index < 0 || index >= rows.length) return false;
+    this.cursor = index;
+    if (this.questions[this.index]?.multiSelect === true) return this.toggleMulti();
+    return this.commit();
   }
 
   private toggleMulti(): boolean {
@@ -363,8 +370,8 @@ export class QuestionAskState {
   }
 
   /** The overlay body, as blessed tags — codex `render_ui_at`, flattened. */
-  render(view: QuestionOverlayView = { queueDepth: 0 }): string {
-    if (this.confirming) return this.renderConfirm();
+  render(view: QuestionOverlayView = { queueDepth: 0 }, onChoice?: (row: number, key: string, column?: number, width?: number) => void): string {
+    if (this.confirming) return this.renderConfirm(onChoice);
     const lines: string[] = [];
     const question = this.questions[this.index] as ParsedQuestion;
     const answered = this.questions.filter((_, i) => this.hasAnswer(i)).length;
@@ -392,6 +399,7 @@ export class QuestionAskState {
       const label = isSynthetic
         ? `{gray-fg}${labelText}{/gray-fg}`
         : isCursor ? `{cyan-fg}${labelText}{/cyan-fg}` : labelText;
+      onChoice?.(lines.reduce((count,line)=>count+line.split('\n').length,0), `option:${i}`);
       lines.push(`${marker}${check}${label}`);
       if (row.description !== undefined) {
         lines.push(`     {gray-fg}${escapeTags(row.description)}{/gray-fg}`);
@@ -409,17 +417,22 @@ export class QuestionAskState {
       lines.push('{gray-fg}multi-select — space toggles{/gray-fg}');
     }
     const waiting = view.queueDepth > 0 ? ` · +${view.queueDepth} waiting` : '';
+    const hintPrefix = `↑/↓ choose · 1-${rows.length} quick-pick${question.multiSelect ? ' · space multi' : ''} · tab notes · `;
+    const enterLabel = `Enter ${this.index === this.questions.length - 1 ? 'submit' : 'next'}`;
+    onChoice?.(lines.reduce((count, line) => count + line.split('\n').length, 0), 'return', hintPrefix.length, enterLabel.length);
     lines.push(`{gray-fg}↑/↓ choose · 1-${rows.length} quick-pick${question.multiSelect ? ' · space multi' : ''} · tab notes · Enter ${this.index === this.questions.length - 1 ? 'submit' : 'next'} · Esc cancel${waiting}{/gray-fg}`);
     return lines.join('\n');
   }
 
-  private renderConfirm(): string {
+  private renderConfirm(onChoice?: (row: number, key: string, column?: number, width?: number) => void): string {
     const lines: string[] = [];
     const count = this.unansweredCount;
     lines.push('{bold}Submit with unanswered questions?{/bold}');
     lines.push(`{gray-fg}${count} question${count === 1 ? '' : 's'} would submit without an answer.{/gray-fg}`);
     lines.push('');
+    onChoice?.(lines.length, 'confirm-back');
     lines.push(`${this.confirmIndex === 0 ? '{cyan-fg}❯{/cyan-fg} ' : '  '}Go back — return to the first unanswered question`);
+    onChoice?.(lines.length, 'confirm-proceed');
     lines.push(`${this.confirmIndex === 1 ? '{cyan-fg}❯{/cyan-fg} ' : '  '}Proceed — submit ${count} unanswered`);
     lines.push('');
     lines.push('{gray-fg}↑/↓ choose · Enter confirm · Esc go back{/gray-fg}');
