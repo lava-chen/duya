@@ -20,6 +20,7 @@ import {
   resolveEffectiveTuiPreferences,
   serializeEffortByModel,
   TUI_COMPLETION_ROWS_SETTING,
+  TUI_DISPLAY_MODE_SETTING,
   TUI_EFFORT_BY_MODEL_SETTING,
   TUI_EFFORT_SETTING,
   TUI_FOOTER_RATE_SETTING,
@@ -43,6 +44,18 @@ describe('parseTuiPreferences', () => {
     expect(parsed.completionRows).toBe(DEFAULT_TUI_PREFERENCES.completionRows);
     expect(parsed.inputRows).toBe(DEFAULT_TUI_PREFERENCES.inputRows);
     expect(parsed.statusline).toBe('full');
+    // S4 (plan 2026-11-11-tui-fullscreen-framework): full-screen is the
+    // default now — this pin exists so a future default change is a decision
+    // someone writes down, not a accident a test wave catches.
+    expect(parsed.displayMode).toBe('fullscreen');
+  });
+
+  it('keeps DUYA_TUI_INLINE as the per-run escape hatch either way', () => {
+    const fullscreen = parseTuiPreferences({});
+    expect(resolveEffectiveTuiPreferences(fullscreen, { DUYA_TUI_INLINE: '1' }).displayMode).toBe('inline');
+    const inline = parseTuiPreferences({ [TUI_DISPLAY_MODE_SETTING]: 'inline' });
+    expect(resolveEffectiveTuiPreferences(inline, { DUYA_TUI_INLINE: '0' }).displayMode).toBe('fullscreen');
+    expect(inline.displayMode).toBe('inline');
   });
 
   it('starts with the token counters off and the speed on', () => {
