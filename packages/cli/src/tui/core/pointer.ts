@@ -7,6 +7,7 @@ export interface HitRegion {
   readonly width: number;
   readonly height: number;
   readonly revision?: string | number;
+  readonly drag?: (phase: 'start' | 'move' | 'end' | 'cancel', point: { readonly x: number; readonly y: number }) => void;
   readonly activate: (point: { readonly x: number; readonly y: number }) => void;
 }
 
@@ -21,13 +22,18 @@ export class PointerDispatcher {
 
   commit(regions: readonly HitRegion[]): void {
     this.regions = regions;
+    const press = this.press;
+    if (press && !regions.some((region) => region.id === press.region.id
+      && region.revision === press.region.revision)) this.cancel();
   }
 
   cancel(): void {
+    const press = this.press;
     this.press = undefined;
     if (this.pending !== undefined) clearTimeout(this.pending);
     this.pending = undefined;
     this.lastClick = undefined;
+    press?.region.drag?.('cancel', { x: press.x, y: press.y });
   }
 
   clear(): void {
@@ -51,7 +57,10 @@ export class PointerDispatcher {
       return;
     }
     if (event.action === 'mousemove') {
-      if (this.press && (event.x !== this.press.x || event.y !== this.press.y)) this.press.moved = true;
+      if (this.press) {
+        if (event.x !== this.press.x || event.y !== this.press.y) this.press.moved = true;
+        this.press.region.drag?.('move', { x: event.x, y: event.y });
+      }
       return;
     }
     if (event.button !== 0) {
@@ -60,13 +69,20 @@ export class PointerDispatcher {
     }
     const hit = this.hit(event.x, event.y);
     if (event.action === 'mousedown') {
+      if (this.press) this.cancel();
       if (this.pending !== undefined) clearTimeout(this.pending);
       this.pending = undefined;
       this.press = hit ? { region: hit, x: event.x, y: event.y, moved: false } : undefined;
+      hit?.drag?.('start', { x: event.x, y: event.y });
       return;
     }
     const press = this.press;
     this.press = undefined;
+    if (press?.region.drag) {
+      press.region.drag(press.moved ? 'end' : 'cancel', { x: event.x, y: event.y });
+      this.lastClick = undefined;
+      return;
+    }
     if (!press || press.moved || press.x !== event.x || press.y !== event.y || !hit
       || hit.id !== press.region.id || hit.revision !== press.region.revision) return;
 

@@ -80,12 +80,15 @@ export const TUI_EFFORT_BY_MODEL_SETTING = 'cli.tui.effortByModel';
 
 export type TuiThemePreference = 'system' | ThemeName;
 export type TuiDisplayMode = 'fullscreen' | 'inline';
+export const TUI_SIDEBAR_WIDTH_SETTING = 'cli.tui.sidebarWidth';
 
 export interface TuiPreferences {
   /** Shared Desktop/TUI language preference from the global `locale` setting. */
   readonly locale: CommandLocale;
   readonly theme: TuiThemePreference;
   readonly displayMode: TuiDisplayMode;
+  /** Preferred fullscreen sidebar width; narrow terminals only clamp its display. */
+  readonly sidebarWidth?: number;
   readonly effort: EffortLevel;
   /**
    * Default effort per model id, overriding `effort` for that model only.
@@ -246,7 +249,9 @@ export function parseTuiPreferences(values: Readonly<Record<string, string>>): T
   const storedTheme = values[TUI_THEME_SETTING];
   const storedDisplayMode = values[TUI_DISPLAY_MODE_SETTING];
   const storedEffort = values[TUI_EFFORT_SETTING];
+  const sidebarWidth = Number(values[TUI_SIDEBAR_WIDTH_SETTING]);
   return {
+    ...(Number.isInteger(sidebarWidth) && sidebarWidth >= 18 && sidebarWidth <= 72 ? { sidebarWidth } : {}),
     locale: storedLocale === 'zh' || storedLocale === 'en' ? storedLocale : DEFAULT_TUI_PREFERENCES.locale,
     theme: storedTheme === 'dark' || storedTheme === 'light' || storedTheme === 'system'
       ? storedTheme

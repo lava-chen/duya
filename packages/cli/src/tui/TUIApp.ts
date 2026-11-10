@@ -50,8 +50,11 @@ import {
 import { frameRecord, frameString, TranscriptModel, readBlockKey, type LegacyFrame, type Block } from './blocks.js';
 import { ActivityTracker } from './components/activity.js';
 import { TranscriptPane } from './components/transcript-pane.js';
+import { WorkbenchSidebar } from './components/workbench-sidebar.js';
+import { HStack } from './core/containers.js';
+import { resolveDisplayProfile } from './display-profiles.js';
 import { StatusBar } from './components/status-bar.js';
-import { renderTree } from './core/component.js';
+import { renderTree, type UIComponent } from './core/component.js';
 import { PointerDispatcher, type HitRegion } from './core/pointer.js';
 import { tagViewOf, spansToTags } from './markdown/inline.js';
 import { DeltaBuffer, DEFAULT_STALE_MS } from './delta-buffer.js';
@@ -377,6 +380,11 @@ export interface TUIAppOptions {
   readonly onSubmit: (text: string, attachments: readonly FileAttachment[]) => void | Promise<void>;
   /** Let the controller own accepted-message echo and pending drafts. */
   readonly echoSubmitted?: boolean;
+  /** Trusted sidebar controls enter the same slash dispatcher without consuming the draft. */
+  readonly onWorkbenchCommand?: (command: string) => void | Promise<void>;
+  readonly workbenchSessionId?: () => string;
+  readonly sidebarWidth?: number;
+  readonly onSidebarWidthChange?: (columns: number) => void | Promise<void>;
   readonly canSubmit?: () => boolean;
   /**
    * Drafts still WAITING for a turn to carry them.
@@ -592,6 +600,11 @@ export interface TuiLivePreferences {
 }
 
 export class TUIApp {
+  private sidebar: WorkbenchSidebar | null = null;
+  private sidebarLayout: { column: number; width: number; height: number } | null = null;
+  private preferredSidebarWidth: number | undefined;
+  private sidebarDragStart: { preferred: number | undefined } | undefined;
+  private sidebarVisible = true;
   private mouseReporting = false;
   private composerPointerRows: ComposerLayout['pointerRows'] = [];
   private readonly pointer = new PointerDispatcher();
@@ -961,6 +974,7 @@ export class TUIApp {
     };
     proxy.renderConfig = renderConfig;
 
+    this.preferredSidebarWidth = options.sidebarWidth;
     const inline = options.inline === true;
     this.inlineSurface = inline
       ? new InlineSurface({
@@ -2021,7 +2035,7 @@ export class TUIApp {
       // full pane width rather than a zero-column wrap budget.
       width: this.inlineSurface !== null
         ? this.terminalSize().columns
-        : transcriptWidth(this.fullScreen.measure('transcript'), this.terminalSize().columns),
+        : this.transcriptContentWidth(),
       liveRows: this.liveTranscriptRows(),
     };
   }
@@ -2054,6 +2068,19 @@ export class TUIApp {
     this.transcriptRevision += 1;
   }
 
+  private workbenchColumns(total: number): number {
+    if (this.inlineSurface !== null || !this.sidebarVisible || !this.options.onWorkbenchCommand
+      || process.env['DUYA_TUI_SIDEBAR'] === '0' || this.terminalSize().columns < 120
+      || this.visibleTranscriptRows() < 6) return 0;
+    const preferred = this.preferredSidebarWidth ?? Math.round(total * 0.22);
+    return Math.max(18, Math.min(72, Math.floor(preferred), total - 60));
+  }
+
+  private transcriptContentWidth(): number {
+    const total = transcriptWidth(this.fullScreen.measure('transcript'), this.terminalSize().columns);
+    return Math.max(1, total - this.workbenchColumns(total));
+  }
+
   /**
    * Hand the pane this frame's inputs, then paint what it answers.
    *
@@ -2065,9 +2092,11 @@ export class TUIApp {
    */
   private paintTranscript(): void {
     const columns = this.terminalSize().columns;
-    const width = this.inlineSurface !== null
+    const totalWidth = this.inlineSurface !== null
       ? columns
       : transcriptWidth(this.fullScreen.measure('transcript'), columns);
+    const sidebarWidth = this.workbenchColumns(totalWidth);
+    const width = totalWidth - sidebarWidth;
     const pane = this.transcriptPane;
     pane.props = {
       renderer: this.transcript,
@@ -2085,6 +2114,34 @@ export class TUIApp {
       this.inlineTranscriptLines = [...pane.lines(width)];
       return;
     }
+    this.sidebarLayout = null;
+    let content: UIComponent = pane;
+    if (sidebarWidth > 0) {
+      const model = this.options.modelLabel?.();
+      const tools = this.model.blocks.filter((block) => block.kind === 'tool');
+      const cwd = this.options.workspaceDirectory?.() ?? process.cwd();
+      const branch = this.gitBranch(cwd);
+      const props = {
+        styles: stylesOf({ theme: this.theme.tags, renderer: 'own' }),
+        sessionId: this.options.workbenchSessionId?.() ?? '',
+        sessionTitle: this.options.sessionTitle?.() ?? 'Current session',
+        sessions: (this.options.completionSources?.slashOptions?.('/resume') ?? []).map((item) => ({ id: item.value, label: item.label })),
+        model: model?.model ?? 'unknown', provider: model?.provider ?? 'unknown',
+        effort: this.effortLevel() ?? 'auto', cwd: branch ? `${cwd} (${branch})` : cwd,
+        inputTokens: this.lastUsage?.input ?? null, outputTokens: this.lastUsage?.output ?? null,
+        sessionTokens: this.sessionTokens, contextTokens: this.contextTokens(),
+        contextBudget: this.options.contextBudgetTokens?.() ?? null,
+        tokensPerSecond: this.lastUsage?.tokensPerSecond ?? null,
+        profile: resolveDisplayProfile({ showThinking: this.showThinking, expandBlocks: this.expanded, showToolResults: this.showToolResults, toolGroupMode: this.toolGroupMode }),
+        tools: { total: tools.length, running: tools.filter((tool) => tool.status === 'running').length, errors: tools.filter((tool) => tool.status === 'error').length },
+      };
+      if (this.sidebar === null) this.sidebar = new WorkbenchSidebar(props);
+      else this.sidebar.props = props;
+      const split = new HStack('workbench', [{ component: pane, size: 'flex' }, { component: this.sidebar, size: sidebarWidth }]);
+      const slot = split.arrange({ row: 0, column: 0, width: totalWidth, height: this.visibleTranscriptRows() })[1];
+      if (slot) this.sidebarLayout = { column: slot.viewport.column, width: slot.viewport.width, height: slot.viewport.height };
+      content = split;
+    }
     this.fullScreen.update('transcript', {
       // The border is the focus tell in full-screen mode: the task list owns
       // the arrows while the transcript does not respond to them at all.
@@ -2092,7 +2149,7 @@ export class TUIApp {
       // Route the established pane through the retained component renderer.
       // ScreenSurface still owns borders and layout; the tree owns the pane's
       // viewport and clipping, so this is a safe first integration step.
-      lines: renderTree(pane, width, this.visibleTranscriptRows()).rows.map((row) =>
+      lines: renderTree(content, totalWidth, this.visibleTranscriptRows()).rows.map((row) =>
         spansToTags(row, tagViewOf(stylesOf({ theme: this.theme.tags, renderer: 'own' }))),
       ),
     });
@@ -3244,8 +3301,8 @@ export class TUIApp {
     this.scheduleRender();
   }
 
-  /** Clear the transcript and the input. */
-  clearTranscript(): void {
+  /** Clear history; sidebar session creation keeps the unsent composer intact. */
+  clearTranscript(preserveDraft = false): void {
     const hadTranscript = this.model.blocks.length > 0;
     this.model.clear();
     this.selectedBlockId = undefined;
@@ -3254,7 +3311,7 @@ export class TUIApp {
     if (hadTranscript) this.noteTranscriptMutation();
     this.textBuffer.reset();
     this.thinkingBuffer.reset();
-    this.editor.clear();
+    if (!preserveDraft) this.editor.clear();
     this.follow = true;
     this.scrollTop = 0;
     this.focus = 'input';
@@ -3921,6 +3978,18 @@ exportHistory(): string[] {
     this.bindAction('help', () => { this.toggleWindow('help'); });
     this.bindAction('history', () => { this.toggleWindow('history'); });
     this.bindAction('usage', () => { this.toggleWindow('usage'); });
+    this.bindAction('sidebar-next-tab', () => {
+      if (this.dockPanelActive() || this.overlay.isActive || !this.sidebarLayout || !this.sidebar) return;
+      const tabs = ['sessions', 'context', 'view'] as const;
+      this.sidebar.selectTab(tabs[(tabs.indexOf(this.sidebar.tab) + 1) % tabs.length]!);
+      this.scheduler.requestImmediate();
+    });
+    this.bindAction('sidebar-toggle', () => {
+      if (this.dockPanelActive() || this.overlay.isActive) return;
+      this.pointer.cancel();
+      this.sidebarVisible = !this.sidebarVisible;
+      this.scheduler.requestImmediate();
+    });
     this.bindAction('transcript-previous', () => selectBlock(-1));
     this.bindAction('transcript-next', () => selectBlock(1));
     this.bindAction('transcript-toggle-block', () => {
@@ -3954,6 +4023,16 @@ exportHistory(): string[] {
         if (wheel) {
           this.pointer.cancel();
           if (this.interactivePrompt !== null || this.overlay.isActive) return;
+          const transcript = this.fullScreen.measure('transcript');
+          const layout = this.sidebarLayout;
+          if (!this.windowMgr.isActive && transcript && layout
+            && event.x >= transcript.left + transcript.innerLeft + layout.column
+            && event.y >= transcript.top + transcript.innerTop
+            && event.y < transcript.top + transcript.innerTop + layout.height) {
+            this.sidebar?.scroll(event.action === 'wheelup' ? -WHEEL_STEP_LINES : WHEEL_STEP_LINES);
+            this.scheduler.requestImmediate();
+            return;
+          }
           if (this.windowMgr.isActive) {
             this.windowMgr.handleKey(event.action === 'wheelup' ? 'up' : 'down');
             this.scheduler.requestImmediate();
@@ -4790,6 +4869,31 @@ exportHistory(): string[] {
     this.scheduler.requestImmediate();
   }
 
+  private resizeSidebar(phase: 'start' | 'move' | 'end' | 'cancel', x: number): void {
+    if (phase === 'start') {
+      this.sidebarDragStart = { preferred: this.preferredSidebarWidth };
+      return;
+    }
+    const start = this.sidebarDragStart;
+    if (start === undefined) return;
+    if (phase === 'cancel') {
+      this.preferredSidebarWidth = start.preferred;
+    } else {
+      const region = this.fullScreen.measure('transcript');
+      if (region) this.preferredSidebarWidth = Math.max(18, Math.min(72,
+        region.left + region.innerLeft + region.width - region.innerWidth - x));
+    }
+    if (phase === 'end' || phase === 'cancel') this.sidebarDragStart = undefined;
+    if (phase === 'end' && this.preferredSidebarWidth !== undefined && this.preferredSidebarWidth !== start.preferred) {
+      const columns = this.preferredSidebarWidth;
+      void Promise.resolve().then(() => this.options.onSidebarWidthChange?.(columns)).catch((error: unknown) => {
+        this.printError(`Sidebar resized, but could not save width: ${error instanceof Error ? error.message : String(error)}`);
+      });
+    }
+    if (phase === 'cancel') this.scheduler.request();
+    else this.scheduler.requestImmediate();
+  }
+
   private setMouseReporting(enabled: boolean): void {
     if (enabled === this.mouseReporting) return;
     this.mouseReporting = enabled;
@@ -4892,9 +4996,32 @@ exportHistory(): string[] {
       }, draft);
     });
     const geometry = this.fullScreen.measure('transcript');
-    const width = transcriptWidth(geometry, this.terminalSize().columns);
+    const width = this.transcriptContentWidth();
     for (const target of this.transcriptPane.disclosureTargets(width, this.visibleTranscriptRows())) {
       add(`block:${target.id}`, geometry, target.row, 0, target.width, () => this.toggleTranscriptBlock(target.id));
+    }
+    if (this.sidebar && this.sidebarLayout) {
+      const layout = this.sidebarLayout;
+      const sessionId = this.options.workbenchSessionId?.() ?? '';
+      if (geometry?.laidOut) hits.push({
+        id: 'sidebar-divider', row: geometry.top + geometry.innerTop,
+        column: geometry.left + geometry.innerLeft + layout.column, width: 1, height: layout.height,
+        activate: () => {}, drag: (phase, point) => this.resizeSidebar(phase, point.x),
+      });
+      for (const target of this.sidebar.pointerTargets()) {
+        add(`sidebar:${target.id}`, geometry, target.row, layout.column + target.column, target.width, () => {
+          if ((this.options.workbenchSessionId?.() ?? '') !== sessionId) return;
+          if ('tab' in target.action) {
+            this.sidebar?.selectTab(target.action.tab);
+            this.scheduler.requestImmediate();
+          } else {
+            const command = target.action.command;
+            void Promise.resolve().then(() => this.options.onWorkbenchCommand?.(command)).catch((error: unknown) => {
+              this.printError(error instanceof Error ? error.message : String(error));
+            });
+          }
+        }, sessionId);
+      }
     }
     if (!this.follow)
       add('follow-tail', this.fullScreen.measure('status'), 0, 0, visibleWidth('[↓ Latest]'), () => this.actionHandlers.get('follow-tail')?.());

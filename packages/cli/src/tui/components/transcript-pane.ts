@@ -134,7 +134,7 @@ export class TranscriptPane implements UIComponent<TranscriptPaneProps> {
           if (documentLine < window.lineStart) continue;
           if (documentLine >= window.lineEnd) break;
           const row = viewport.row + (documentLine - window.lineStart);
-          scene.writeTagged(row, viewport.column, blockLines[offset] ?? '');
+          scene.writeTagged(row, viewport.column, blockLines[offset] ?? '', viewport.width);
           linesPainted += 1;
         }
       }
@@ -162,7 +162,7 @@ export class TranscriptPane implements UIComponent<TranscriptPaneProps> {
         const row = documentRow + header - window.lineStart;
         if (header < lines.length && row >= 0 && row < rows) {
           const text = tagsToSpans(lines[header]!).map((span) => span.text).join('');
-          targets.push({ id: block.id, row, width: visibleWidth(text) });
+          targets.push({ id: block.id, row, width: Math.min(width, visibleWidth(text)) });
         }
       }
       documentRow += lines.length;

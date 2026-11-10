@@ -2,7 +2,7 @@
 
 状态：实施中。owner：本会话。工作树：`.claude/worktrees/cli-pi-workbench`。
 分支：`codex/cli-pi-workbench`。base：`96b98221a`（最新 master，2026-11-10 同步）。
-独占路径：`packages/cli/src/tui/**`；必要的命令定义只改 `packages/command-catalog`。
+独占路径：`packages/cli/src/tui/**`、`packages/cli/src/chat.ts`；必要的命令定义只改 `packages/command-catalog`。
 
 ## 纠正与事实基线
 
@@ -28,7 +28,7 @@ steering/后续队列、后台 Host、附件、undo/kill ring、模型与权限�
 - [x] 直接操作（已实现，待终端验收）：窗口条目与 tabs、命令候选、授权与问题、工具/思考 disclosure、编辑器定位。
 - [x] 阅读导航（已实现，待终端验收）：点击回底、正确视口坐标与选中块、原生滚动/选择兼容。
 - [x] 显示策略（已实现，静态检查通过）：复用现有共享设置，支持思考和工具的独立展开默认值；不创建第二份 profile 真值。
-- [ ] 工作台面板：基于现有 Host 投影与 UI 窗口扩展，先审计常驻侧栏所需的数据快照；窄屏回退现有面板。
+- [x] 工作台面板（已实现，待终端验收）：基于现有 Host 投影与 UI 窗口扩展，常驻 Sess/CTX/View 使用现有投影与命令；窄屏回退现有面板，拖动调宽通过 Host 设置保存。
 - [x] 全面对照 Pi：逐项记录已存在/复用/新增/宿主缺口，不再基于过时项目状态排期。
 - [x] CLI bundle、CLI 类型检查与架构门禁；全仓聚合命令的类型环节分别记录。
 - [ ] 新增交互的实机验收与跨平台证据。
@@ -61,7 +61,7 @@ inline 保留终端 scrollback 与原生选择；可点击历史发生在 fullsc
 
 ## 静态证据与接续
 
-环境 Linux / Node 24.19；base `96b98221a`，dirty 范围仅本计划、reference 与 `packages/cli/src/tui/**`。
+环境 Linux / Node 24.19；base `96b98221a`，改动范围为本计划、reference、`packages/cli/src/tui/**` 与 CLI `chat.ts` 接线。
 
 | 命令 | 结果 |
 | --- | --- |
@@ -76,19 +76,30 @@ inline 保留终端 scrollback 与原生选择；可点击历史发生在 fullsc
 没有添加或运行测试，也未进行真实终端验收。自动化类型与构建结果不证明 Windows/ConPTY、终端选择手势、权限实际提交和流式交互已经验收。
 `DUYA_TUI_MOUSE=wheel` 仍打开终端鼠标报告，只禁止组件点击；要恢复终端鼠标处理用 `off`。
 
-尚未实施：常驻 SESSIONS/CTX/VIEW 侧栏、拖动调宽与宽度持久化、会话置顶/批量清理、通用 UI 扩展合同。
+尚未实施：会话置顶/批量清理、CTX 分项构成与 TTFT、MCP/嵌套来源统计、通用 UI 扩展合同。
 这些仍属于本任务后续，不能声称 Pi 工作台已经全部完成。
 
-## 交付阻塞
+## 远程交付授权记录
 
-代码提交：`ce04b8c83`（`feat(cli): add pointer interactions and transcript view modes`）。
-tracked 源码已提交；未跟踪项仅本工作树依赖链接，不进入提交。
+首个代码提交：`ce04b8c83`（`feat(cli): add pointer interactions and transcript view modes`）。
+首个切片源码已提交；随后继续本地侧栏实现，代码提交与静态证据在下节记录。依赖链接不进入提交。
 
 尝试 `git push -u origin codex/cli-pi-workbench` 被自动审批拒绝，未执行推送。
 理由：用户尚未明确授权将该具体代码发送到 `lava-chen/duya` 并创建远程分支。
-已向用户说明私有代码外发风险，并请求允许推送该任务分支与创建 draft PR；
-未用其他工具绕过拒绝，未创建 PR，未合并。仓库规则要求通过 PR 交付，故本地
+已向用户说明私有代码外发风险；用户于 2026-11-11（Asia/Shanghai）明确回复
+“允许推送并创建草稿 PR”。允许推送本任务分支与创建 draft PR；未用其他工具
+绕过拒绝，未合并。仓库规则要求通过 PR 交付，故本地
 实现和静态结果不等于已经交付/合入。
 
-下一动作：用户授权后推送本任务分支并创建 draft PR；继续按 reference 中 Host
-投影/布局合同实现侧栏。终端实机验收待执行，不迁移旧 terminal-app 或 legacy Agent 代码。
+下一动作：已获用户授权，提交侧栏切片后推送本任务分支并创建 draft PR；侧栏代码与静态证据见下节。终端实机验收待执行，不迁移旧 terminal-app 或 legacy Agent 代码。
+
+## 侧栏切片（推送等待授权期间继续本地实现）
+
+- 新增 `components/workbench-sidebar.ts`：Sess/CTX/View、各页滚动、会话切换/新建/重命名/分叉、资源快捷入口、显示 profile 与工具状态。
+- HStack 将 transcript 与 sidebar 并排，composer 与 footer 继续独立；折叠和滚动使用分配后的实际 transcript 宽度。
+- Sess 读取已有 completion/session 缓存，操作回到 `chat.ts` 的同一 `handleLine`，保留运行中切换保护，不提交或清空编辑器草稿。
+- CTX 明确标注 context 估算，缺失读数为 unknown；Detailed context/usage 使用既有命令，不发明 provider 账单字段。
+- PointerDispatcher 新增分隔线 drag capture；释放才保存 Host 设置 `cli.tui.sidebarWidth`，取消恢复拖动前偏好。
+- 低于 120 列或历史空间不足 6 行时收起，不覆写宽度；F7 换页，F8 临时显示/隐藏，`DUYA_TUI_SIDEBAR=0` 禁用。
+- 仅同步现有菜单/快捷键断言的数据清单，未新增用例或执行测试。
+- CLI 单包类型检查与 4.52 MB bundle 构建通过；全仓静态环节按原顺序重跑，明确不执行聚合尾部 `node --test`。退出码 0；原始聚合尾部测试仍未运行。架构复核 exit 0，无新增违规。

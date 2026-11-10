@@ -1,6 +1,6 @@
 # Pi TUI 与 Duya 当前实现对照
 
-2026-11-10 查阅公开源码与 `pi-ui-extension` 1.20.2 文档；Duya 基线为
+2026-11-10/11（Asia/Shanghai）查阅公开源码与 `pi-ui-extension` 1.20.2 文档；Duya 基线为
 `96b98221a`。本文给出组件职责和产品差距；实现与验收进度见
 [执行计划](../exec-plans/active/2026-11-10-cli-pi-workbench.md)。
 
@@ -37,12 +37,12 @@ Duya 当前已实现相同职责划分：`TranscriptPane` / `visibleWindow` 管�
 | 工具呈现 | 每调用摘要、错误/运行状态、单块展开，支持专用工具 renderer | `tool-render` / transcript 专用呈现已有；新增标题点击，保留批次摘要与调用标题区别 |
 | 思考呈现 | Focus 默认展开；Compact 标题折叠；Hidden 只读状态与耗时 | 新增 Focus、Compact thoughts、Hidden；复用四项设置与每块 override |
 | 权限和问题 | 模态优先、选项点击、无回答二次确认 | 当前 overlay 状态机已有；新增点击入口，沿用提交和破坏性授权二次确认 |
-| 会话 | 项目内近期会话、搜索、切换、分支、重命名；扩展还有置顶/批量清理 | Host 会话与 CLI session 命令已有；本轮列表点击可复用，常驻近期会话侧栏待实现 |
+| 会话 | 项目内近期会话、搜索、切换、分支、重命名；扩展还有置顶/批量清理 | Host 会话与 CLI session 命令已有；本轮列表点击可复用，常驻近期会话侧栏复用当前项目 Host 列表，仍保留既有运行中切换保护 |
 | 执行中输入 | steering 与 follow-up 区分 | CLI 队列与 Host 接口已有；不在 legacy Agent 重做 |
-| 上下文 | 窗口来源、用量、估算构成、缓存/TTFT/TPS | 当前 `/context`、`/usage` 和 footer 已有来源/估算区分；常驻分项 CTX 与采样策略待实现 |
+| 上下文 | 窗口来源、用量、估算构成、缓存/TTFT/TPS | 当前 `/context`、`/usage` 和 footer 已有来源/估算区分；侧栏显示已有用量快照并标注估算，提供详细面板入口；分项构成和 TTFT 仍未补齐 |
 | 资源与 MCP | instructions / skills / extensions / MCP 只读浏览；注册不等于连接 | 当前 CLI rich panels 已有；新增 tabs/行点击，Host 仍负责事实 |
 | 插件 | 渲染、widget、editor、footer 等扩展接口 | 当前插件资源管理已有；通用 TUI UI 扩展合同尚需独立设计，不能等同于插件列表 |
-| 侧栏布局 | fullscreen 常驻、约 22% 宽度、18–72 列；保存偏好宽度，窄屏只限显示值 | 待实现；需纳入组件布局及 pointer capture，不能在 `TUIApp` 中硬拼终端坐标 |
+| 侧栏布局 | fullscreen 常驻、约 22% 宽度、18–72 列；保存偏好宽度，窄屏只限显示值 | 已用 HStack + WorkbenchSidebar 组件实现，复用布局区域和 pointer capture；宽度存在 Host 设置，低于 120 列自动收起 |
 | 会话批量清理 | 默认取消、保护当前/置顶/其他活跃实例、确认后重读 | 不直接复制文件删除逻辑；Duya 多客户端 lease 与 Host 会话删除约束必须先核对 |
 | 文本选择 | 正文不触发 disclosure；终端能力决定选择手势 | inline 原生选择；fullscreen 鼠标报告需终端 override（通常 Shift）或 `DUYA_TUI_MOUSE=off` |
 
@@ -77,7 +77,7 @@ fullscreen 可使用 `DUYA_TUI_INLINE=0 duya tui`；也可在现有 `/settings`
 选择显示方式后重新启动。默认 inline 的历史与候选不捕获鼠标；权限进入临时
 alternate screen 时启用点击，关闭时恢复原生鼠标行为。
 
-## 后续侧栏的实现边界
+## 侧栏实现边界
 
 1. 布局组件分配 transcript 与 sidebar，输入 dock 仍独立；窄屏退回现有窗口。
 2. sidebar 使用 Host 读取投影；会话操作仍走现有 session command/actions，避免从 UI 直接改 Data。
@@ -86,4 +86,11 @@ alternate screen 时启用点击，关闭时恢复原生鼠标行为。
 5. VIEW 调用同一显示设置操作，资源入口打开同一 rich panel。
 6. 分隔条需要 pointer capture、范围限制、退出取消；偏好宽度和当前可显示宽度分开保存。
 
-以上侧栏和扩展合同仍是待实施项；当前鼠标与显示改动不构成全部 Pi 功能完成。
+侧栏现已按上述布局、已有会话列表与命令入口实现；分隔线只在明确命中时捕获拖动。
+释放后将偏好宽度写入 `cli.tui.sidebarWidth`，缩窄终端不改写偏好；Esc/键盘、
+滚轮、resize、弹层接管和退出取消未完成的拖动。F7 轮换页签，F8 临时显示/隐藏；
+`DUYA_TUI_SIDEBAR=0` 禁用侧栏。侧栏只在支持命令回调的 Host-backed fullscreen
+启用，inline 与通用无宿主 TUI 不获得一个无法执行的工作台。
+
+仍未实施会话置顶/批量清理、CTX 分项构成与 TTFT、MCP/嵌套调用来源统计、
+通用 UI 插件合同。这些不是当前静态通过就能声称已经具备的能力。
