@@ -114,4 +114,5 @@
 - 将当前 `master` `96b98221a` 合入任务分支；自动检测到四处冲突，均已处理。源冲突涉及 Coordinator tool allowlist 与对应测试；bundle 冲突由合并后的源码重建解决。
 - master 已把 `duya_app` 的 Session 操作拆成 `session_*`，但该层的 `session_spawn` schema 尚不接收 `projectTask`。Coordinator 继续只准入 Host 的规范 `session` capability 与 `project`，该 capability 创建并绑定 canonical Task；新增测试钉住其注册名和 `projectTask` schema。按已记录的 Task 删除风险排除共享 `todo`。
 - 验证：`npm run build:packages` exit 0（22 包；含 Web 生产构建）；`npm run bundle:worker` exit 0（worker 5.50 MB，按当前 dirty 源码重建）；Project/Host/dispatch 相关 7 个 Vitest 文件 / 44 tests exit 0（其中最终 allowlist 测试 11/11）；`npm run -w @duya/host typecheck` exit 0；`npm run architecture:check` exit 0，无新增违规。bundle freshness 需在 merge commit 后复核。
-- 下一步：提交并推送冲突修复，刷新 #622 的 `mergeable` 与 CI 状态。
+- 冲突修复提交：`c166cb6d7874ded8362beb03a61893e0ea257731`（merge master + Coordinator session contract alignment）。提交后 `node scripts/architecture/bundle-verify.mjs --json` 为 FRESH，0/1120 inputs changed。
+- 下一步：推送更新后的 PR #622 分支，刷新 `mergeable` 与 CI 状态；review / 必需 CI 通过后再处理 Draft。
