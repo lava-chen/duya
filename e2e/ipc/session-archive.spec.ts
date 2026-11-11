@@ -320,7 +320,7 @@ test.describe('session archive (Plan 582)', () => {
     // userData dir. `userDataRootFor` is the same helper `launchDuya` uses, so
     // the two cannot drift.
     const rolloutRoot = path.join(os.homedir(), '.duya', 'test-namespaces', namespace);
-    const coreDbPath = path.join(userDataRootFor(namespace), 'databases', 'duya-core.db');
+    const coreDbPath = path.join(userDataRootFor(namespace), 'databases', 'duya-main.db');
 
     // A namespace's `config.toml` PERSISTS in `~/.duya/test-namespaces/<ns>/`
     // and pins an absolute `database_path`. Whichever checkout ran the

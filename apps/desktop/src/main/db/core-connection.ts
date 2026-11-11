@@ -2,16 +2,16 @@
  * core-connection.ts — Desktop adapter for the core stores. The shared
  * DatabaseHost in @duya/data owns the database handle and lifecycle.
  *
- * The core store (`duya-core.db` + rollout files) holds the six core
- * aggregates (messages, sessions, mailbox, tasks, permissions, locks).
- * The legacy `duya-main.db` stays for subsystem tables (research,
- * gateway, etc.) until those are migrated in follow-up plans.
+ * Core stores and the main schema share the canonical `duya-main.db` handle.
+ * A prior `duya-core.db` is imported once and retained as a recoverable backup;
+ * rollout payloads are stored in SQLite with JSONL portability mirrors.
  *
  * See `docs/design-docs/2026-08-06-core-database-architecture.md` and
  * `docs/exec-plans/active/328-core-db-electron-wiring.md` Phase 1.
  */
 
 import { resolveCoreDatabasePath, resolveDatabasePath, resolveRolloutRoot, resolveAttachmentsRoot } from '../config/boot-config';
+import { resolveDatabasePaths } from '@duya/data/data-paths';
 import { getLogger, LogComponent } from '../logging/logger';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -128,6 +128,7 @@ export function initCoreDatabase(sqlite: SqliteCtor): CoreStores | null {
     }
   };
   const filename = resolveCoreDatabasePath();
+  const legacyDatabasePath = resolveDatabasePaths({ databasePath: resolveDatabasePath().dbPath }).legacyCoreDatabasePath;
   const rolloutRoot = resolveRolloutRoot();
   const attachmentsRoot = resolveAttachmentsRoot();
 
@@ -139,6 +140,7 @@ export function initCoreDatabase(sqlite: SqliteCtor): CoreStores | null {
 
     const coreDataHost = databaseHost.openCoreDatabase({
       filename,
+      legacyDatabasePath,
       sqlite,
       rolloutRoot,
       attachmentsRoot,
@@ -176,11 +178,9 @@ export function initCoreDatabase(sqlite: SqliteCtor): CoreStores | null {
         );
       }
     } catch (error) {
-      logger.warn(
-        'Legacy import failed (will retry on next startup)',
-        { error: error instanceof Error ? error.message : String(error) },
-        LogComponent.DB,
-      );
+      throw new Error('Legacy database import failed; refusing to continue with incomplete application data', {
+        cause: error,
+      });
     }
 
     logger.info('Core database initialized', undefined, LogComponent.DB);

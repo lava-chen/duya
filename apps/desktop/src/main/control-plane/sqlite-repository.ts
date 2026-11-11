@@ -5,7 +5,7 @@
  * ## It is a binding, not a second database
  *
  * Synchronous repository methods delegate only to the CoreStores the host
- * already opened for `duya-core.db`. Approval capabilities are async Host API
+ * already opened for the shared application database. Approval capabilities are async Host API
  * clients. This file executes no DDL, runs no migration, and constructs no
  * `Database`.
  *
@@ -41,7 +41,7 @@ export const CORE_OWNERSHIP: RepositoryOwnership = {
   connections: [
     {
       owner: 'initCoreDatabase',
-      file: 'duya-core.db',
+      file: 'duya-main.db',
       aggregates: ['RunStore', 'AttachmentStore', 'GoalStore', 'TaskStore', 'Mailbox'],
     },
   ],

@@ -1,20 +1,20 @@
 /**
  * MessageLog — single-class two-layer message storage.
  *
- * Layer 1 (payload): append-only JSONL rollout files, one per session, under
+ * Durable payloads are stored in SQLite; JSONL rollout files remain portable
+ * mirrors and recovery inputs under
  * `sessions/<YYYY>/<MM>/<DD>/rollout-<stamp>-<sessionId>.jsonl`. Each line is
  * a JSON-serialized `RolloutLine` (MessageEntry | CompactionEntry |
  * RolloutEvent). Line order = seq order. Rollout events (`reasoning`,
  * `tool_call`, `turn_started`, `system_context`, `rebase`) live alongside
  * messages so the rollout file is self-describing — plan 333 + plan 441.
  *
- * Layer 2 (index): `message_index` SQLite table. Stores id/session/seq/kind/
- * created_at/file_offset/byte_len — NO payload column. `file_offset` + `byte_len`
- * point into the rollout file for exact-line reads. Event kinds populate
+ * `message_index` SQLite table stores id/session/seq/kind/created_at/payload
+ * and compatibility file offsets. Event kinds populate
  * `kind` from their `type` discriminator (plan 333).
  *
- * Write path (`appendBatch`): append all payload lines to the rollout file
- * (recording per-line offset/len), then a single transaction INSERTs index rows
+ * Write path (`appendBatch`): append all payload lines to the rollout file,
+ * then a single transaction INSERTs index rows and full payloads
  * with `COALESCE(MAX(seq),0)+1` seq allocation and `INSERT OR IGNORE` idempotency.
  * File append and index write are NOT in the same transaction — a crash may leave
  * orphan file lines, reconciled by `scan()` on startup.
@@ -458,6 +458,16 @@ export class MessageLog {
         `);
       },
     },
+    {
+      id: 66,
+      name: 'store_rollout_payloads_in_sqlite',
+      up: (db) => {
+        const columns = db.prepare('PRAGMA table_info(message_index)').all() as Array<{ name: string }>;
+        if (!columns.some((column) => column.name === 'payload')) {
+          db.exec("ALTER TABLE message_index ADD COLUMN payload TEXT NOT NULL DEFAULT ''");
+        }
+      },
+    },
   ];
 
   private readonly db: SqliteDatabase;
@@ -474,6 +484,36 @@ export class MessageLog {
     this.ports = ports;
     this.logger = ports.logger ?? NOOP_LOGGER;
     this.logComponent = ports.logComponent;
+  }
+
+  /** Copy pre-payload indexed lines into SQLite before serving history reads. */
+  hydratePayloadsFromRollouts(): void {
+    const sessionRows = this.db.prepare(
+      "SELECT id FROM sessions WHERE rollout_path IS NOT NULL ORDER BY id",
+    ).all() as Array<{ id: string }>;
+    for (const row of sessionRows) this.scan(row.id);
+
+    const sessions = this.db.prepare(
+      "SELECT DISTINCT session_id FROM message_index WHERE payload = '' ORDER BY session_id",
+    ).all() as Array<{ session_id: string }>;
+    const update = this.db.prepare(
+      "UPDATE message_index SET payload = ? WHERE id = ? AND payload = ''",
+    );
+    for (const { session_id: sessionId } of sessions) {
+      const rows = this.timeline(sessionId);
+      const txn = this.db.transaction(() => {
+        for (const row of rows) update.run(JSON.stringify(row.entry), row.entry.id);
+      });
+      txn();
+      const missing = this.db.prepare(
+        "SELECT COUNT(*) AS count FROM message_index WHERE session_id = ? AND payload = ''",
+      ).get(sessionId) as { count: number };
+      if (missing.count > 0) {
+        throw new Error(
+          `Could not copy ${missing.count} rollout payloads for session ${sessionId} into SQLite`,
+        );
+      }
+    }
   }
 
   // ─── Public API ───
@@ -594,9 +634,9 @@ export class MessageLog {
       const generation = this.getCurrentGeneration(sessionId);
       const insert = this.db.prepare(`
         INSERT OR IGNORE INTO message_index
-          (id, session_id, seq, turn_id, kind, created_at, file_offset, byte_len, generation)
+          (id, session_id, seq, turn_id, kind, created_at, file_offset, byte_len, generation, payload)
         VALUES
-          (?, ?, COALESCE((SELECT MAX(seq) FROM message_index WHERE session_id = ?), 0) + 1, ?, ?, ?, ?, ?, ?)
+          (?, ?, COALESCE((SELECT MAX(seq) FROM message_index WHERE session_id = ?), 0) + 1, ?, ?, ?, ?, ?, ?, ?)
       `);
       const txn = this.db.transaction(() => {
         for (let i = 0; i < freshEvents.length; i++) {
@@ -623,6 +663,7 @@ export class MessageLog {
             meta.fileOffset,
             meta.byteLen,
             generation,
+            JSON.stringify(ev.payload),
           );
           // freshEvents already excludes known ids, so 0 changes here means a
           // constraint rejected the row. Surface it instead of letting the
@@ -752,6 +793,27 @@ export class MessageLog {
     sessionId: string,
     options?: { source?: readonly string[]; includeSuperseded?: boolean },
   ): StoredEvent[] {
+    const databaseTimeline = this.projectFromDatabase(sessionId, options?.includeSuperseded);
+    if (databaseTimeline) {
+      const metaById = new Map(
+        (this.db.prepare(
+          'SELECT id, turn_id, created_at FROM message_index WHERE session_id = ?',
+        ).all(sessionId) as Array<{ id: string; turn_id: string | null; created_at: number }>)
+          .map((row) => [row.id, row]),
+      );
+      return this.applySourceFilter(databaseTimeline, options?.source)
+        .filter((row) => row.entry.type !== 'rebase')
+        .map(({ entry, seq }) => ({
+          id: entry.id ?? `seq:${seq}`,
+          sessionId,
+          seq,
+          turnId: metaById.get(entry.id ?? '')?.turn_id ?? null,
+          kind: deriveKind(entry),
+          payload: JSON.stringify(entry),
+          createdAt: rolloutLineTimestamp(entry) || metaById.get(entry.id ?? '')?.created_at || 0,
+        }));
+    }
+
     let relativePath = this.getRolloutPath(sessionId);
     if (!relativePath) return [];
 
@@ -828,7 +890,7 @@ export class MessageLog {
 
     const rows = this.db
       .prepare(
-        'SELECT id, session_id, seq, turn_id, kind, created_at, file_offset, byte_len FROM message_index WHERE session_id = ? ORDER BY seq',
+        'SELECT id, session_id, seq, turn_id, kind, created_at, file_offset, byte_len, payload FROM message_index WHERE session_id = ? ORDER BY seq',
       )
       .all(sessionId) as Array<{
         id: string;
@@ -839,6 +901,7 @@ export class MessageLog {
         created_at: number;
         file_offset: number;
         byte_len: number;
+        payload: string;
       }>;
 
     // Plan 441: production read path applies the rebase projection and the
@@ -861,7 +924,7 @@ export class MessageLog {
       for (const row of rows) {
         let entry: RolloutLine;
         try {
-          entry = JSON.parse(reader.read(row.file_offset, row.byte_len)) as RolloutLine;
+          entry = JSON.parse(row.payload || reader.read(row.file_offset, row.byte_len)) as RolloutLine;
         } catch {
           // Corrupt line: scan() reconciles partial tails at startup; here we
           // surface the row as an opaque compaction-kind payload would break
@@ -1157,6 +1220,9 @@ export class MessageLog {
    * a sensible projection.
    */
   project(sessionId: string): TimelineEntryRow[] {
+    const databaseTimeline = this.projectFromDatabase(sessionId);
+    if (databaseTimeline) return databaseTimeline;
+
     const botAgentId = this.ports.parseBotSessionId(sessionId);
     if (botAgentId) {
       return this.projectMultiFile(this.resolveBotSessionsDir(sessionId, botAgentId));
@@ -1185,6 +1251,34 @@ export class MessageLog {
       }
     }
     return result;
+  }
+
+  private projectFromDatabase(
+    sessionId: string,
+    includeSuperseded = false,
+  ): TimelineEntryRow[] | null {
+    const rows = this.db.prepare(
+      'SELECT id, seq, turn_id, created_at, payload FROM message_index WHERE session_id = ? ORDER BY seq',
+    ).all(sessionId) as Array<{
+      id: string;
+      seq: number;
+      turn_id: string | null;
+      created_at: number;
+      payload: string;
+    }>;
+    if (rows.length === 0 || rows.some((row) => row.payload === '')) return null;
+
+    const timelineRows: TimelineEntryRow[] = [];
+    for (const row of rows) {
+      try {
+        timelineRows.push({ entry: JSON.parse(row.payload) as RolloutLine, seq: row.seq });
+      } catch {
+        this.logger.warn('Invalid rollout payload found in SQLite', { sessionId, seq: row.seq }, this.logComponent);
+      }
+    }
+    return includeSuperseded
+      ? repairInterruptedToolCalls(emitRebaseNewMessages(timelineRows))
+      : repairInterruptedToolCalls(applyRebases(timelineRows));
   }
 
   /**
@@ -1354,10 +1448,11 @@ export class MessageLog {
 
     const insert = this.db.prepare(`
       INSERT OR IGNORE INTO message_index
-        (id, session_id, seq, turn_id, kind, created_at, file_offset, byte_len)
+        (id, session_id, seq, turn_id, kind, created_at, file_offset, byte_len, payload)
       VALUES
-        (?, ?, COALESCE((SELECT MAX(seq) FROM message_index WHERE session_id = ?), 0) + 1, ?, ?, ?, ?, ?)
+        (?, ?, COALESCE((SELECT MAX(seq) FROM message_index WHERE session_id = ?), 0) + 1, ?, ?, ?, ?, ?, ?)
     `);
+    const updatePayload = this.db.prepare("UPDATE message_index SET payload = ? WHERE id = ? AND payload = ''");
 
     // Track offset as we iterate lines to backfill file_offset/byte_len.
     let offset = 0;
@@ -1390,8 +1485,11 @@ export class MessageLog {
               rolloutLineTimestamp(entry),
               offset,
               contentLen,
+              JSON.stringify(entry),
             );
             indexedIds.add(entry.id);
+          } else {
+            updatePayload.run(JSON.stringify(entry), entry.id);
           }
         } catch {
           // Skip unparseable lines (crash-damaged tail).
@@ -1489,32 +1587,32 @@ export class MessageLog {
     const maxFiles = opts.maxFiles ?? 200;
     const lowerQuery = query.toLowerCase();
 
-    let candidates: Array<{ id: string; rolloutPath: string }>;
+    let sessionIds: string[];
     if (opts.sessionIds && opts.sessionIds.length > 0) {
       const placeholders = opts.sessionIds.map(() => '?').join(',');
-      candidates = (this.db
+      sessionIds = (this.db
         .prepare(
-          `SELECT id, rollout_path as rolloutPath FROM sessions WHERE id IN (${placeholders}) AND rollout_path IS NOT NULL`,
+          `SELECT id FROM sessions WHERE id IN (${placeholders})`,
         )
-        .all(...opts.sessionIds) as Array<{ id: string; rolloutPath: string }>);
+        .all(...opts.sessionIds) as Array<{ id: string }>).map((row) => row.id);
     } else {
-      candidates = (this.db
+      sessionIds = (this.db
         .prepare(
-          `SELECT id, rollout_path as rolloutPath FROM sessions WHERE status != 'deleted' AND rollout_path IS NOT NULL ORDER BY updated_at DESC LIMIT ?`,
+          `SELECT id FROM sessions WHERE status != 'deleted' ORDER BY updated_at DESC LIMIT ?`,
         )
-        .all(maxFiles) as Array<{ id: string; rolloutPath: string }>);
+        .all(maxFiles) as Array<{ id: string }>).map((row) => row.id);
     }
 
     const hits: SearchHit[] = [];
-    outer: for (const candidate of candidates) {
-      const absolutePath = this.resolvePathOnDisk(candidate.rolloutPath);
-      const lines = this.readAll(absolutePath);
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i]!;
-        if (line.length === 0) continue;
+    const rows = this.db.prepare(
+      `SELECT session_id, id, seq, payload FROM message_index WHERE session_id = ? ORDER BY seq`,
+    );
+    outer: for (const sessionId of sessionIds) {
+      for (const row of rows.all(sessionId) as Array<{ session_id: string; id: string; seq: number; payload: string }>) {
         let entry: RolloutLine;
         try {
-          entry = JSON.parse(line) as RolloutLine;
+          if (!row.payload) continue;
+          entry = JSON.parse(row.payload) as RolloutLine;
         } catch {
           continue;
         }
@@ -1523,9 +1621,9 @@ export class MessageLog {
         if (matchIdx >= 0) {
           const fullText = extractSearchableText(entry);
           hits.push({
-            sessionId: candidate.id,
+            sessionId: row.session_id,
             messageId: entry.id,
-            seq: i + 1,
+            seq: row.seq,
             snippet: makeSnippet(fullText, matchIdx, query.length),
           });
           if (hits.length >= limit) break outer;
@@ -1724,9 +1822,9 @@ export class MessageLog {
       this.db
         .prepare(
           `INSERT OR IGNORE INTO message_index
-             (id, session_id, seq, turn_id, kind, created_at, file_offset, byte_len, generation)
+             (id, session_id, seq, turn_id, kind, created_at, file_offset, byte_len, generation, payload)
            VALUES
-             (?, ?, COALESCE((SELECT MAX(seq) FROM message_index WHERE session_id = ?), 0) + 1, ?, ?, ?, ?, ?, ?)`,
+             (?, ?, COALESCE((SELECT MAX(seq) FROM message_index WHERE session_id = ?), 0) + 1, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           event.id,
@@ -1738,6 +1836,7 @@ export class MessageLog {
           lineMeta[0]!.fileOffset,
           lineMeta[0]!.byteLen,
           newGeneration,
+          JSON.stringify(event),
         );
 
       // Bump chat_sessions.generation so external readers see the new
@@ -1894,8 +1993,8 @@ export class MessageLog {
   /**
    * Plan 506 (A3): whole-store reconcile. Promotes the startup `scan()`
    * from a passive crash-recovery hook into an explicit, user-triggerable
-   * promise: "the rollout files are the truth; the index is a rebuildable
-   * projection".
+   * promise: "rollout files can repair SQLite payloads and indexes; SQLite is
+   * the durable application history after import".
    *
    * For every session with a recorded rollout_path: re-scan the file and
    * back-fill missing message_index rows (no full delete — INSERT OR
@@ -2189,9 +2288,9 @@ export class MessageLog {
     const deleteStmt = this.db.prepare('DELETE FROM message_index WHERE session_id = ?');
     const insertStmt = this.db.prepare(
       `INSERT INTO message_index
-        (id, session_id, seq, turn_id, kind, created_at, file_offset, byte_len)
+        (id, session_id, seq, turn_id, kind, created_at, file_offset, byte_len, payload)
       VALUES
-        (?, ?, ?, ?, ?, ?, ?, ?)`,
+        (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
 
     // Compute file_offset / byte_len for each line (matching appendLines layout).
@@ -2217,6 +2316,7 @@ export class MessageLog {
           ev.createdAt,
           meta.fileOffset,
           meta.byteLen,
+          JSON.stringify(ev.payload),
         );
       }
     });
@@ -2733,9 +2833,9 @@ export class MessageLog {
     const deleteStmt = this.db.prepare('DELETE FROM message_index WHERE session_id = ?');
     const insertStmt = this.db.prepare(`
       INSERT INTO message_index
-        (id, session_id, seq, turn_id, kind, created_at, file_offset, byte_len)
+        (id, session_id, seq, turn_id, kind, created_at, file_offset, byte_len, payload)
       VALUES
-        (?, ?, ?, ?, ?, ?, ?, ?)
+        (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const txn = this.db.transaction(() => {
@@ -2757,6 +2857,7 @@ export class MessageLog {
             rolloutLineTimestamp(entry),
             offset,
             contentLen,
+            JSON.stringify(entry),
           );
         } catch {
           // Skip unparseable lines (crash-damaged tail).

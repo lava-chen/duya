@@ -24,7 +24,7 @@ test('delivery IPC reads durable unknown receipts without retrying or crossing B
     const requireFromApp = process.getBuiltinModule('node:module').createRequire(`${process.cwd()}/package.json`);
     const path = requireFromApp('node:path');
     const Database = requireFromApp('better-sqlite3');
-    const db = new Database(path.join(app.getPath('userData'), 'databases', 'duya-core.db'));
+    const db = new Database(path.join(app.getPath('userData'), 'databases', 'duya-main.db'));
     try {
       const target = { ownerId: 'local', botId, bindingId: 'fixture-binding', platform: 'telegram', chatId: 'fixture-chat' };
       db.prepare(`INSERT INTO bot_outbox

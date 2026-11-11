@@ -352,10 +352,8 @@ export function updateDatabasePath(newDbPath: string): boolean {
 // ============================================================
 
 /**
- * Resolve the core database path (`duya-core.db`).
- * Same directory as the legacy `duya-main.db`; namespace isolation is
- * inherited from the userData path (test mode sets a per-namespace
- * userData, so no explicit suffix is needed on the filename).
+ * Resolve the shared application database path. Core stores use the same
+ * canonical file as the main schema; the old core file is migration-only.
  */
 export function resolveCoreDatabasePath(): string {
   const { dbPath } = resolveDatabasePath();

@@ -31,6 +31,14 @@
       "types": "./dist/database-host.d.ts",
       "import": "./dist/database-host.js"
     },
+    "./database-owner-lock": {
+      "types": "./dist/database-owner-lock.d.ts",
+      "import": "./dist/database-owner-lock.js"
+    },
+    "./legacy-core-database-import": {
+      "types": "./dist/legacy-core-database-import.d.ts",
+      "import": "./dist/legacy-core-database-import.js"
+    },
     "./sqlite-connection": {
       "types": "./dist/sqlite-connection.d.ts",
       "import": "./dist/sqlite-connection.js"

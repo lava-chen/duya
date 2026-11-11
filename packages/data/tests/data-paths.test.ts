@@ -53,8 +53,10 @@ describe('resolveDataRoot', () => {
     const databaseDirectory = path.dirname(databasePath);
     expect(resolveDatabasePaths({ databasePath })).toEqual({
       mainDatabasePath: databasePath,
-      coreDatabasePath: path.join(databaseDirectory, 'duya-core.db'),
-      memoryStateDatabasePath: path.join(databaseDirectory, 'memory-state.db'),
+      coreDatabasePath: databasePath,
+      legacyCoreDatabasePath: path.join(databaseDirectory, 'duya-core.db'),
+      memoryStateDatabasePath: databasePath,
+      legacyMemoryStateDatabasePath: path.join(databaseDirectory, 'memory-state.db'),
     });
   });
 });

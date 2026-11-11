@@ -9,6 +9,7 @@ import { getAutomationScheduler } from '../automation/Scheduler';
 import { getDatabase } from '../ipc/db-handlers';
 import { closeDatabase, stopWalCheckpoint } from '../db/connection';
 import { closeCoreDatabase } from '../db/core-connection';
+import { closeDb as closeMemoryStateDb } from '../memory-state/db';
 import { cleanupUpdater } from '../services/updater';
 
 let isShuttingDown = false;
@@ -161,7 +162,14 @@ export async function performGracefulShutdown(): Promise<void> {
     logger.error('Error stopping WAL checkpoint scheduler', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
   }
 
-  // 7.5b Close core database (duya-core.db + rollout)
+  // 7.5b Release the memory-state shared-handle reference before core closes.
+  try {
+    closeMemoryStateDb();
+  } catch (err) {
+    logger.error('Error releasing memory-state database reference', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.DB);
+  }
+
+  // 7.5c Close core stores and rollout resources.
   try {
     closeCoreDatabase();
   } catch (err) {

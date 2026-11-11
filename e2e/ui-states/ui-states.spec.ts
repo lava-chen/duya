@@ -197,7 +197,7 @@ let provider: HeldLoopback | undefined;
 
 /** The namespace's core database - `sessions`, `runs`, `run_events`. */
 function coreDb(namespace: string): Database.Database {
-  return new Database(path.join(userDataRootFor(namespace), 'databases', 'duya-core.db'));
+  return new Database(path.join(userDataRootFor(namespace), 'databases', 'duya-main.db'));
 }
 
 /** The namespace's main database - `settings`, `threads`, `messages`, approvals. */

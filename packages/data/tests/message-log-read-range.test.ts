@@ -137,8 +137,8 @@ afterEach(() => {
   }
 });
 
-describe('MessageLog.listBySession file handle use', () => {
-  it('opens the rollout file once for a whole session, not once per message', () => {
+describe('MessageLog.listBySession database payload reads', () => {
+  it('reads a whole session without opening the JSONL mirror', () => {
     const sessionId = 'sess-1';
     const base = Date.UTC(2026, 9, 25, 8, 0, 0);
     insertSession(sessionId, base);
@@ -152,9 +152,7 @@ describe('MessageLog.listBySession file handle use', () => {
     const rows = log.listBySession(sessionId);
 
     expect(rows).toHaveLength(total);
-    // One handle for the whole projection — the reads happen on it, the
-    // file is not reopened per message.
-    expect(counters.openSync).toBe(1);
+    expect(counters.openSync).toBe(0);
   });
 
   it('returns the same messages in the same order as the append order', () => {
@@ -171,7 +169,7 @@ describe('MessageLog.listBySession file handle use', () => {
     expect(rows.map((row) => row.seq)).toEqual([1, 2, 3, 4, 5]);
   });
 
-  it('still skips a corrupt line instead of failing the projection', () => {
+  it('reads a durable SQLite payload even if its JSONL mirror is later corrupted', () => {
     const sessionId = 'sess-1';
     const base = Date.UTC(2026, 9, 25, 8, 0, 0);
     insertSession(sessionId, base);
@@ -192,10 +190,10 @@ describe('MessageLog.listBySession file handle use', () => {
     writeFileSync(file, lines.join('\n'), 'utf8');
 
     const rows = log.listBySession(sessionId);
-    expect(rows.map((row) => row.id)).toEqual(['m-1', 'm-3']);
+    expect(rows.map((row) => row.id)).toEqual(['m-1', 'm-2', 'm-3']);
   });
 
-  it('keeps the index and returns empty when the rollout file is gone', () => {
+  it('keeps the full timeline readable when the rollout file is gone', () => {
     const sessionId = 'sess-1';
     const base = Date.UTC(2026, 9, 25, 8, 0, 0);
     insertSession(sessionId, base);
@@ -203,8 +201,8 @@ describe('MessageLog.listBySession file handle use', () => {
     log.appendBatch([messageEvent(sessionId, 'm-1', base)]);
     require('node:fs').rmSync(rolloutFile(sessionId));
 
-    // A missing file must not take the index with it.
-    expect(log.listBySession(sessionId)).toEqual([]);
+    expect(log.listBySession(sessionId).map((row) => row.id)).toEqual(['m-1']);
+    expect(log.searchText('hello m-1').map((hit) => hit.messageId)).toEqual(['m-1']);
     expect(log.getCount(sessionId)).toBe(1);
   });
 });
