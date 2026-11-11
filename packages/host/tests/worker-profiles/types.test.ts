@@ -1,24 +1,38 @@
 import { describe, it, expect } from 'vitest';
 import { PRESET_AGENT_PROFILES } from '../../src/worker-profiles/types.js';
-import { PROJECT_COORDINATOR_PROFILE_ID } from '../../src/project/identity.js';
-import { resolveAllowedTools } from '@duya/agent-runtime/authorization/tool-filter';
+import {
+  PROJECT_COORDINATOR_ALLOWED_TOOLS,
+  PROJECT_COORDINATOR_PROFILE_ID,
+} from '../../src/project/identity.js';
+import { isToolVisible, resolveAllowedTools } from '@duya/agent-runtime/authorization/tool-filter';
+import { sessionTool } from '../../src/worker-tool-bindings/session.js';
 
 describe('PRESET_AGENT_PROFILES', () => {
   it('project-coordinator runs on the dedicated project prompt system', () => {
     const coordinator = PRESET_AGENT_PROFILES.find((p) => p.id === PROJECT_COORDINATOR_PROFILE_ID)!;
     expect(coordinator.allowedTools).toEqual(['session', 'project']);
-    expect(coordinator.disallowedTools).toEqual(['tool_catalog', 'tool_invoke']);
+    expect(PROJECT_COORDINATOR_ALLOWED_TOOLS).toEqual(['session', 'project']);
+    expect(PROJECT_COORDINATOR_ALLOWED_TOOLS).not.toContain('todo');
     expect(coordinator.promptSystem).toBe('project');
     expect(coordinator.suppressIdentityBlock).toBe(true);
     expect(coordinator.identityPrompt).toBeUndefined();
     expect(coordinator.userVisible).toBe(false);
     const result = resolveAllowedTools(
       coordinator,
-      ['session', 'todo', 'project', 'read', 'write', 'bash', 'task', 'memory'],
+      ['session', 'session_spawn', 'project', 'todo', 'read', 'write', 'bash', 'task', 'memory', 'tool_catalog', 'tool_invoke'],
     );
     expect(result.allowed.sort()).toEqual(['project', 'session']);
-    expect(result.denied).toContain('todo');
+    expect(result.denied).toEqual(expect.arrayContaining(['session_spawn', 'todo', 'tool_catalog', 'tool_invoke']));
     expect(result.isValid).toBe(true);
+  });
+
+  it('registers the canonical session capability needed by Project Coordinator', () => {
+    const definition = sessionTool.toTool();
+    expect(definition.name).toBe('session');
+    expect(definition.input_schema).toHaveProperty('properties.projectTask');
+    expect(isToolVisible(definition.name, 'deferred', new Set(), {
+      profileAllowedPatterns: PROJECT_COORDINATOR_ALLOWED_TOOLS,
+    })).toBe(true);
   });
   it('includes the memory-curator preset', () => {
     const curator = PRESET_AGENT_PROFILES.find((p) => p.id === 'memory-curator');

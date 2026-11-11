@@ -107,3 +107,11 @@
 代码交付：`7b492c5c18e65cd054d5d3572fdd6b41a79709ce` 已推送到本任务分支 / PR #622。提交后 worktree clean；`bundle-verify.mjs --json` exit 0 / FRESH / 0 of 1120 inputs changed，worker-entry 与 BashWorker 均 fresh。随后仅补本计划交付记录，最终文档 head 以 PR / Git 为准。
 
 当前下一步：对最新 PR head 执行 review/CI；评估 B1–B15 的真实模型协调质量，再按工具合同拆分后续产品能力。没有用户集成授权，不合并、不回收工作树。本次没有修改主检出的 dirty 项目连续性切片；跨切片集成时应对拍 Session context API 与本实现共享 Project service 的读取路径，保持单一绑定与存储权威。
+
+## PR #622 与当前 master 对齐（2026-11-11，Asia/Shanghai）
+
+- 独立 linked worktree：`.claude/worktrees/project-coordinator-prompt-design-fix`；分支 `codex/project-coordinator-prompt-design`，从 PR #622 head `1a90eed35` 接续。
+- 将当前 `master` `96b98221a` 合入任务分支；自动检测到四处冲突，均已处理。源冲突涉及 Coordinator tool allowlist 与对应测试；bundle 冲突由合并后的源码重建解决。
+- master 已把 `duya_app` 的 Session 操作拆成 `session_*`，但该层的 `session_spawn` schema 尚不接收 `projectTask`。Coordinator 继续只准入 Host 的规范 `session` capability 与 `project`，该 capability 创建并绑定 canonical Task；新增测试钉住其注册名和 `projectTask` schema。按已记录的 Task 删除风险排除共享 `todo`。
+- 验证：`npm run build:packages` exit 0（22 包；含 Web 生产构建）；`npm run bundle:worker` exit 0（worker 5.50 MB，按当前 dirty 源码重建）；Project/Host/dispatch 相关 7 个 Vitest 文件 / 44 tests exit 0（其中最终 allowlist 测试 11/11）；`npm run -w @duya/host typecheck` exit 0；`npm run architecture:check` exit 0，无新增违规。bundle freshness 需在 merge commit 后复核。
+- 下一步：提交并推送冲突修复，刷新 #622 的 `mergeable` 与 CI 状态。

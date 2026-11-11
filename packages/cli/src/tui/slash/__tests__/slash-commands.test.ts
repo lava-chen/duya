@@ -1206,4 +1206,32 @@ describe('/copy', () => {
     await command('copy').run(ctx, '');
     expect(ctx.errors.join('\n')).toContain('No assistant reply');
   });
+
+  /** Make every native clipboard tool unavailable, as it is over SSH. */
+  async function withoutNativeClipboard(run: () => Promise<void>): Promise<void> {
+    const platform = process.platform;
+    Object.defineProperty(process, 'platform', { value: 'plan9', configurable: true });
+    try { await run(); } finally {
+      Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+    }
+  }
+
+  const withReply = () => ({ readMessages: async () => page([message('assistant', 'hello over ssh')]) } as never);
+
+  it('falls back to OSC 52 when the local clipboard tool is unavailable', async () => {
+    const sent = vi.fn(() => true);
+    const ctx = makeContext(withReply(), { copyToTerminalClipboard: sent });
+    await withoutNativeClipboard(() => command('copy').run(ctx, '').then(() => undefined));
+    expect(sent).toHaveBeenCalledWith('hello over ssh');
+    expect(ctx.notices.join('\n')).toContain('OSC 52');
+    // OSC 52 has no acknowledgement: the notice must not claim a confirmed copy.
+    expect(ctx.notices.join('\n')).not.toContain('Copied');
+  });
+
+  it('still prints the reply when the host has no terminal clipboard either', async () => {
+    const ctx = makeContext(withReply());
+    await withoutNativeClipboard(() => command('copy').run(ctx, '').then(() => undefined));
+    expect(ctx.notices.join('\n')).toContain('hello over ssh');
+    expect(ctx.notices.join('\n')).toContain('No clipboard available');
+  });
 });

@@ -304,8 +304,16 @@ describe('createAnthropicClient.streamChat degradation ladder', () => {
     expect(sdk.post).toHaveBeenCalledTimes(3);
     const thirdBody = sdk.post.mock.calls[2]?.[1]?.body as Record<string, unknown>;
     expect(thirdBody.tools).toBeUndefined();
-    // L2 system prompt tells the model tools are unavailable.
-    expect(String(thirdBody.system)).toContain('does not support tool calling');
+    // L2 system prompt tells the model tools are unavailable. The system
+    // param may be a plain string or an array of cache-marked text blocks
+    // (Plan 408 Phase 4 upgrades strings to blocks when cache-eligible).
+    const systemText =
+      typeof thirdBody.system === 'string'
+        ? thirdBody.system
+        : Array.isArray(thirdBody.system)
+          ? thirdBody.system.map((block) => (block as { text?: string }).text ?? '').join('\n')
+          : '';
+    expect(systemText).toContain('does not support tool calling');
   });
 
   it('skips malformed SSE frames instead of crashing the stream (Plan 418)', async () => {

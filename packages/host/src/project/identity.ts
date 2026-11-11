@@ -13,7 +13,13 @@ export const PROJECT_COORDINATOR_PROFILE_ID = 'project-coordinator';
 /** Work Sessions execute as a real work role, never as the Coordinator. */
 export const PROJECT_WORK_SESSION_PROFILE_ID = 'code-expert';
 
-/** Management only. Todo shares canonical Task storage and is not isolated. */
+/**
+ * Management-only allowlist: no filesystem, shell, browser, device, catalog,
+ * or shared todo tools. The Coordinator uses the canonical Host `session`
+ * capability because the `duya_app` per-action spawn wrapper does not yet
+ * accept `projectTask`, which is required to create and bind the canonical
+ * Project Task. The shared todo replace operation can delete those Tasks.
+ */
 export const PROJECT_COORDINATOR_ALLOWED_TOOLS = ['session', 'project'] as const;
 
 export const PROJECT_TASK_SUBJECT_MAX_LENGTH = 160;

@@ -1252,7 +1252,16 @@ export async function chatTui(
   }
 
   const tui = new TUIApp({
-    title: 'duya chat',
+    title: 'duya',
+    // The tab bar is the only surface that distinguishes two windows once the
+    // terminal is not focused. A session that has not been named yet falls back
+    // to its id prefix — the same eight characters the status bar shows — which
+    // is still enough to tell tabs apart.
+    sessionTitle: () => activeSession.title || activeSession.id.slice(0, 8),
+    // OSC 7 and the footer both follow the SESSION's directory: `/project`
+    // moves the surface without changing process.cwd(), and a new tab opened
+    // from this window must land where runs actually execute.
+    workspaceDirectory: () => projectDirectory,
     theme: effectivePreferences.theme,
     inline: effectivePreferences.displayMode === 'inline',
     completionSources,
@@ -1536,6 +1545,7 @@ export async function chatTui(
     await resyncEffortForModelChange(previousModel);
     watchSession(selectedId);
     tui.replaceTranscript(await loadSessionMessages(client, selectedId));
+    tui.refreshTerminalTitle();
     tui.printNotice(`Resumed "${selected.title || 'Untitled session'}".`);
   }
 
@@ -1629,6 +1639,7 @@ export async function chatTui(
     void pluginCandidates.refresh();
     sessionRows = (await listWorkspaceSessions(client, activeSession)).map(sessionCompletionItem);
     tui.replaceTranscript(await loadSessionMessages(client, adopted.id));
+    tui.refreshTerminalTitle();
     tui.printNotice(`Switched to "${adopted.title || 'Untitled session'}" (${adopted.id.slice(0, 8)}).`);
   }
 
@@ -1831,6 +1842,9 @@ export async function chatTui(
       if (activeSession.id === runSessionId) {
         try { const refreshed = await client.get(runSessionId); if (refreshed) activeSession = refreshed; }
         catch { /* The next /worktree status can refresh a disconnected client. */ }
+        // The Host names a session from its first turn, so this is the first
+        // moment a real title can reach the tab bar.
+        tui.refreshTerminalTitle();
       }
       if (record === null) {
         tui.printError('Run stream closed without a settled record. Pending drafts are paused.');
