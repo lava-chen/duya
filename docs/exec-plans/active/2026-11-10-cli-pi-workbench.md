@@ -113,3 +113,11 @@ inline 保留终端 scrollback 与原生选择；可点击历史发生在 fullsc
 - 最后 CLI 类型检查、CLI 4.52 MB bundle、架构审计、TS 抑制指令静态检查均 exit 0；架构 baseline 未修改。
 - tracked 源码和文档已保存；未跟踪项为本检出的依赖链接，未提交。保留工作树与分支等待验收和 review/CI。
 - 终端实机、Windows/ConPTY、文字选择与真实权限提交仍未验收，PR 保持 draft。高级差距仍按本计划上列清单记录。
+
+## CI 修复接续（2026-11-11，Asia/Shanghai）
+
+- 独立 linked worktree：`.claude/worktrees/cli-pi-workbench-fix`；分支 `codex/cli-pi-workbench`，base/head `10b049af681abe6d92b71a46b0bb8aaff74fa56a`（PR #624 当前 head）。
+- CI `Test` run `42857681975` 的两个失败均在 `tui-settings-panel.test.ts`：profile 选择仍按旧列表按下 3 次，switch 选择仍按旧列表按下 7 次；#624 新增三个 profile 后目标行分别下移 2 / 3 行。
+- 已将导航次数更新为 5 / 10，并说明目标行偏移；断言的四键向量与 switch 写入值保持不变。
+- 环境：Linux x64 / Node 24.19；在独立 worktree `npm ci` exit 0（锁文件未改）。`npx vitest run packages/cli/src/tui/__tests__/tui-settings-panel.test.ts` exit 0（14/14）；`npx vitest run packages/cli/src/tui/__tests__/` exit 0（87 files / 1147 passed / 1 expected fail / 0 failed）。
+- 下一步：检查 diff 与格式、提交并推送 PR #624 的 CI 修复；再刷新 CI 状态。

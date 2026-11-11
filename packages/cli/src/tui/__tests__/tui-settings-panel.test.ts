@@ -444,8 +444,8 @@ describe('/display in the TUI', () => {
   it('applies a profile as four keys and moves the live renderer', async () => {
     const open = await openDisplay();
     // 'Live only' is the sixth row since the focus/folded/hidden profiles
-    // joined the list (PR #624) — the down-count tracks the list; the pinned
-    // four-key vector below is the point of the test.
+    // joined the list — the down-count tracks the list; the pinned four-key
+    // vector below is the point of the test.
     for (let step = 0; step < 5; step += 1) press(open.input, 'down');
     await settle();
     press(open.input, 'return');
@@ -466,7 +466,7 @@ describe('/display in the TUI', () => {
   it('cycles one switch from the same list', async () => {
     const open = await openDisplay();
     // The toolGroupMode switch sits three rows lower now that the profile
-    // list grew by three (PR #624).
+    // list grew by three.
     for (let step = 0; step < 10; step += 1) press(open.input, 'down');
     await settle();
     press(open.input, 'return');

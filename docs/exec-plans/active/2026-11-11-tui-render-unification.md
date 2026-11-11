@@ -85,3 +85,12 @@
 | SHA / dirty | 命令 | 结果 |
 | --- | --- | --- |
 | 计划建立：`783c0b70e` 工作树 | （无代码改动） | 本文档 + 索引登记 |
+
+## Stacked base synchronization (2026-11-11)
+
+- Synchronized this branch with PR #625 head `890477117a64e7eee356e3f04b26c01936d43299`,
+  which includes the #624 CI test fix and the committed PTY smoke harness.
+- The merge from the common base `617f6c5da` auto-resolved without conflicts; the #626
+  layout-tree and `TUIApp.ts` changes remain intact.
+- Prior validation on the pre-sync implementation: 92 TUI files / 1202 passed, CLI typecheck,
+  architecture check, and bundle build passed. Re-run CI on the synchronized head before merge.
