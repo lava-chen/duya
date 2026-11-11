@@ -1026,10 +1026,17 @@ and revision history.
 `HostProjectApiV1` and authenticated project HTTP routes provide one
 continuity snapshot and a bounded context projection to UI and Host clients.
 The projection references coordinator/work Session transcripts by ID rather
-than copying message history. On Worker initialization the Desktop adapter
-loads project context through the Host API and includes it in the system
-prompt; prompt assembly uses `@duya/memory` ranking/rendering helpers. Session
-message history itself remains in MessageLog.
+than copying message history. Before each model request, the worker reads
+`project:session-context` through its trusted attempt. The shared Project service
+resolves Coordinator or work membership from durable Session bindings and scopes
+work context to its canonical Task. The `project_snapshot` volatile rail replaces
+the prior snapshot, including explicit unavailable/unbound states; project facts
+do not enter the stable system prefix or transcript. The bounded renderer keeps
+revision/acceptance labels, whole records, omission markers and only displayed
+source references, with `@duya/memory` ranking. The Coordinator owns five stable
+behavior sections and exposes `project`/`session`; shared `todo` storage and
+catalog routers are excluded from this profile. Message history remains in
+MessageLog.
 
 ### Memory State DB (Plan 479)
 

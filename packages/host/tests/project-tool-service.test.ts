@@ -83,6 +83,7 @@ function harness(options: { coordinator?: string | null; updateState?: 'ok' | 'c
   const service = createProjectToolService({
     stores: {
       projects: {
+        getTaskLinkByWorkSession: (sessionId: string) => sessionId === 'work-1' ? { project_id: PROJECT_ID, task_id: 'task-1' } : null,
         getByCoordinatorSession: (sessionId: string) =>
           sessionId === (options.coordinator === undefined ? COORDINATOR_ID : options.coordinator)
             ? { project_id: PROJECT_ID }

@@ -128,7 +128,7 @@ function resolveTransport(): DbTransport {
 
 // Send DB request and wait for response
 async function sendDbRequest(action: string, payload: unknown): Promise<unknown> {
-  const execution = action.startsWith('session:spawn') || action === 'plugin-app:binding-current' || action === 'project:tool'
+  const execution = action.startsWith('session:spawn') || action === 'plugin-app:binding-current' || action === 'project:tool' || action === 'project:session-context'
     ? workerDbRunContext()
     : undefined;
   // Legacy Desktop interagent turns have no Host run identity yet. Preserve
@@ -771,6 +771,8 @@ export const attachmentDb = {
 // ==================== Project Operations ====================
 
 export const projectDb = {
+  /** No caller-supplied project/session id: the Host uses the worker attempt. */
+  sessionContext: () => sendDbRequest('project:session-context', {}) as Promise<unknown>,
   getGroups: () => sendDbRequest('project:getGroups', {}),
 
   /**

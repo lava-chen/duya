@@ -20,7 +20,6 @@ export const projectConfig: PromptSystemConfig = {
       cachePolicy: 'once',
       description: 'Project Coordinator identity and boundaries',
     },
-    { module: 'system', cachePolicy: 'once' },
     {
       name: 'projectOperation',
       template: 'project/operation.hbs',
@@ -38,6 +37,12 @@ export const projectConfig: PromptSystemConfig = {
       template: 'project/reporting.hbs',
       cachePolicy: 'once',
       description: 'Evidence-based project reporting and acceptance',
+    },
+    {
+      name: 'projectContextPolicy',
+      template: 'project/context-policy.hbs',
+      cachePolicy: 'once',
+      description: 'Context authority, replacement and recovery',
     },
     { module: 'finalAnswer', cachePolicy: 'once' },
   ],

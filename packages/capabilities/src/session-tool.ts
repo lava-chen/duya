@@ -2,11 +2,8 @@
  * Session Tool Implementation (Plan 504 — grok CloudAgent parity, minimal loop).
  *
  * Spawns a real, project-scoped child session in a given working directory and
- * runs it asynchronously. The MAIN process creates the child session row and
- * fires an ordinary agent run (POST /sessions/:id/chat); when it finishes the
- * parent is woken via a `background_notification` mailbox row. This tool
- * returns immediately with the child session id — the caller carries on and is
- * auto-woken with the result (it must NOT poll).
+ * runs it asynchronously. Completion delivery depends on the Host and is
+ * declared in the spawn/reply receipt: automatic wake or explicit get.
  *
  * Unlike `session_send`, which writes an asynchronous input to an existing
  * Session, this tool CREATES and manages a NEW Session that persists in the
@@ -81,7 +78,7 @@ const SESSION_SCHEMA: Record<string, unknown> = {
       enum: ['spawn', 'list', 'get', 'reply', 'cancel', 'rename'],
       default: 'spawn',
       description:
-        'The operation to perform. spawn: create a new child session in a project and run it async. list: list child sessions you spawned. get: status + diff stats of a child. reply: send a follow-up prompt to a child (another async run). cancel: interrupt a child run. rename: rename a child.',
+        'The operation to perform. spawn: create a new child session in a project and run it async. list: list work sessions the Host authorizes you to manage. get: status + diff stats of a child. reply: send a follow-up prompt to a child (another async run). cancel: interrupt a child run. rename: rename a child.',
     },
     workingDirectory: {
       type: 'string',
@@ -101,7 +98,7 @@ const SESSION_SCHEMA: Record<string, unknown> = {
     sessionId: {
       type: 'string',
       description:
-        'For get/reply/cancel/rename: the child session id returned by spawn. You can only manage sessions you spawned.',
+        'For get/reply/cancel/rename: the child session id returned by spawn. The Host authorizes parent-owned sessions and, for the current Project Coordinator, durably linked project work.',
     },
     title: {
       type: 'string',
@@ -132,21 +129,27 @@ export class SessionTool extends BaseTool {
 - ASYNC: spawn/reply return immediately; the child runs in its own session.
   Follow the returned completion policy: some Hosts auto-wake the parent;
   others require action "get" to retrieve the tracked run's result.
-- Management is scoped to sessions you spawned (the parent). Use list/get/reply/
-  cancel/rename to continuously manage them across turns.
+- Management is scoped by the Host: ordinary parents manage their children; a
+  currently bound Project Coordinator also manages linked work from earlier
+  Coordinators. Use list/get/reply/cancel/rename across turns.
 
 ## Actions
 - spawn: workingDirectory (required) + prompt (required) + model (optional).
-- list: list child sessions you spawned.
+  A Project Coordinator must also supply projectTask.subject and description;
+  the Host creates the canonical Task and binds it to the new work Session.
+  Set use_worktree=true for an independent branch or PR.
+- list: list work sessions the Host authorizes you to manage.
 - get: sessionId → status, tracked run result when available, working directory,
   and diff stats (+N/-M files).
-- reply: sessionId + prompt → send a follow-up prompt to the child (async run;
+- reply: sessionId + prompt → start a follow-up Run after the prior Run ends
+  (run_in_progress is refused; this does not steer a live Run;
   follow the returned completion policy).
-- cancel: sessionId → interrupt the child's active run.
+- cancel: sessionId → request interruption; query to verify it stopped. This does
+  not undo file changes, delete artifacts, or cancel every descendant.
 - rename: sessionId + title → rename the child.
 
 ## Restrictions
-- You can only manage sessions you spawned (ownership enforced server-side).
+- The Host enforces parent ownership or current Project Coordinator binding.
 - Heavy spawns consume an additional worker; concurrency is bounded by system
   worker limits.`;
 

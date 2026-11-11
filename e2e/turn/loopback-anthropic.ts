@@ -74,7 +74,7 @@ export interface LoopbackAnthropic {
   /** Hand this to the chat request as `providerConfig.baseURL`. */
   readonly baseUrl: string;
   /** Every `POST /v1/messages` the real client made, in order. */
-  readonly requests: ReadonlyArray<{ readonly model: unknown; readonly toolNames: readonly string[] }>;
+  readonly requests: ReadonlyArray<{ readonly model: unknown; readonly toolNames: readonly string[]; readonly system: unknown; readonly messages: unknown }>;
   /** Tool calls the model fixture actually returned, in request order. */
   readonly toolCallsSent: ReadonlyArray<{ readonly name: string; readonly input: Record<string, unknown> }>;
   /** Every `x-api-key` header seen, which is how the spec proves the client
@@ -194,7 +194,7 @@ function writeToolCalls(
 export async function startLoopbackAnthropic(
   opts: LoopbackAnthropicOptions,
 ): Promise<LoopbackAnthropic> {
-  const requests: Array<{ model: unknown; toolNames: string[] }> = [];
+  const requests: Array<{ model: unknown; toolNames: string[]; system: unknown; messages: unknown }> = [];
   const toolCallsSent: Array<{ name: string; input: Record<string, unknown> }> = [];
   const authHeadersSeen: string[] = [];
 
@@ -217,6 +217,8 @@ export async function startLoopbackAnthropic(
       authHeadersSeen.push(String(req.headers['x-api-key'] ?? req.headers.authorization ?? ''));
       requests.push({
         model: parsed.model,
+        system: parsed.system,
+        messages: parsed.messages,
         toolNames: tools.map((t) => String(t.name ?? '')),
       });
 

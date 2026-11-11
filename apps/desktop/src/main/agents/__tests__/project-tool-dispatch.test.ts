@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CommandSenderFacts } from '@duya/host/command-receipt';
 
-const boundary = vi.hoisted(() => ({ dispatch: vi.fn() }));
+const boundary = vi.hoisted(() => ({ dispatch: vi.fn(), getSessionContext: vi.fn() }));
 
 vi.mock('../../cli/desktop-host-api', () => ({
-  getDesktopProjectToolService: () => ({ dispatch: boundary.dispatch }),
+  getDesktopProjectToolService: () => ({ dispatch: boundary.dispatch, getSessionContext: boundary.getSessionContext }),
 }));
 vi.mock('electron', () => ({
   app: { getPath: () => '/tmp/duya-project-tool-test', getVersion: () => '0.0.0', isPackaged: false },
@@ -17,6 +17,7 @@ import { dispatchDbAction } from '../db-bridge';
 
 afterEach(() => {
   boundary.dispatch.mockReset();
+  boundary.getSessionContext.mockReset();
 });
 
 function sender(overrides: Partial<CommandSenderFacts> = {}): CommandSenderFacts {
@@ -29,6 +30,13 @@ function sender(overrides: Partial<CommandSenderFacts> = {}): CommandSenderFacts
 }
 
 describe('Desktop project tool dispatch', () => {
+  it('ignores payload identity when assembling Session-bound project context', async () => {
+    boundary.getSessionContext.mockResolvedValue(null);
+    await dispatchDbAction('project:session-context', { sessionId: 'forged', projectId: 'other' }, sender());
+    expect(boundary.getSessionContext).toHaveBeenCalledWith('coordinator-1');
+    await expect(dispatchDbAction('project:session-context', {}, sender({ registeredSessionId: null }))).rejects.toThrow('trusted Session');
+    expect(boundary.getSessionContext).toHaveBeenCalledTimes(1);
+  });
   it('resolves the Coordinator from the transport-bound Session', async () => {
     boundary.dispatch.mockResolvedValue({ ok: true, snapshot: { project: { projectId: 'project-1' } } });
 

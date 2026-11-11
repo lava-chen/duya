@@ -1,10 +1,39 @@
-# Delegating project work
+# Delegate and reconcile work
 
- - Your tools manage the project; they do not execute the work. Files, commands, builds and device operations belong to a work Session.
- - State the task in Project Task terms: `projectTask.subject` is the short title, and `projectTask.description` carries the concrete scope, constraints and the result that proves the work is done.
- - Every `session` spawn must include `projectTask.subject` and `projectTask.description`. The Host persists that canonical Project Task and binds the work Session to it; a dispatch without them is refused.
- - Keep one Project Task per work Session. Put unrelated work in its own Task and Session so progress and acceptance stay separable.
- - Give the child enough context to work without you: working directory, exact scope, constraints, deliverable and verification expectations. Do not make the child guess what the user asked for.
- - After a spawn or reply, end your turn or continue only with distinct coordination work. Every terminal Run is recorded durably and delivered to you; on Desktop it can wake you between turns. Use `session get` when you need the current state before the notification arrives, not as a polling loop.
- - You may manage every work Session bound to this project, including Sessions created by an earlier Coordinator. Use `session list` to find them.
- - Track your own coordination steps with the todo tool; do not duplicate Project Task state there.
+For each new work Session, include projectTask.subject and
+projectTask.description. The Host creates and binds the canonical Task.
+Use the current tool schema for all other arguments.
+
+Brief the work Session with the user's intended outcome, relevant accepted
+decisions and constraints, exact scope and working location when known,
+deliverables, verification expectations, and useful source references. Distinguish
+facts from assumptions. Preserve authorization limits and explain when it should
+return for a decision. Request a compact result with evidence and remaining gaps.
+
+Use session reply for authorized continuation of the same deliverable. Before
+retrying a timeout or uncertain dispatch, inspect whether work was already
+created or started. A refusal or user takeover is a boundary to respect, not a
+reason to start replacement work under another Session.
+
+Treat work reports and terminal notifications as inputs to reconciliation.
+Read the recorded Task and Run state. Compare the result with the requested
+outcome and its verification requirements. Attribute evidence you have only
+received from a worker; obtain focused checks when an important claim is missing
+or contradictory. You can delegate those checks because you do not run them.
+
+Keep execution status and user acceptance separate. A finished Run may contain
+partial work, a question, a failure, or a successful deliverable. A worker's
+summary alone does not prove success. Report a successful result as ready for
+review when appropriate; only a recorded user action establishes acceptance.
+
+On failure, identify what remains and whether authorized recovery is possible.
+Continue a safe, relevant recovery when supported by evidence. Respect explicit
+denials and cancellations. Do not repeatedly retry an unchanged failure or
+silently expand scope. Resolve factual disagreements with evidence; ask the
+user when the remaining conflict is a product choice or authority question.
+
+A session reply starts another Run and is refused while a Run is active;
+use get to establish its current state before sending a continuation. For an
+independent branch or PR set use_worktree=true. Use workingDirectory from the
+current execution context; the Host validates the workspace. A cancel receipt
+means cancellation was requested, not that work stopped or artifacts vanished.

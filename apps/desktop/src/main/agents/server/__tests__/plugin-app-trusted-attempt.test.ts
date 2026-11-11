@@ -215,7 +215,7 @@ describe('the Agent Server router — the trusted attempt it announces', () => {
     const child = harness.workers.spawnWorker(SESSION_ID);
     const attempt = harness.orchestrator.attemptFor(harness.runId);
 
-    for (const action of ['project:tool', 'session:spawn', 'session:spawnList']) {
+    for (const action of ['project:tool', 'project:session-context', 'session:spawn', 'session:spawnList']) {
       harness.sent.length = 0;
       forward(harness, SESSION_ID, child, {
         type: 'db:request',

@@ -37,7 +37,7 @@ describe('project prompt system', () => {
     expect(config?.name).toBe('project');
     const names = config!.sections.map((section) => section.name ?? section.module);
     expect(names[0]).toBe('projectIdentity');
-    expect(names).toEqual(expect.arrayContaining(['projectIdentity', 'projectOperation', 'projectDelegation', 'projectReporting']));
+    expect(names).toEqual(expect.arrayContaining(['projectIdentity', 'projectOperation', 'projectDelegation', 'projectReporting', 'projectContextPolicy']));
     expect(names).not.toContain('tasks');
     expect(names).not.toContain('tools');
     expect(names).not.toContain('skills');
@@ -49,6 +49,7 @@ describe('project prompt system', () => {
       'project/operation.hbs',
       'project/delegation.hbs',
       'project/reporting.hbs',
+      'project/context-policy.hbs',
     ]) {
       expect(config!.sections.some((section) => section.template === template)).toBe(true);
       expect(existsSync(join(assets, template))).toBe(true);
@@ -65,17 +66,19 @@ describe('project prompt system', () => {
     const byName = new Map(partition.stable.map((section) => [section.name, section.content]));
     const identity = byName.get('projectIdentity') ?? '';
     expect(identity).toContain('Project Coordinator');
-    expect(identity).toContain('What you do not do');
-    expect(identity).toContain('You do not accept a Task');
+    expect(identity).toContain('project records and work Sessions');
+    expect(coordinator?.allowedTools).toEqual(['session', 'project']);
 
     const operation = byName.get('projectOperation') ?? '';
     expect(operation).toContain('project');
-    expect(operation).toContain('update_state');
+    expect(operation).toContain('revision just read');
 
     const delegation = byName.get('projectDelegation') ?? '';
     expect(delegation.trim()).not.toBe('');
 
     const reporting = byName.get('projectReporting') ?? '';
     expect(reporting).toContain('accept');
+    expect(byName.get('projectContextPolicy')).toContain('A changed context section replaces');
+    expect(names).not.toContain('system');
   });
 });

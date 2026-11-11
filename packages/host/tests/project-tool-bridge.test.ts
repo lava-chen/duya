@@ -17,9 +17,17 @@ function bridge(projectToolApi?: ProjectToolService) {
 }
 
 describe('the standalone Host project tool domain', () => {
+  it('reads prompt context using only trusted attempt identity', async () => {
+    const getSessionContext = vi.fn(async () => null);
+    const hostBridge = bridge({ dispatch: vi.fn(), getSessionContext });
+    await hostBridge.dispatch('project:session-context', { sessionId: 'forged', projectId: 'other' }, { sessionId: 'work-1', runId: 'run-1', epoch: 0 });
+    expect(getSessionContext).toHaveBeenCalledWith('work-1');
+    await expect(hostBridge.dispatch('project:session-context', { sessionId: 'work-1' })).rejects.toMatchObject({ code: 'invalid_payload' });
+    expect(getSessionContext).toHaveBeenCalledTimes(1);
+  });
   it('serves the tool from the trusted caller, not the payload', async () => {
     const dispatch = vi.fn(async () => ({ ok: true as const, snapshot: undefined }));
-    const hostBridge = bridge({ dispatch });
+    const hostBridge = bridge({ dispatch, getSessionContext: vi.fn(async () => null) });
 
     const result = await hostBridge.dispatch(
       'project:tool',
@@ -37,7 +45,7 @@ describe('the standalone Host project tool domain', () => {
 
   it('refuses without a trusted caller', async () => {
     const dispatch = vi.fn();
-    const hostBridge = bridge({ dispatch });
+    const hostBridge = bridge({ dispatch, getSessionContext: vi.fn(async () => null) });
 
     await expect(hostBridge.dispatch('project:tool', { action: 'get' }))
       .rejects.toMatchObject<Partial<WorkerDbBridgeError>>({ code: 'invalid_payload' });

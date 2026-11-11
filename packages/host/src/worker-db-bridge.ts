@@ -517,6 +517,11 @@ export function createHostWorkerDbBridge(options: HostWorkerDbBridgeOptions): Wo
           if (!caller) throw new WorkerDbBridgeError('invalid_payload', 'Session delegation requires trusted worker context.');
           return options.sessionService.dispatch(action, payload, caller);
         }
+        case 'project:session-context': {
+          if (!options.projectToolApi) throw new WorkerDbBridgeError('unimplemented_domain', 'Project context requires the Host project service.');
+          if (!caller) throw new WorkerDbBridgeError('invalid_payload', 'Project context requires trusted worker context.');
+          return options.projectToolApi.getSessionContext(caller.sessionId);
+        }
         case 'project:tool': {
           if (options.projectToolApi === undefined) {
             throw new WorkerDbBridgeError('unimplemented_domain', 'Project tools require the Host project tool service.');

@@ -50,7 +50,7 @@ const PROJECT = 'project';
 export const SECTION_PLACEMENTS: Readonly<Record<string, SectionPlacementRule>> = {
   // ---- system half: must stay byte-identical across turns ----
   identity: stable('authored identity; never changes mid-session', 'module', [GENERAL, CODE]),
-  system: stable('core operating guidance', 'module', [GENERAL, CODE, PROJECT]),
+  system: stable('core operating guidance', 'module', [GENERAL, CODE]),
   destructiveActions: stable('safety policy', 'module', [GENERAL]),
   configProtection: stable('safety policy', 'module', [GENERAL, CODE, RESEARCH]),
   tools: stable('tool-usage guidance; tool NAMES change through the catalog channel, not this text', 'module', [GENERAL]),
@@ -84,6 +84,8 @@ export const SECTION_PLACEMENTS: Readonly<Record<string, SectionPlacementRule>> 
   projectOperation: stable('coordinator tool-usage guidance', 'module', [PROJECT]),
   projectDelegation: stable('delegation rules', 'module', [PROJECT]),
   projectReporting: stable('reporting contract', 'module', [PROJECT]),
+  projectContextPolicy: stable('context authority and recovery', 'module', [PROJECT]),
+  project_snapshot: volatile('Session-bound project facts refreshed for each model request', 'host-block'),
 
   // ---- context half: re-rendered per build and delivered as a message ----
   environment: volatile('cwd / branch / date can change every turn', 'dynamic', [GENERAL, CODE]),

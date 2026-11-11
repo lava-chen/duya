@@ -1839,6 +1839,11 @@ export async function dispatchDbAction(
     }
 
     // ==================== Project actions ====================
+    case 'project:session-context': {
+      const callerSessionId = trustedAttempt?.sessionId ?? sender?.registeredSessionId;
+      if (!callerSessionId) throw new Error('Project context requires a trusted Session');
+      return getDesktopProjectToolService().getSessionContext(callerSessionId);
+    }
     case 'project:tool': {
       // The caller is the Session the transport bound the worker to. A worker
       // payload cannot name it, because the tool resolves the project from
