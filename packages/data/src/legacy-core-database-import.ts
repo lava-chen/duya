@@ -5,11 +5,11 @@ import { DatabaseOwnerLock } from './database-owner-lock.js';
 
 const IMPORT_MARKER = 'unified_database_imported_core';
 const LEGACY_SCHEMA = 'legacy_core';
-const NON_DURABLE_TABLES = new Set([
+const NON_DURABLE_TABLES: readonly string[] = [
   'session_runtime_locks',
   'session_control_leases',
   'bot_scheduler_owners',
-]);
+];
 
 export interface LegacyCoreImportReport {
   importedTables: number;
@@ -68,7 +68,7 @@ export function importLegacyCoreDatabase(
       const merge = database.transaction(() => {
         database.pragma('defer_foreign_keys = ON');
         for (const source of sourceTables) {
-          if (source.name === 'meta' || NON_DURABLE_TABLES.has(source.name)) continue;
+          if (source.name === 'meta' || NON_DURABLE_TABLES.includes(source.name)) continue;
           if (source.sql?.trimStart().toUpperCase().startsWith('CREATE VIRTUAL TABLE')) continue;
           const copied = mergeTable(database, source.name);
           report.importedTables += copied.rows > 0 ? 1 : 0;

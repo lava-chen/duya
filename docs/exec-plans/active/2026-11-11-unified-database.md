@@ -29,7 +29,7 @@
 - [x] S1：Desktop 与独立 Host 收敛到一个 SQLite handle/owner lock；旧 `duya-core.db` 按目标 schema 列名幂等合并，冲突/未知 schema 时回滚并拒绝启动，成功后留 `.pre-unification` 备份。
 - [x] S2：main/core 迁移与 store 在 `duya-main.db` 共用同一物理 schema/连接；memory-state 保留自己的校验账本但在同一连接迁移，复用正式 `projects` 表；旧 `memory-state.db` 表按主键合并、成功后留备份。
 - [x] S3：`message_index.payload` 迁移保存完整 rollout 行；启动扫描旧 JSONL 回填缺行 payload，timeline/search 从 SQLite 读写，JSONL 保留为恢复镜像和导出格式。
-- [x] S4：验证升级、新安装与失败回滚；更新 tracked Host bundle；实现提交 `0b62e8d13` 已推送，PR #628 已开。未合并，等待必需 CI/review 与后续集成授权。
+- [x] S4：验证升级、新安装与失败回滚；更新 tracked Host bundle；实现提交 `0b62e8d13` 已推送，PR #628 已开。PR 首轮 CI 的 worker state ratchet 找到新增可变集合声明，现已改为只读数组；相关门禁、Data 测试与类型检查通过，等待修复提交上的 CI/review。未合并。
 
 ## 发现与决策
 
@@ -39,6 +39,7 @@
 - 现有 main/core 有表名冲突，尤其 research 与历史会话/消息副本；不能直接把表逐个 `ATTACH`/复制，必须以当前活跃 store schema 为准，显式映射后再核验行数和关键字段。
 - 历史 rollout JSONL 仍是回填与手动导出镜像；新写入事务把 payload 与 SQLite index/search 一起提交，读取和搜索以 SQLite 为准。用户删除外部镜像后，已迁入的时间线仍可在数据库读取。
 - `memory-state.db` 作为新安装活跃文件已取消；原有数据库作为导入来源，错误时保留并安全停机。
+- worker 模块状态 ratchet 不允许新增模块级可变 `Set`；遗留表名单用只读字符串数组表达，避免把迁移过滤条件变成 worker 进程状态。
 - 本计划优先保留现有配置的数据库路径，统一的是文件与生命周期；密钥、二进制附件、用户项目数据仍按其安全与所有权边界保存在外部。
 - 根仓库要求所有改动经 PR 集成；本轮在当前授权下可实现、验证和开 Draft PR，不会直接合并。
 
@@ -58,6 +59,7 @@
 | `3e2390141` / 当前 dirty tree | Linux x64，managed worktree | `git diff --check -- . ':!packages/host/bundle/worker-entry.js'` | 0 | worker minified bundle 中有生成器保留的模板字面量尾随空格；未手工改生成内容 |
 | `0b62e8d13` / 干净提交树 | Linux x64，managed worktree | `git status --short`; `git show --stat --oneline HEAD` | 0 / 实现提交已推送到 `origin/codex/unified-database` | tracked Host bundle 已由 `npm run electron:build` 重建 |
 | `0b62e8d13` / PR #628 | GitHub | `gh pr create --base master` | 0 / PR 已创建，未合并 | 等待必需 CI/review |
+| `7b8577f05` / importer 表名单 | Linux x64，managed worktree | 首轮 PR CI `Worker module-level state ratchet` | 失败 / 新增 `NON_DURABLE_TABLES` Set 被门禁拦截；改为只读数组后 `npm run architecture:worker-module-state` 通过，`npm run test --workspace @duya/data` 148 项通过，`npm run typecheck --workspace @duya/data` 通过 | 修复仍待提交并触发新的 PR CI |
 
 ## 接续 / 结果
 
