@@ -692,7 +692,7 @@ E2E 既有问题的证据：同一分支两轮失败点不同（run1 点击主�
 
 实现：Host admission 在同一 `changing` 互斥下调用既有幂等 `finish()` 恢复 pending journal，恢复成功后在释放切换锁前占住 run reservation。TUI/Host、Bot admission 和 Desktop `run:create` 共用该服务；背景进程、活跃 run、状态校验仍可拒绝恢复，失败时保留 journal 与 `/worktree recover` 手动入口。
 
-交付记录：owner `/root`；worktree `/home/lavachen/.codex/worktrees/checkout-auto-recovery/duya`；分支 `codex/checkout-auto-recovery`；base `2af62ce3c81b059e3e82c5b41e9f5299bdfd61fc`（master / PR #628 merge 后）；source commit `acb8aef3a`；bundle commit `51ad84296`。`workspace_get_context` 工具不可用；共享状态由 Git、PR #627 与 managed-worktree 清单对账。
+交付记录：owner `/root`；worktree `/home/lavachen/.codex/worktrees/checkout-auto-recovery/duya`；分支 `codex/checkout-auto-recovery`；base `2af62ce3c81b059e3e82c5b41e9f5299bdfd61fc`（master / PR #628 merge 后）；source commit `acb8aef3a`；bundle commit `51ad84296`；draft PR [#629](https://github.com/lava-chen/duya/pull/629)，CI/review 待完成，未合并。`workspace_get_context` 工具不可用；共享状态由 Git、PR #627 与 managed-worktree 清单对账。
 
 验证（Linux x64，Node v26.13.0；源改动 SHA `acb8aef3a`，构建/最终 SHA `51ad84296`）：
 
@@ -705,4 +705,4 @@ E2E 既有问题的证据：同一分支两轮失败点不同（run1 点击主�
 | `npm run electron:build` | exit 0；worker、CLI、Gateway 与 Electron main 构建完成 |
 | `npm run bundle:verify` | exit 0；FRESH，0/1121 bundle inputs changed |
 
-工作树提交后干净；忽略的本地依赖/构建产物未提交。独立依赖安装首次因 Puppeteer Chrome 缓存目录不完整失败；设置 `PUPPETEER_SKIP_DOWNLOAD=true` 重试后成功，未修改依赖清单。下一步：推送分支、创建 draft PR 并把 PR URL 记入本节。
+实现与验证完成；工作树提交后干净，忽略的本地依赖/构建产物未提交。独立依赖安装首次因 Puppeteer Chrome 缓存目录不完整失败；设置 `PUPPETEER_SKIP_DOWNLOAD=true` 重试后成功，未修改依赖清单。下一步：等待 #629 最新 head 的必需 CI 和 review；未经授权不合并。
