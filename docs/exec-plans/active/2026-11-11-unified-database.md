@@ -1,7 +1,7 @@
 # 2026-11-11 Duya 统一应用数据库
 
 状态：active · 负责人：当前 Codex 会话 · 更新：2026-11-11
-分支：`codex/unified-database` · worktree：`/home/lavachen/.codex/worktrees/unified-app-database/duya` · base：`3e2390141` · owner：`/root`
+分支：`codex/unified-database` · worktree：`/home/lavachen/.codex/worktrees/unified-app-database/duya` · base：`3e2390141` · 实现提交：`0b62e8d13` · PR：[ #628 ](https://github.com/lava-chen/duya/pull/628) · owner：`/root`
 
 ## 目标与边界
 
@@ -29,7 +29,7 @@
 - [x] S1：Desktop 与独立 Host 收敛到一个 SQLite handle/owner lock；旧 `duya-core.db` 按目标 schema 列名幂等合并，冲突/未知 schema 时回滚并拒绝启动，成功后留 `.pre-unification` 备份。
 - [x] S2：main/core 迁移与 store 在 `duya-main.db` 共用同一物理 schema/连接；memory-state 保留自己的校验账本但在同一连接迁移，复用正式 `projects` 表；旧 `memory-state.db` 表按主键合并、成功后留备份。
 - [x] S3：`message_index.payload` 迁移保存完整 rollout 行；启动扫描旧 JSONL 回填缺行 payload，timeline/search 从 SQLite 读写，JSONL 保留为恢复镜像和导出格式。
-- [ ] S4：验证升级、新安装与失败回滚；整理生成 bundle 差异、更新本计划并提交，随后按用户授权开 PR（不合并）。
+- [x] S4：验证升级、新安装与失败回滚；更新 tracked Host bundle；实现提交 `0b62e8d13` 已推送，PR #628 已开。未合并，等待必需 CI/review 与后续集成授权。
 
 ## 发现与决策
 
@@ -56,11 +56,13 @@
 | `3e2390141` / Data/Desktop 主路径 | Linux x64，managed worktree | `npm run electron:build` | 0 / Electron main/preload 与 worker bundle 构建完成 | 生成并检查 tracked Host bundle；存在既存 Vite 大 chunk 与 esbuild `require.resolve` 警告 |
 | `3e2390141` / 真实 Desktop IPC 与归档 | Linux x64，managed worktree | `npx playwright test --config=e2e/playwright.config.ts --project=ipc e2e/ipc/bot-delivery.spec.ts e2e/ipc/session-archive.spec.ts` | 7 项通过；Playwright 进程需 SIGINT 才退出 | Electron 日志确认测试数据目录内只打开 `duya-main.db`；未见用例失败 |
 | `3e2390141` / 当前 dirty tree | Linux x64，managed worktree | `git diff --check -- . ':!packages/host/bundle/worker-entry.js'` | 0 | worker minified bundle 中有生成器保留的模板字面量尾随空格；未手工改生成内容 |
+| `0b62e8d13` / 干净提交树 | Linux x64，managed worktree | `git status --short`; `git show --stat --oneline HEAD` | 0 / 实现提交已推送到 `origin/codex/unified-database` | tracked Host bundle 已由 `npm run electron:build` 重建 |
+| `0b62e8d13` / PR #628 | GitHub | `gh pr create --base master` | 0 / PR 已创建，未合并 | 等待必需 CI/review |
 
 ## 接续 / 结果
 
 已实现：任务计划、数据库目标盘点；DataHost 已具备当 main/core 文件路径相同时复用一个 handle、owner lock 和 WAL checkpoint owner 的基础，并按平台安全比较路径及关闭共享连接。已验证：主检出干净、当前数据导入 marker 和 source ownership；全量类型/包构建门禁及 Data 包类型、架构门禁通过。已合并：否。
 
-下一步：核对最终 dirty 文件与生成 bundle，提交完整变更并开 PR；PR 开出后把 PR 链接、head SHA 和检查状态补回本计划。不合并，等待集成授权。
+下一步：观察 PR #628 的必需 CI/review；若需修复，在当前 managed worktree 修改并重验。合并必须等待用户集成授权。
 
 回收：保留 managed worktree，直到 PR 合并并完成合并后验证；ignored 依赖和构建产物需在回收前单独核对。
