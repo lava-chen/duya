@@ -147,3 +147,19 @@ master 重新打包安装**，把快照换回正式版本；还原 = 删除 `~/.
   永远一致。跳转置 `follow=false` 并取消 pointer 手势。
 - **inline 不跳**：终端拥有 scrollback、应用无法重绘已提交行（与 inline 无
   app 滚动的同一条理由），动作静默 no-op——与 PgUp/PgDn 的 inline 语义一致。
+
+## PR #624 基线同步（2026-11-11）
+
+- #624 修复了设置面板测试中因新增三个显示画像导致的两个过期导航步数，并已推送到
+  `codex/cli-pi-workbench`，新 head `3f8fcb5afe41d6c42d77f73425c2512001388608`。
+- 将该 head 合入本分支以保持 stacked PR 的基线；冲突仅在同一测试文件及说明注释，
+  采用 #624 的相同修复（Live only 按下 5 次、toolGroupMode 按下 10 次）。
+- 同步后 serial TUI suite：91 文件、1196 passed、1 expected fail、0 failed。并行运行时
+  perf baseline 曾因竞争测得 23.232ms（阈值 7ms）误红；隔离运行通过，串行全套通过。
+- 新增 PTY 验证：functional smoke 全部通过（启动/侧栏、Ctrl+F 搜索、命中高亮、Esc、
+  Alt+Up/Down 无崩溃、干净退出）；content smoke 全部通过（命令块、滚动条、paused 标记、
+  鼠标点击定位、真实内容搜索、干净退出）。
+- `npm run -w @duya/cli typecheck` exit 0；`npm run architecture:check` exit 0，无新增违规。
+- Linux x64 / Node 26.13.0；验证工作树 `.claude/worktrees/tui-fullscreen-framework-fix`。
+- 下一步：提交此基线合并并推送，等待 GitHub CI；真实 provider 回合跳转、Windows/ConPTY
+  与终端观感验收仍待完成。
