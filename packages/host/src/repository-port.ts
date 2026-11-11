@@ -86,7 +86,7 @@ import type {
  * to surface should not be expressible as a typo.
  */
 export type ConnectionOwner =
-  /** `duya-core.db`, opened by `initCoreDatabase()`. */
+  /** Canonical `duya-main.db`, opened by `initCoreDatabase()`. */
   | 'initCoreDatabase'
   /** `duya-main.db`, opened by `initDatabaseFromBoot()`. */
   | 'initDatabaseFromBoot';

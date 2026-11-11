@@ -4,6 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { CoreDataHost, collectCoreDatabaseMigrations } from '../src/core-data-host.js';
 import { CoreDatabase } from '../src/core-database.js';
+import { DatabaseHost } from '../src/database-host.js';
 import { ProjectStore } from '../src/project-store.js';
 
 const temporaryDirectories: string[] = [];
@@ -85,5 +86,44 @@ describe('CoreDataHost', () => {
     const reopened = createHost(root);
     expect(reopened.stores.sessions.get('session-1')?.title).toBe('Persisted from Host');
     reopened.close();
+  });
+
+  it('shares the main connection and imports the previous core database before exposing stores', () => {
+    const root = makeTempDirectory();
+    const legacyPath = path.join(root, 'duya-core.db');
+    const canonicalPath = path.join(root, 'duya-main.db');
+    const legacy = createHost(root);
+    legacy.stores.sessions.create({ id: 'legacy-session', title: 'Imported core session' });
+    legacy.close();
+
+    const host = new DatabaseHost();
+    const main = host.openMainDatabase({
+      filename: canonicalPath,
+      ports: { deriveConnectionSlug: (connectionId) => connectionId },
+    });
+    try {
+      const core = host.openCoreDatabase({
+        filename: canonicalPath,
+        legacyDatabasePath: legacyPath,
+        rolloutRoot: path.join(root, 'sessions'),
+        attachmentsRoot: path.join(root, 'attachments'),
+        messageLogPorts: {
+          botSessionIdPrefix: 'bot:',
+          parseBotSessionId: () => null,
+          getBotSessionLogPath: (agentId, dataRoot) => path.join(dataRoot, 'agents', agentId, 'sessions.jsonl'),
+          getBotSessionsDir: (agentId, dataRoot) => path.join(dataRoot, 'agents', agentId, 'sessions'),
+        },
+      });
+      expect(core.database.db).toBe(main.db);
+      expect(core.stores.sessions.get('legacy-session')?.title).toBe('Imported core session');
+      expect((main.db.pragma('table_info(permission_requests)') as Array<{ name: string }>).map(({ name }) => name))
+        .toEqual(expect.arrayContaining(['mode', 'expires_at', 'reason']));
+      expect((main.db.pragma('table_info(session_runtime_locks)') as Array<{ name: string }>).map(({ name }) => name))
+        .toContain('origin');
+      expect(fs.existsSync(legacyPath)).toBe(false);
+      expect(fs.existsSync(`${legacyPath}.pre-unification`)).toBe(true);
+    } finally {
+      host.close();
+    }
   });
 });

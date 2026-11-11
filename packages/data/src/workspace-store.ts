@@ -1,5 +1,5 @@
 /**
- * workspace-store.ts — Workspace identity storage for `duya-core.db`
+ * workspace-store.ts — Workspace identity storage for the application database
  * (plan 587 C6.2).
  *
  * V1 Workspace is a device-local UUID identity that MAY bind a Project or be
@@ -16,11 +16,10 @@
  * rename or a relocate bumps `workspaces.revision`; it never produces a new
  * `workspace_id` or `project_id`.
  *
- * These tables therefore live in the SAME repository and the SAME migration
- * sequence as the `projects` table (next free id after `run-store.ts`'s 37),
- * so there is no second `projects` table and no shadow truth. The 4-column
- * FK-placeholder `projects` shadow inside `memory-state.db` (see
- * `memory-state/catalogSync.ts`) is left alone and is not extended.
+ * These tables live in the same repository and migration sequence as the
+ * canonical `projects` table. The historical four-column projects placeholder
+ * is only present in legacy memory-state.db files and is imported into the
+ * canonical table during upgrade.
  *
  * ## Delete semantics
  *

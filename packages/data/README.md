@@ -5,22 +5,22 @@ layer.
 
 - `resolveDataRoot()` defaults to `~/.duya`, supports `DUYA_DATA_ROOT`, and
   keeps namespaced test runs under `.duya/test-namespaces/`.
-- `resolveDatabasePaths()` keeps the main, core, and memory-state SQLite files
-  beside one another, including when `storage.database_path` is configured.
+- `resolveDatabasePaths()` points all application stores at one canonical
+  database file and exposes old core/memory database paths for one-time import.
 - `migratePreviousDefaultDatabases()` copies the prior Electron-default DB set
   and SQLite WAL/SHM files while retaining the old files as recovery copies.
 - `openSqliteDatabase()` owns the common SQLite open settings (directory
   creation, WAL, busy timeout, and foreign keys). Both Desktop's
-  `duya-main.db` adapter and `CoreDatabase` use it. The main `duya-main.db`
-  schema and numbered migrations also live here; `MainSchemaPorts` lets the
+  `duya-main.db` adapter and `CoreDatabase` use it. The main schema and
+  numbered core migrations also live here; `MainSchemaPorts` lets the
   Host supply connection-slug derivation without making Data depend on
   plugin-core. Data owns the main database connection/schema/checkpoint/close
   lifecycle through `DatabaseHost`, which owns the main and core handles for
   one process. Desktop supplies the logger adapter and constructs the host;
   configured path selection, safe-mode policy, compatibility accessors, and
   shutdown ordering remain in Desktop during this migration.
-- `CoreDatabase` opens `duya-core.db`, applies the supplied migrations, and
-  owns its WAL checkpoint lifecycle.
+- `CoreDatabase` applies the core migrations and stores through the shared
+  `DatabaseHost` connection when main/core resolve to one file.
 - `RunStore` owns the `runs` and `run_events` schema migrations and durable
   run/event persistence operations.
 - Durable Task, PermissionLedger, Lock, Goal, SpawnEdge, Attachment, ModeState,

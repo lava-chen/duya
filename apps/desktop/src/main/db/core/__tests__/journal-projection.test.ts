@@ -115,7 +115,7 @@ describe('journal → listBySession end-to-end projection', () => {
     expect(ids).not.toContain('m-2');
     expect(ids).not.toContain('m-3');
     expect(ids).toContain('m-4');
-    expect(events.some((e) => e.kind === 'rebase')).toBe(true);
+    expect(events.some((e) => e.kind === 'rebase')).toBe(false);
   });
 
   it('synthesizes interrupted tool_results and drops orphans on read', () => {

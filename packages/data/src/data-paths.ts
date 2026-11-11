@@ -14,8 +14,14 @@ export interface DatabasePathOptions {
 
 export interface DatabasePaths {
   mainDatabasePath: string;
+  /** Canonical path for all Duya application SQLite stores. */
   coreDatabasePath: string;
+  /** Previous separate core database path, retained only for upgrade import. */
+  legacyCoreDatabasePath: string;
+  /** Canonical path for memory state (the shared main database). */
   memoryStateDatabasePath: string;
+  /** Previous separate memory-state database path, retained for import. */
+  legacyMemoryStateDatabasePath: string;
 }
 
 const TEST_NAMESPACE_PATTERN = /^[a-zA-Z0-9_-]+$/;
@@ -33,14 +39,16 @@ export function resolveDataRoot(options: DataRootOptions = {}): string {
   return join(homeDirectory, '.duya');
 }
 
-/** Resolve the three SQLite files that share one configured database directory. */
+/** Resolve the canonical application database and legacy upgrade source paths. */
 export function resolveDatabasePaths(options: DatabasePathOptions = {}): DatabasePaths {
   const mainDatabasePath = options.databasePath ?? join(options.dataRoot ?? resolveDataRoot(), 'duya-main.db');
   const databaseDirectory = dirname(mainDatabasePath);
   return {
     mainDatabasePath,
-    coreDatabasePath: join(databaseDirectory, 'duya-core.db'),
-    memoryStateDatabasePath: join(databaseDirectory, 'memory-state.db'),
+    coreDatabasePath: mainDatabasePath,
+    legacyCoreDatabasePath: join(databaseDirectory, 'duya-core.db'),
+    memoryStateDatabasePath: mainDatabasePath,
+    legacyMemoryStateDatabasePath: join(databaseDirectory, 'memory-state.db'),
   };
 }
 

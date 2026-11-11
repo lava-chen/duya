@@ -1,11 +1,11 @@
 import { resolveDatabasePaths } from '@duya/data/data-paths';
 
 /**
- * Resolve the memory-state.db path from the boot.json database directory.
+ * Resolve the shared application database path from the boot.json directory.
  *
  * The boot.json database directory is the same directory that holds
  * `duya-main.db` (resolved by `apps/desktop/src/main/config/boot-config.ts`). The
- * memory-state DB sits next to it as a peer file.
+ * Memory state tables now live in the canonical main database.
  *
  * This function does NOT fall back to `~/.duya` if the directory is
  * missing — a user with a non-default data dir would silently lose

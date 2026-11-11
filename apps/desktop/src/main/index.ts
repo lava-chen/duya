@@ -17,8 +17,8 @@ import * as path from 'path';
 import * as fs from 'fs';
 
 import { registerDbHandlers, registerSidebarSectionsHandlers, registerMailboxHandlers, registerMemoryListHandlers, registerMemorySystemLogHandlers, registerMemoryRagRebuildHandler, registerMemoryWakeupHandlers, registerBotChannelHandlers, registerGroupHandlers, registerBotHandlers, registerPanelWindowHandlers } from './ipc/index';
-import { initDatabaseFromBoot, getDatabase, getSqliteCtor } from './db/connection';
-import { initCoreDatabase } from './db/core-connection';
+import { initDatabaseFromBoot, getDatabase, getSqliteCtor, closeDatabase } from './db/connection';
+import { initCoreDatabase, closeCoreDatabase } from './db/core-connection';
 import { registerAgentHandlers } from './agents/agent-communicator';
 import { registerProviderIpcHandlers } from './services/providers/provider-ipc-handlers';
 import { getProviderStore } from './services/providers/provider-store-electron';
@@ -339,14 +339,38 @@ if (gotTheLock) {
       return;
     }
 
-    // Initialize the core database (duya-core.db + rollout files) for the
+    // Initialize core stores (shared application database + rollout files) for the
     // six core aggregates. Shares the same better-sqlite3 native binding as
     // the legacy database. See plan 328 Phase 1.
     const sqliteCtor = getSqliteCtor();
     if (sqliteCtor) {
-      initCoreDatabase(sqliteCtor);
+      const coreStores = initCoreDatabase(sqliteCtor);
+      if (!coreStores) {
+        closeDatabase();
+        createSafeModeWindow('Core database initialization or migration failed', dbResult.dbPath || dbPath, getIconPath);
+        return;
+      }
     } else {
       logger.warn('Skipping core database init — better-sqlite3 not loaded', undefined, 'Main');
+      closeDatabase();
+      createSafeModeWindow('Core database could not be initialized', dbResult.dbPath || dbPath, getIconPath);
+      return;
+    }
+
+    // Install memory-state tables and merge any previous memory-state.db even
+    // when the optional memory worker is disabled. It reuses the main handle.
+    try {
+      const database = getDatabase();
+      if (!database) throw new Error('The shared application database is not initialized');
+      const { bootstrap } = await import('./memory-state');
+      bootstrap({ bootJsonDatabaseDir: path.dirname(database.name), database });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error('Memory-state database migration failed', error instanceof Error ? error : new Error(message), undefined, LogComponent.DB);
+      closeCoreDatabase();
+      closeDatabase();
+      createSafeModeWindow(message, dbResult.dbPath || dbPath, getIconPath);
+      return;
     }
 
     // Start Host APIs before composing the Control Plane. Its repository gets

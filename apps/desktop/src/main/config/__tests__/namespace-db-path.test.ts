@@ -130,12 +130,11 @@ describe('a namespaced test run derives its database from its own userData', () 
     expect(dbPath).not.toContain(path.join('worktrees', '587-e4-4a'));
   });
 
-  it('keeps the whole database set on this run root, not just duya-main.db', () => {
-    // resolveCoreDatabasePath() derives its directory from resolveDatabasePath(),
-    // so a redirect would silently split the set across two trees.
+  it('keeps the canonical database on this run root', () => {
+    // resolveCoreDatabasePath() aliases the canonical main database path.
     seedDatabasePath(namespaceConfigPath, path.join(mocks.home, 'gone', 'databases', 'duya-main.db'));
 
-    expect(resolveCoreDatabasePath()).toBe(path.join(mocks.userData, 'databases', 'duya-core.db'));
+    expect(resolveCoreDatabasePath()).toBe(path.join(mocks.userData, 'databases', 'duya-main.db'));
   });
 
   it('does not ask to persist the pin, so no run leaves one for the next', () => {
@@ -163,7 +162,7 @@ describe('the production configuration contract is unchanged', () => {
       legacyDbPath: path.join(mocks.userData, 'databases', 'duya-main.db'),
       needsBootWrite: true,
     });
-    expect(resolveCoreDatabasePath()).toBe(path.join(mocks.home, '.duya', 'duya-core.db'));
+    expect(resolveCoreDatabasePath()).toBe(path.join(mocks.home, '.duya', 'duya-main.db'));
     expect(resolveRolloutRoot()).toBe(path.join(mocks.home, '.duya'));
     expect(resolveAttachmentsRoot()).toBe(path.join(mocks.home, '.duya', 'attachments'));
   });

@@ -448,7 +448,7 @@ describe('MessageLog', () => {
     expect(payload1.message.content).toEqual([{ type: 'text', text: 'second message' }]);
   });
 
-  it('listBySession tolerates a missing rollout file without dropping the index', () => {
+  it('listBySession reads durable history from SQLite when the rollout mirror is missing', () => {
     const sessionId = 'sess-1';
     const t = Date.now();
     insertSessionFixture(db, sessionId, t);
@@ -462,14 +462,13 @@ describe('MessageLog', () => {
     const rel = db.prepare('SELECT rollout_path FROM sessions WHERE id = ?').get(sessionId) as { rollout_path: string };
     fs.rmSync(path.join(rootDir, rel.rollout_path));
 
-    // Must NOT throw ENOENT — returns empty without dropping the index. The
-    // index rows are preserved so a future scan()/recovery can repopulate
-    // from a restored file instead of the user losing the session outright.
-    expect(log.listBySession(sessionId)).toEqual([]);
+    // SQLite is the durable source; deleting the portable mirror does not hide
+    // history or remove its index rows.
+    expect(log.listBySession(sessionId).map((event) => event.id)).toEqual(['m-1']);
     expect(log.getCount(sessionId)).toBe(1);
   });
 
-  it('listBySession auto-recovers a drifted rollout_path by sessionId pattern', () => {
+  it('listBySession keeps SQLite history authoritative when the rollout mirror drifts', () => {
     const sessionId = 'sess-recover';
     const t1 = Date.now();
     const t2 = t1 + 24 * 60 * 60 * 1000; // +1 day
@@ -509,20 +508,19 @@ describe('MessageLog', () => {
     };
     fs.writeFileSync(newAbs, JSON.stringify(driftEntry) + '\n', 'utf8');
 
-    // At this point the original file still exists too — both candidate
-    // files match the sessionId pattern. The newer stamp must win.
-    // (delete the original to make the test deterministic about which file
-    // listBySession will read).
+    // Delete the original mirror and create a newer conflicting file. SQLite
+    // remains authoritative and the mirror is not used to replace history.
     fs.rmSync(path.join(rootDir, original.rollout_path));
 
     const events = log.listBySession(sessionId);
     expect(events).toHaveLength(1);
-    expect(events[0].id).toBe('m-drift');
+    expect(events[0].id).toBe('m-1');
     expect(events[0].seq).toBe(1);
 
-    // sessions.rollout_path must now point at the recovered file.
+    // A read does not silently adopt a conflicting portable mirror.
     const updated = db.prepare('SELECT rollout_path FROM sessions WHERE id = ?').get(sessionId) as { rollout_path: string };
-    expect(updated.rollout_path).toBe(newRel);
+    expect(updated.rollout_path).toBe(original.rollout_path);
+    expect(fs.existsSync(path.join(rootDir, newRel))).toBe(true);
   });
 
   // ─── searchText ───

@@ -1,12 +1,17 @@
-import { CoreDatabase, type DataLogger, type Migration, type SqliteCtor } from './core-database.js';
+import { CoreDatabase, type DataLogger, type Migration, type SqliteCtor, type SqliteDatabase } from './core-database.js';
 import { createCoreDataStores, collectCoreDataMigrations, type CoreDataStores } from './core-stores.js';
 import { MessageLog, type MessageLogPorts } from './message-log.js';
 import { migrateLegacyArchivedRows } from './legacy-archive-migration.js';
 import { dirname, join } from 'node:path';
 import { needsProjectsImport, runProjectsImport } from './projects-import.js';
+import { importLegacyCoreDatabase } from './legacy-core-database-import.js';
 
 export interface CoreDataHostOptions {
   filename: string;
+  /** Optional shared connection owned by DatabaseHost's MainDatabase. */
+  database?: SqliteDatabase;
+  /** Previous separate core database, imported once after current migrations. */
+  legacyDatabasePath?: string;
   rolloutRoot: string;
   attachmentsRoot: string;
   messageLogPorts: MessageLogPorts;
@@ -28,6 +33,7 @@ export class CoreDataHost {
   constructor(options: CoreDataHostOptions) {
     this.database = new CoreDatabase({
       filename: options.filename,
+      ...(options.database ? { database: options.database } : {}),
       ...(options.sqlite ? { sqlite: options.sqlite } : {}),
       migrations: collectCoreDatabaseMigrations(),
       ...(options.logger ? { logger: options.logger } : {}),
@@ -35,6 +41,9 @@ export class CoreDataHost {
 
     try {
       const db = this.database.db;
+      if (options.legacyDatabasePath) {
+        importLegacyCoreDatabase(db, options.legacyDatabasePath, options.logger);
+      }
       const stores = createCoreDataStores(db, { attachmentsRoot: options.attachmentsRoot });
       const messageLog = new MessageLog(db, options.rolloutRoot, options.messageLogPorts);
 
@@ -48,6 +57,7 @@ export class CoreDataHost {
       for (const sessionId of archiveReport.migrated) {
         messageLog.invalidateRolloutPathCache(sessionId);
       }
+      messageLog.hydratePayloadsFromRollouts();
 
       try {
         if (needsProjectsImport(db)) {

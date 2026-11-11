@@ -4,6 +4,8 @@ import type { Database } from 'better-sqlite3';
 import { getLogger, LogComponent } from '../logging/logger';
 import { resolveMemoryDbPath } from './path';
 import { runMigrations } from './migrations';
+import { importLegacyMemoryDatabase } from './legacy-memory-database-import';
+import { resolveDatabasePaths } from '@duya/data/data-paths';
 
 /**
  * Memory state DB lifecycle.
@@ -28,6 +30,7 @@ type BetterSqlite3Ctor = new (filename: string) => Database;
 
 let db: Database | null = null;
 let ctorCache: BetterSqlite3Ctor | null = null;
+let ownsDb = false;
 
 /**
  * Load the better-sqlite3 constructor.
@@ -62,8 +65,11 @@ export function loadBetterSqlite3Ctor(): BetterSqlite3Ctor {
   return loadCtor();
 }
 
-export interface BootstrapOptions {  /** Database directory resolved from boot.json (required — no fallback). */
+export interface BootstrapOptions {
+  /** Database directory resolved from boot.json (required — no fallback). */
   bootJsonDatabaseDir: string;
+  /** The application-owned shared connection. When provided, this module never closes it. */
+  database?: Database;
   /**
    * Optional constructor injection for tests. Production callers should
    * omit this so the loader respects `DUYA_BETTER_SQLITE3_PATH`.
@@ -84,21 +90,24 @@ export function bootstrap(opts: BootstrapOptions): Database {
     return db;
   }
 
-  const Ctor = opts.betterSqlite3Ctor ?? loadCtor();
-  const dbPath = resolveMemoryDbPath({ bootJsonDatabaseDir: opts.bootJsonDatabaseDir });
+  const Ctor = opts.database ? null : opts.betterSqlite3Ctor ?? loadCtor();
+  const dbPath = opts.database?.name ?? resolveMemoryDbPath({ bootJsonDatabaseDir: opts.bootJsonDatabaseDir });
 
   // Ensure the parent directory exists (matches the main DB's behavior).
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
-  db = new Ctor(dbPath);
+  db = opts.database ?? new Ctor!(dbPath);
+  ownsDb = !opts.database;
 
   // PRAGMAs — mirror the main DB (apps/desktop/src/main/db/connection.ts) plus
   // temp_store=MEMORY for the shadow-mode workload.
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
-  db.pragma('synchronous = NORMAL');
-  db.pragma('busy_timeout = 5000');
-  db.pragma('temp_store = MEMORY');
+  if (ownsDb) {
+    db.pragma('journal_mode = WAL');
+    db.pragma('foreign_keys = ON');
+    db.pragma('synchronous = NORMAL');
+    db.pragma('busy_timeout = 5000');
+    db.pragma('temp_store = MEMORY');
+  }
 
   logger.warn(
     'memory-state: DB opened',
@@ -106,7 +115,18 @@ export function bootstrap(opts: BootstrapOptions): Database {
     LogComponent.DB
   );
 
-  runMigrations(db);
+  try {
+    runMigrations(db, { unifiedDatabase: !ownsDb });
+    if (!ownsDb) {
+      const { legacyMemoryStateDatabasePath } = resolveDatabasePaths({ databasePath: dbPath });
+      importLegacyMemoryDatabase(db, legacyMemoryStateDatabasePath);
+    }
+  } catch (error) {
+    if (ownsDb) db.close();
+    db = null;
+    ownsDb = false;
+    throw error;
+  }
 
   return db;
 }
@@ -129,7 +149,7 @@ export function closeDb(): void {
   if (db) {
     const logger = getLogger();
     try {
-      db.close();
+      if (ownsDb) db.close();
       logger.warn('memory-state: DB closed', undefined, LogComponent.DB);
     } catch (err) {
       logger.warn(
@@ -139,6 +159,7 @@ export function closeDb(): void {
       );
     } finally {
       db = null;
+      ownsDb = false;
     }
   }
 }

@@ -23,6 +23,7 @@
 | [2026-10-25-data-rollout-bucket](active/2026-10-25-data-rollout-bucket.md) | — | 写路径：rollout 按日期桶落地，不再每批重命名文件（毫秒戳导致判定恒成立），写路径耗时降 59%–68%；PR #462 已合并 |
 | [2026-10-25-data-read-range-fd](active/2026-10-25-data-read-range-fd.md) | — | 读路径：投影会话时复用同一个文件句柄，不再逐行 open/close（8000 条投影 656ms → 68ms）；PR #466 已合并 |
 | [2026-10-25-data-append-index-lookup](active/2026-10-25-data-append-index-lookup.md) | — | 消息写路径：`appendBatch` 去重检查按批内 id 点查，不再全量扫会话索引（去掉 O(N²)） |
+| [2026-11-11 Duya 统一应用数据库](active/2026-11-11-unified-database.md) | P0 | main/core/memory-state 与 rollout 数据的合并计划；先落单连接/owner 生命周期，再迁移表和消息载荷 |
 | [624 Agent 组合层与提示词重构](active/624-agent-composition-layer.md) | P0 | A1–F2 十个切片已落地（10 个 commit，相关套件 35 文件 / 320 用例通过）；剩余：`CompactionOutcome.systemPrompt` 协议缺口、bot 双轨、冻结 `AgentComposition` 与 `ChatOptions` 注入项分离 |
 | [Coordinator 提示词系统](active/2026-11-06-project-coordinator-prompts.md) | P0 | 完整设计草案：常驻正文、动态上下文、注入/恢复、工作交接与装配/模型两层评估；本轮不改生产 Runtime |
 | [623 网关通道能力补全](active/623-gateway-channel-capability-parity.md) | P1 | 适配器层已交付（能力表 + 5 个新通道 + 既有通道缺口）；下一步按计划 Phase 3 接线 Host/Desktop 的 10 处硬编码平台枚举 |
