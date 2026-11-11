@@ -89,7 +89,20 @@ export type ThemeToken =
    * makes — and because every consumer already carries a `ThemeTags` around.
    */
   | 'composerBg'
-  | 'promptBg';
+  | 'promptBg'
+  /**
+   * The fills behind transcript search matches.
+   *
+   * Like pi's `searchMatchBg` / `searchMatchCurrentBg`: every hit on a visible
+   * line takes the first fill, the hit the cursor points at takes the second.
+   * Both are BACKGROUNDS (`-bg` bodies) so the text colour underneath survives.
+   * The yellow family is the convention search UIs share (vim, less, pi); the
+   * light palette uses its pale end so dark text keeps its contrast. 256-colour
+   * values for the same reason as the diff fills above — no truecolor channel,
+   * and hex tags were rejected.
+   */
+  | 'searchMatchBg'
+  | 'searchMatchCurrentBg';
 
 /** Token → blessed tag body (`'gray-fg'`, `'241-fg'`). */
 export type ThemeTags = Readonly<Record<ThemeToken, string>>;
@@ -123,6 +136,9 @@ export const DARK_THEME_TAGS: ThemeTags = {
   link: 'gray-fg',
   composerBg: '236-bg',
   promptBg: '238-bg',
+  // Dark yellows: the hit is dim, the cursor's hit one step brighter.
+  searchMatchBg: '58-bg',
+  searchMatchCurrentBg: '100-bg',
 };
 
 /**
@@ -155,6 +171,10 @@ export const LIGHT_THEME_TAGS: ThemeTags = {
   link: '243-fg',
   composerBg: '255-bg',
   promptBg: '254-bg',
+  // Pale cream and sand: readable under dark text, distinct from the
+  // greenish/rose diff fills (194/224).
+  searchMatchBg: '229-bg',
+  searchMatchCurrentBg: '186-bg',
 };
 
 const PALETTES: Readonly<Record<ThemeName, ThemeTags>> = {

@@ -49,6 +49,9 @@ export const REBINDABLE_ACTIONS: ReadonlySet<string> = new Set([
   'transcript-previous',
   'transcript-next',
   'transcript-toggle-block',
+  'transcript-search',
+  'transcript-previous-turn',
+  'transcript-next-turn',
 ]);
 
 /**
@@ -384,6 +387,10 @@ function toBlessedKey(display: string): string | null {
   }
   if (alt) {
     if (/^[a-z]$/.test(named)) return `M-${named}`;
+    // Alt+arrows are a chord the own key parser delivers (`\x1b[1;3A` →
+    // `M-up`) and the transcript's turn jumps bind; blessed names them the
+    // same way it names the control variants.
+    if (named === 'left' || named === 'right' || named === 'up' || named === 'down') return `M-${named}`;
     return null;
   }
   switch (named) {

@@ -610,14 +610,12 @@ async function loadSessionMessages(
 /**
  * Whether to run the inline TUI.
  *
- * `DUYA_TUI_INLINE=1` opts in. The default is still the full-screen window
- * because the inline model is new here and its scrollback geometry has not been
- * exercised against a range of real terminals yet; codex, claude and minimax all
- * default to inline, and this is the switch that makes that reachable without a
- * rebuild.
- *
- * `DUYA_TUI_INLINE=0` is honoured as an explicit off, so a shell that exports
- * `DUYA_TUI_INLINE=1` globally can still turn it off for one run.
+ * This helper serves the standalone `tui` entry; the `chat` entry decides from
+ * the saved `displayMode` preference instead (`chat.ts`'s TUIApp wiring), which
+ * also defaults to full-screen since plan 2026-11-11-tui-fullscreen-framework
+ * S4. Either way `DUYA_TUI_INLINE=1` opts in and `DUYA_TUI_INLINE=0` is
+ * honoured as an explicit off, so a shell that exports the variable globally
+ * can still turn it off for one run.
  */
 export function inlineTuiRequested(env: NodeJS.ProcessEnv = process.env): boolean {
   const value = env['DUYA_TUI_INLINE'];

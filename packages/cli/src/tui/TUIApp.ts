@@ -56,6 +56,13 @@ import { resolveDisplayProfile } from './display-profiles.js';
 import { StatusBar } from './components/status-bar.js';
 import { renderTree, type UIComponent } from './core/component.js';
 import { PointerDispatcher, type HitRegion } from './core/pointer.js';
+import {
+  ScrollbarColumn,
+  scrollTopForThumbStart,
+  scrollbarThumb,
+  type ScrollbarThumb,
+} from './scrollbar.js';
+import { nextTurnAnchor, previousTurnAnchor } from './turn-navigation.js';
 import { tagViewOf, spansToTags } from './markdown/inline.js';
 import { DeltaBuffer, DEFAULT_STALE_MS } from './delta-buffer.js';
 import { RenderScheduler } from './render-scheduler.js';
@@ -199,6 +206,12 @@ const COMPOSER_INSET = 2;
 
 /** Transcript lines moved per wheel tick. Three is the conventional step. */
 const WHEEL_STEP_LINES = 3;
+/**
+ * Context rows kept ABOVE the line a jump lands on — a search hit or a turn
+ * anchor glued to the top edge reads as if something were cut off; two rows
+ * of what came before give the target its place in the conversation.
+ */
+const ANCHOR_CONTEXT_ROWS = 2;
 
 /** How long a second Ctrl+C stays lethal. */
 const DOUBLE_CTRL_C_MS = 2000;
@@ -787,6 +800,35 @@ export class TUIApp {
   });
   /** Bumped on any private model change the options key cannot observe. */
   private transcriptRevision = 0;
+  /**
+   * Full-screen transcript search (Ctrl+F).
+   *
+   * The query and cursor live here; the match list lives in the pane's search
+   * index, keyed on the document the last frame painted. Closing KEEPS the
+   * query and cursor so Ctrl+F reopens where the reader left off — reopening
+   * is "continue that search", typing is "edit it".
+   */
+  private search = { active: false, query: '', cursor: 0 };
+  /**
+   * The pane content width the last frame used. Navigation must jump within
+   * the SAME document the reader is looking at, and that document depends on
+   * the width (sidebar, terminal size), so the match list is taken at this
+   * width rather than recomputed from whatever the terminal says now.
+   */
+  private lastPaneWidth = 0;
+  /** Inline Ctrl+F is answered once with where search lives, not on every press. */
+  private inlineSearchNoticeShown = false;
+  /** The fullscreen transcript's scrollbar column; present once created, fed per frame. */
+  private scrollbarColumn: ScrollbarColumn | null = null;
+  /**
+   * Where the scrollbar column sits in the committed frame, relative to the
+   * transcript region's inner left, plus its track height. Null when the bar
+   * is not up this frame; the pointer region is built from exactly this, so
+   * clicks can never land on a bar that is not painted.
+   */
+  private scrollbarLayout: { column: number; height: number } | null = null;
+  /** Rows between the drag's press point and the thumb's top, held while dragging. */
+  private scrollbarDragOffset: number | null = null;
   private lastCtrlCAt = Number.NEGATIVE_INFINITY;
   private running = false;
   /** Lines committed to the model but not yet accounted for by a render. */
@@ -2078,7 +2120,9 @@ export class TUIApp {
 
   private transcriptContentWidth(): number {
     const total = transcriptWidth(this.fullScreen.measure('transcript'), this.terminalSize().columns);
-    return Math.max(1, total - this.workbenchColumns(total));
+    // The pane paints one column narrower while the scrollbar is up; the
+    // disclosure targets must address rows in the document as painted.
+    return Math.max(1, total - this.workbenchColumns(total) - (this.scrollbarLayout !== null ? 1 : 0));
   }
 
   /**
@@ -2105,6 +2149,9 @@ export class TUIApp {
       scrollTop: this.scrollTop,
       following: this.follow,
       revision: this.transcriptRevision,
+      ...(this.search.active && this.inlineSurface === null
+        ? { search: { query: this.search.query, cursor: this.search.cursor } }
+        : {}),
     };
     if (this.inlineSurface !== null) {
       // The WHOLE transcript, unwindowed. Deciding what the live area shows and
@@ -2116,6 +2163,23 @@ export class TUIApp {
     }
     this.sidebarLayout = null;
     let content: UIComponent = pane;
+    // The scrollbar is one HStack column, not an overlay: the pane rewraps by
+    // exactly one column while the bar is up, and nothing it paints is hidden
+    // behind the thumb. The search index and the disclosure targets must see
+    // the SAME narrowed width the pane paints at — hence lastPaneWidth below.
+    const trackRows = this.visibleTranscriptRows();
+    const thumb = this.scrollbarThumbForFrame(trackRows);
+    this.scrollbarLayout = null;
+    if (thumb !== null) {
+      const column = this.scrollbarColumn ?? (this.scrollbarColumn = new ScrollbarColumn({ thumb: null, track: '', thumbTag: '' }));
+      column.props = { thumb, track: this.theme.tags.muted, thumbTag: '' };
+      content = new HStack('transcript-scrollbar', [{ component: pane, size: 'flex' }, { component: column, size: 1 }]);
+      this.scrollbarLayout = { column: width - 1, height: trackRows };
+    }
+    // Navigation (search jumps, block selection, scrollbar drags) reads the
+    // match list at this width: the assembled document — and therefore every
+    // match's line number — depends on it.
+    this.lastPaneWidth = width - (thumb !== null ? 1 : 0);
     if (sidebarWidth > 0) {
       const model = this.options.modelLabel?.();
       const tools = this.model.blocks.filter((block) => block.kind === 'tool');
@@ -2137,7 +2201,7 @@ export class TUIApp {
       };
       if (this.sidebar === null) this.sidebar = new WorkbenchSidebar(props);
       else this.sidebar.props = props;
-      const split = new HStack('workbench', [{ component: pane, size: 'flex' }, { component: this.sidebar, size: sidebarWidth }]);
+      const split = new HStack('workbench', [{ component: content, size: 'flex' }, { component: this.sidebar, size: sidebarWidth }]);
       const slot = split.arrange({ row: 0, column: 0, width: totalWidth, height: this.visibleTranscriptRows() })[1];
       if (slot) this.sidebarLayout = { column: slot.viewport.column, width: slot.viewport.width, height: slot.viewport.height };
       content = split;
@@ -2287,9 +2351,17 @@ export class TUIApp {
     this.composerPointerRows = layout.pointerRows;
     const borderRows = layout.lines.length - layout.bodyRows;
     const shellGlyph = draft?.glyph ?? '';
+    // The search bar rides INSIDE the composer's box as its first body row
+    // (pi docks its search panel above the editor): one extra row, no new
+    // region, and the transcript's bottom already derives from the input
+    // height. Inline returns null unconditionally — committed rows cannot be
+    // repainted, so there is nothing for the bar to drive.
+    const searchRow = this.transcriptSearchRow(this.composerWidth());
+    const searchRowOffset = searchRow === null || inline ? 0 : 1;
     if (!inline) {
-      const height = layout.bodyRows + this.inputChromeRows();
       const body = borderRows > 0 ? layout.lines.slice(1, -1) : layout.lines;
+      const colored = this.colorComposerBody(body, 0, layout.hasPlaceholder, { row: 0, glyph: shellGlyph });
+      const height = layout.bodyRows + this.inputChromeRows() + searchRowOffset;
       this.fullScreen.update('input', {
         // The composer's frame is the effort indicator: the two rules the user
         // types between carry the level the next message will run at.
@@ -2299,7 +2371,7 @@ export class TUIApp {
         background: resolveComposerBackground(this.theme.tags) ?? null,
         height,
         bottom: this.composerBottom(size),
-        lines: this.colorComposerBody(body, 0, layout.hasPlaceholder, { row: 0, glyph: shellGlyph }),
+        lines: searchRow === null ? colored : [searchRow.line, ...colored],
       });
       this.fullScreen.update('transcript', {
         bottom: height + STATUS_ROWS + this.popupRows(),
@@ -2318,8 +2390,13 @@ export class TUIApp {
     this.inputRows = layout.bodyRows;
     this.inputCursor = {
       rows: layout.lines,
-      cursorRow: layout.cursorRow - (inline ? 0 : borderRows / 2),
-      cursorCol: layout.cursorColumn - 1,
+      // With the search bar open the caret belongs to IT, not to the draft
+      // underneath: interior row 0 (cursorRow is 1-based), column after the
+      // query. Otherwise the editor's own position, shifted past the bar.
+      cursorRow: searchRow !== null && !inline
+        ? 1
+        : layout.cursorRow - (inline ? 0 : borderRows / 2) + searchRowOffset,
+      cursorCol: searchRow !== null && !inline ? searchRow.cursorCol : layout.cursorColumn - 1,
     };
   }
 
@@ -3905,6 +3982,11 @@ exportHistory(): string[] {
     this.bindKey(['C-u'], () => {
       if (this.interactivePrompt?.kind === 'text') this.updateTextPrompt({ value: this.interactivePrompt.value.slice(this.interactivePrompt.cursor), cursor: 0 });
       else if (this.routeWindowControl('C-u')) return;
+      else if (this.search.active) {
+        // Ctrl+U clears the search query, the same reflex as the editor.
+        this.search = { ...this.search, query: '', cursor: 0 };
+        this.searchJumpToCursor();
+      }
       else if (this.interactivePrompt === null && this.focus === 'input') {
         this.editor.killToStart();
         this.refreshInputCompletion();
@@ -3992,6 +4074,11 @@ exportHistory(): string[] {
     });
     this.bindAction('transcript-previous', () => selectBlock(-1));
     this.bindAction('transcript-next', () => selectBlock(1));
+    this.bindAction('transcript-previous-turn', () => this.jumpTurn(-1));
+    this.bindAction('transcript-next-turn', () => this.jumpTurn(1));
+    this.bindAction('transcript-search', () => {
+      if (this.interactivePrompt === null && !this.overlay.isActive) this.openTranscriptSearch();
+    });
     this.bindAction('transcript-toggle-block', () => {
       if (this.interactivePrompt === null && !this.swallowForWindow() && this.selectedBlockId) {
         this.toggleTranscriptBlock(this.selectedBlockId);
@@ -4101,6 +4188,8 @@ exportHistory(): string[] {
       else if (this.windowMgr.isActive) {
         this.windowMgr.handleKey('backspace');
         this.scheduler.requestImmediate();
+      } else if (this.search.active) {
+        this.searchBackspace();
       } else if (this.interactivePrompt === null && this.focus === 'input') {
         this.editor.backspace();
         this.refreshInputCompletion();
@@ -4259,6 +4348,12 @@ exportHistory(): string[] {
         this.handleOverlayKey(ch, key);
         return;
       }
+      // Transcript search captures typing while it is open, exactly like a
+      // window's filter does; the draft underneath is untouched.
+      if (this.search.active) {
+        this.searchInsert(ch);
+        return;
+      }
       // Typing means leaving the view entirely — including the watched
       // agent's panel: the keys are the editor's again, and a panel about a
       // task nobody is looking at is just rows taken from the conversation.
@@ -4304,6 +4399,15 @@ exportHistory(): string[] {
     // editor underneath.
     if (this.windowMgr.isActive) {
       this.windowMgr.handleKey(key);
+      this.scheduler.requestImmediate();
+      return;
+    }
+
+    // Transcript search outranks the popup and the editor while it is open:
+    // the navigation keys walk hits, Enter advances, Esc closes. It sits UNDER
+    // prompts/overlays/windows — a permission card or a dock panel must never
+    // lose its keys to a search bar.
+    if (this.handleSearchContended(key)) {
       this.scheduler.requestImmediate();
       return;
     }
@@ -4431,6 +4535,13 @@ exportHistory(): string[] {
     }
     // A paste must never accidentally answer a permission prompt.
     if (this.overlay.isActive) return;
+    // Pasting into an open search appends to the query (newlines stripped by
+    // searchInsert), never into the draft underneath.
+    if (this.search.active) {
+      this.searchInsert(text);
+      this.scheduler.requestImmediate();
+      return;
+    }
     this.exitTaskView();
     // A paste that is one absolute path to an attachable file becomes a chip
     // instead of text (terminal file drags arrive exactly this way). The shape
@@ -4815,6 +4926,239 @@ exportHistory(): string[] {
     this.options.onBackgroundTaskOpen?.(task);
   }
 
+  // ── Full-screen transcript search (Ctrl+F) ──────────────────────────────
+  //
+  // pi's fullscreen search, on duya's vocabulary: a query line inside the
+  // composer, every hit on the visible lines filled, the cursor's hit filled
+  // brighter, Enter/↓ forward and ↑ back, Esc out. Inline mode gets none of
+  // it — committed rows cannot be repainted, so a highlight there would lie.
+
+  /** Open the search bar. Reopening keeps the previous query: continue, don't restart. */
+  openTranscriptSearch(): void {
+    if (this.inlineSurface !== null) {
+      if (!this.inlineSearchNoticeShown) {
+        this.inlineSearchNoticeShown = true;
+        this.printNotice('Transcript search needs full-screen mode (/settings, or DUYA_TUI_INLINE=0). /search lists matches without highlights.');
+      }
+      return;
+    }
+    if (this.interactivePrompt !== null || this.overlay.isActive || this.windowMgr.isActive) return;
+    // The search row costs one body row inside the composer's box; below the
+    // border threshold (3 rows) there is no box to put it in.
+    const availableRows = Math.max(1, this.terminalSize().rows - this.footerRows() - this.popupRows());
+    if (availableRows < 4) return;
+    this.search = { ...this.search, active: true };
+    // Schedule HERE, not only in searchJumpToCursor: with no matches yet that
+    // one returns early, and a state change that never repaints means the bar
+    // appears only on the NEXT unrelated keypress — measured in the PTY smoke
+    // (plan 2026-11-11, S1 verification).
+    this.searchJumpToCursor();
+    this.scheduler.requestImmediate();
+  }
+
+  /** Close the search bar. The viewport stays where the search left it; Ctrl+End is the way home. */
+  closeTranscriptSearch(): void {
+    if (!this.search.active) return;
+    this.search = { ...this.search, active: false };
+    this.scheduler.requestImmediate();
+  }
+
+  /** Append typed text to the query and jump to the first hit of the new query. */
+  private searchInsert(text: string): void {
+    const clean = text.replace(/[\r\n\0\x1b]/gu, '');
+    if (clean === '') return;
+    this.search = { ...this.search, query: this.search.query + clean, cursor: 0 };
+    // A zero-match query must still repaint the bar (the counter says 0/0);
+    // searchJumpToCursor alone would skip the frame.
+    this.searchJumpToCursor();
+    this.scheduler.requestImmediate();
+  }
+
+  /** Remove the last code point of the query. */
+  private searchBackspace(): void {
+    const chars = Array.from(this.search.query);
+    if (chars.length === 0) return;
+    this.search = { ...this.search, query: chars.slice(0, -1).join(''), cursor: 0 };
+    this.searchJumpToCursor();
+    this.scheduler.requestImmediate();
+  }
+
+  /** Step the cursor through the match list and bring the hit on screen. */
+  private searchNavigate(delta: -1 | 1): void {
+    const matches = this.transcriptPane.searchMatches(this.lastPaneWidth);
+    if (matches.length === 0) return;
+    const moved = (this.search.cursor + delta) % matches.length;
+    this.search = { ...this.search, cursor: (moved + matches.length) % matches.length };
+    this.searchJumpToCursor();
+  }
+
+  /**
+   * Scroll so the cursor's hit is on screen.
+   *
+   * `follow` goes OFF unconditionally — even when the hit sits at the bottom
+   * of the document — because following means dragging the window to NEW
+   * output, away from the hit the reader just navigated to. The `[paused]`
+   * marker says so honestly, and Ctrl+End resumes the tail.
+   */
+  private searchJumpToCursor(): void {
+    if (!this.search.active) return;
+    const matches = this.transcriptPane.searchMatches(this.lastPaneWidth);
+    if (matches.length === 0) return;
+    const target = matches[Math.min(this.search.cursor, matches.length - 1)]!;
+    const total = this.transcript.totalLines(this.model, this.renderOptions());
+    const maxTop = Math.max(0, total - this.visibleTranscriptRows());
+    this.pointer.cancel();
+    this.follow = false;
+    this.scrollTop = Math.max(0, Math.min(maxTop, target.line - ANCHOR_CONTEXT_ROWS));
+    this.scheduler.requestImmediate();
+  }
+
+  /**
+   * Contended keys (up / down / escape / return / tab) while search is open.
+   * Returns false when search is not open, so the caller falls through to the
+   * popup and editor unchanged.
+   */
+  private handleSearchContended(key: CompletionKey): boolean {
+    if (!this.search.active || this.inlineSurface !== null) return false;
+    if (key === 'up') this.searchNavigate(-1);
+    else if (key === 'down' || key === 'return') this.searchNavigate(1);
+    else if (key === 'escape') this.closeTranscriptSearch();
+    else if (key === 'tab') return true; // indent/queue mean nothing mid-search; swallow
+    return true;
+  }
+
+  /**
+   * The search bar row inside the composer's box: `/ query · i/N · Enter next ·
+   * Esc done`, measured on plain text and tagged afterwards. The query
+   * truncates first — the counter and the keys survive on a narrow terminal,
+   * the query being editable is the point.
+   *
+   * Null when search is closed or there is no room; callers then paint the
+   * composer alone.
+   */
+  private transcriptSearchRow(width: number): { line: string; cursorCol: number } | null {
+    if (!this.search.active || this.inlineSurface !== null) return null;
+    const matches = this.transcriptPane.searchMatches(this.lastPaneWidth);
+    const position = matches.length === 0 ? 0 : Math.min(this.search.cursor, matches.length - 1) + 1;
+    const counter = `${position}/${matches.length}`;
+    const hint = 'Enter next · Esc done';
+    const muted = this.theme.tags.muted;
+    const budget = Math.max(0, width - 1); // the ConPTY spare column (see paintStatus)
+    const fixedPlain = 2 + counter.length + 3 + hint.length; // "/ " + " · " + counter + " · " + hint
+    let query = this.search.query;
+    if (fixedPlain + visibleWidth(query) > budget) {
+      const room = Math.max(0, budget - fixedPlain - 1); // -1 for the ellipsis
+      query = Array.from(query).slice(0, room).join('') + '…';
+    }
+    const line = `{${muted}}/{/${muted}} ${escapeTags(query)}{${muted}} · ${counter} · ${hint}{/${muted}}`;
+    // The caret sits right after the query — a display column, not a code
+    // point count: a CJK query must not park the caret inside its last glyph.
+    return { line, cursorCol: 2 + visibleWidth(query) };
+  }
+
+  // ── Fullscreen transcript scrollbar (DUYA_TUI_SCROLLBAR) ────────────────
+
+  /**
+   * `auto` shows the bar only while the reader is away from the tail — that
+   * is when orientation matters; `always` keeps it up; anything else is off.
+   * An environment switch until the fullscreen settings surface lands (plan S4).
+   */
+  private scrollbarMode(): 'auto' | 'always' | 'hidden' {
+    const raw = process.env['DUYA_TUI_SCROLLBAR'];
+    if (raw === 'always') return 'always';
+    if (raw === 'off' || raw === 'hidden') return 'hidden';
+    return 'auto';
+  }
+
+  /**
+   * The scroll offset the viewport actually shows: while `follow` is on, the
+   * window is pinned to the tail and the stored `scrollTop` is stale.
+   */
+  private effectiveScrollTop(): number {
+    if (!this.follow) return this.scrollTop;
+    return Math.max(0, this.transcript.totalLines(this.model, this.renderOptions()) - this.visibleTranscriptRows());
+  }
+
+  /** The thumb for the bar as this frame should draw it, or null when hidden. */
+  private scrollbarThumbForFrame(trackRows: number): ScrollbarThumb | null {
+    const mode = this.scrollbarMode();
+    if (this.inlineSurface !== null || mode === 'hidden') return null;
+    if (mode === 'auto' && this.follow) return null;
+    return scrollbarThumb(
+      this.transcript.totalLines(this.model, this.renderOptions()),
+      trackRows,
+      this.effectiveScrollTop(),
+      trackRows,
+    );
+  }
+
+  /**
+   * Pointer drag on the scrollbar column. Pressing anywhere on the track
+   * seeks there (keeping where inside the thumb the grab landed, so pressing
+   * the thumb's middle does not teleport it under the cursor), moving
+   * continues the seek, releasing ends it.
+   */
+  private scrollbarDrag(phase: 'start' | 'move' | 'end' | 'cancel', y: number): void {
+    if (phase === 'start') {
+      const trackRows = this.visibleTranscriptRows();
+      const thumb = scrollbarThumb(
+        this.transcript.totalLines(this.model, this.renderOptions()),
+        trackRows,
+        this.effectiveScrollTop(),
+        trackRows,
+      );
+      if (thumb === null) {
+        this.scrollbarDragOffset = null;
+        return;
+      }
+      this.scrollbarDragOffset = Math.max(0, Math.min(thumb.size, y - thumb.start));
+      this.scrollbarSeek(y - this.scrollbarDragOffset);
+      return;
+    }
+    if (phase === 'move' && this.scrollbarDragOffset !== null) {
+      this.scrollbarSeek(y - this.scrollbarDragOffset);
+      return;
+    }
+    this.scrollbarDragOffset = null;
+  }
+
+  /** Put the thumb's top at `thumbStart`; the tail resumes only via Ctrl+End. */
+  private scrollbarSeek(thumbStart: number): void {
+    const rows = this.visibleTranscriptRows();
+    const total = this.transcript.totalLines(this.model, this.renderOptions());
+    const top = scrollTopForThumbStart(thumbStart, total, rows, rows);
+    this.follow = false;
+    this.scrollTop = Math.max(0, Math.min(Math.max(0, total - rows), top));
+    this.scheduler.requestImmediate();
+  }
+
+  // ── Turn navigation (Alt+Up / Alt+Down, full-screen) ────────────────────
+
+  /**
+   * Jump to the previous / next user prompt.
+   *
+   * The viewport position is the cursor (see turn-navigation.ts): no stored
+   * index to go stale. Inline mode deliberately does nothing — the terminal
+   * owns its scrollback, and an app that cannot repaint committed rows cannot
+   * jump either (the same reason inline has no app-owned PgUp).
+   */
+  private jumpTurn(direction: -1 | 1): void {
+    if (this.interactivePrompt !== null || this.overlay.isActive || this.windowMgr.isActive) return;
+    if (this.inlineSurface !== null) return;
+    const anchors = this.transcriptPane.turnAnchors(this.lastPaneWidth);
+    if (anchors.length === 0) return;
+    const anchor = direction === -1
+      ? previousTurnAnchor(anchors, this.effectiveScrollTop())
+      : nextTurnAnchor(anchors, this.effectiveScrollTop(), ANCHOR_CONTEXT_ROWS);
+    if (anchor === null) return;
+    this.pointer.cancel();
+    this.follow = false;
+    const total = this.transcript.totalLines(this.model, this.renderOptions());
+    const maxTop = Math.max(0, total - this.visibleTranscriptRows());
+    this.scrollTop = Math.max(0, Math.min(maxTop, anchor.line - ANCHOR_CONTEXT_ROWS));
+    this.scheduler.requestImmediate();
+  }
+
   private scrollBy(pages: number): void {
     this.pointer.cancel();
     const rows = this.visibleTranscriptRows();
@@ -5022,6 +5366,18 @@ exportHistory(): string[] {
           }
         }, sessionId);
       }
+    }
+    // The scrollbar column: press seeks (keeping the grab offset inside the
+    // thumb), drag continues, release ends. A raw hit like the sidebar's
+    // divider because it spans the whole track height, not one row.
+    if (this.scrollbarLayout !== null && geometry?.laidOut) {
+      const layout = this.scrollbarLayout;
+      hits.push({
+        id: 'transcript-scrollbar', row: geometry.top + geometry.innerTop,
+        column: geometry.left + geometry.innerLeft + layout.column, width: 1, height: layout.height,
+        activate: () => {},
+        drag: (phase, point) => this.scrollbarDrag(phase, point.y),
+      });
     }
     if (!this.follow)
       add('follow-tail', this.fullScreen.measure('status'), 0, 0, visibleWidth('[↓ Latest]'), () => this.actionHandlers.get('follow-tail')?.());

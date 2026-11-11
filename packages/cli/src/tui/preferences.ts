@@ -141,7 +141,13 @@ export const DEFAULT_TUI_PREFERENCES: TuiPreferences = {
   // plus its footer are docked at the bottom of the page. The full-screen mode
   // (alternate buffer, bordered transcript) is still available via /settings,
   // but it is no longer the shape a first run lands in.
-  displayMode: 'inline',
+  // Full-screen, per the S4 decision in plan 2026-11-11-tui-fullscreen-framework:
+  // the user's directive is that pi / Claude Code's fullscreen design is right,
+  // and the fullscreen engine now carries the richness (mouse, sidebar, search,
+  // scrollbar, turn jumps) that justified pi's own flip at 1.0. Inline remains
+  // one `/settings` switch (or `DUYA_TUI_INLINE=1`) away — the terminal-owned
+  // scrollback model is unchanged for those who prefer it.
+  displayMode: 'fullscreen',
   effort: 'auto',
   effortByModel: {},
   // Thinking is shown and tool results are collapsed behind it: the transcript
