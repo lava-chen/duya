@@ -121,6 +121,6 @@ PR B 开工时要接住的三件事：`/provider` 编辑表单的"测连"只能�
 
 未做：真实 TUI 添加流程和真实 MiniMax 消息请求；需要使用用户自己的 key。生成的 `packages/host/bundle/worker-entry.js` 与 metafile 随本次 worker 重建更新。
 
-接续：实现与验证已提交到 `codex/tui-provider-picker`（base `3e2390141`）。`git push -u origin codex/tui-provider-picker` 连续两次及 HTTP/1.1 重试均因 GitHub TLS 连接提前关闭失败；SSH 只读连通性也被关闭，因此尚未创建 PR。分支和 worktree 保留。
+接续：实现和验证在 `codex/tui-provider-picker`，base `3e2390141`，HEAD `954bacb623b2cc4cff3456af18d9d444a33477a0`。已创建 [draft PR #627](https://github.com/lava-chen/duya/pull/627)，CI/review 待完成；未授权合并。worktree 保留。
 
-下一步：网络恢复后重试 `git push -u origin codex/tui-provider-picker` 并创建 draft PR；待 CI/review。用户在重启的 `dev:tui` 中配置 MiniMax CN 后，可用自己的有效 key 发起一轮消息验收。未经授权不合并。
+下一步：等待 PR CI/review；用户重启 `dev:tui` 并用 MiniMax CN 有效 key 发起一轮消息，若失败继续检查该次 Host/worker 日志。未经授权不合并。
