@@ -175,6 +175,14 @@ export class InputEditor {
     });
   }
 
+  /** Move the caret without mutating the draft, paste payloads, or undo history. */
+  moveTo(offset: number): void {
+    if (!Number.isFinite(offset)) return;
+    this.cursorAt = Math.max(0, Math.min(this.cells.length, Math.floor(offset)));
+    this.lastAction = null;
+    this.lastYank = null;
+  }
+
   moveLeft(): void {
     if (this.cursorAt > 0) this.cursorAt -= 1;
   }

@@ -6,7 +6,7 @@
  * The renderer reads four orthogonal switches — thinking visible, blocks open
  * by default, result bodies drawn, how many calls of a run get a row. A reader
  * does not tune those one at a time; they want a *shape* for the transcript and
- * then the odd exception. So `/display` names four combinations of the same
+ * then the odd exception. So `/display` names combinations of the same
  * keys, and `/settings` keeps owning the keys themselves.
  *
  * ## Why the current profile is DERIVED
@@ -29,7 +29,7 @@ import {
   TUI_TOOL_GROUP_MODE_SETTING,
 } from './preferences.js';
 
-export type DisplayProfileId = 'detailed' | 'standard' | 'compact' | 'running';
+export type DisplayProfileId = 'detailed' | 'standard' | 'focus' | 'folded' | 'compact' | 'running' | 'hidden';
 
 /** A named point in the four-switch space, plus the words the menu shows for it. */
 export interface DisplayProfile {
@@ -69,6 +69,24 @@ export const DISPLAY_PROFILES: readonly DisplayProfile[] = [
     toolGroupMode: 'full',
   },
   {
+    id: 'focus',
+    label: 'Focus',
+    detail: 'Reasoning open; tool calls stay compact until individually opened.',
+    showThinking: true,
+    expandBlocks: false,
+    showToolResults: false,
+    toolGroupMode: 'focus',
+  },
+  {
+    id: 'folded',
+    label: 'Compact thoughts',
+    detail: 'Tool summaries and thinking titles; click a title to open its body.',
+    showThinking: true,
+    expandBlocks: false,
+    showToolResults: false,
+    toolGroupMode: 'names',
+  },
+  {
     id: 'compact',
     label: 'Compact',
     detail: 'No reasoning; every call keeps its line, nothing under it.',
@@ -85,6 +103,15 @@ export const DISPLAY_PROFILES: readonly DisplayProfile[] = [
     expandBlocks: false,
     showToolResults: false,
     toolGroupMode: 'running',
+  },
+  {
+    id: 'hidden',
+    label: 'Hidden',
+    detail: 'Hide tool calls and reasoning bodies; keep read-only thinking status.',
+    showThinking: true,
+    expandBlocks: false,
+    showToolResults: false,
+    toolGroupMode: 'hidden',
   },
 ];
 

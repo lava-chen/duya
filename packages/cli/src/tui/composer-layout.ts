@@ -1,4 +1,4 @@
-import { codePointWidth, visibleWidth, wrapWithCursor } from './width.js';
+import { codePointWidth, visibleWidth, wrapWithSource } from './width.js';
 
 /** Default maximum number of rendered input rows before the composer scrolls. */
 export const DEFAULT_COMPOSER_MAX_ROWS = 8;
@@ -62,6 +62,8 @@ export interface ComposerLayout {
   readonly firstVisibleRow: number;
   /** True when the first body row carries the placeholder instead of text. */
   readonly hasPlaceholder: boolean;
+  /** One cursor boundary per visible code point, in terminal cells and source offsets. */
+  readonly pointerRows: readonly (readonly { column: number; offset: number }[])[];
 }
 
 /**
@@ -144,7 +146,17 @@ export function buildComposerLayout(
   );
   const cursorRow = (hasBorders ? 1 : 0) + cursorVisibleRow;
 
-  return { lines, cursorRow, cursorColumn, bodyRows, firstVisibleRow, hasPlaceholder };
+  const pointerRows = visibleBody.map((line, index) => {
+    const rowPrompt = index === 0 && firstVisibleRow === 0 ? prompt : continuation;
+    let column = visibleWidth(rowPrompt);
+    const cells = Array.from(line);
+    return (wrapped.sourceOffsets[firstVisibleRow + index] ?? []).map((offset, cellIndex) => {
+      const boundary = { column: Math.min(columns - 1, column), offset: offset + (prefix?.stripped ?? 0) };
+      if (cellIndex < cells.length) column += codePointWidth(cells[cellIndex]!);
+      return boundary;
+    });
+  });
+  return { lines, cursorRow, cursorColumn, bodyRows, firstVisibleRow, hasPlaceholder, pointerRows };
 }
 
 /** Drop the first `count` code points of a draft. */
@@ -158,11 +170,12 @@ function wrapTextWithCursor(
   text: string,
   width: number,
   cursor: number,
-): { readonly rows: string[]; readonly cursorRow: number; readonly cursorCol: number } {
+): { readonly rows: string[]; readonly cursorRow: number; readonly cursorCol: number; readonly sourceOffsets: readonly (readonly number[])[] } {
   const paragraphs = text.split('\n');
   const requestedCursor = Number.isFinite(cursor) ? Math.floor(cursor) : 0;
   const cursorIndex = clamp(requestedCursor, 0, Array.from(text).length);
   const rows: string[] = [];
+  const sourceOffsets: number[][] = [];
   let cursorRow = 1;
   let cursorCol = 0;
   let offset = 0;
@@ -171,7 +184,7 @@ function wrapTextWithCursor(
   for (const paragraph of paragraphs) {
     const paragraphLength = Array.from(paragraph).length;
     const paragraphCursor = cursorIndex - offset;
-    const result = wrapWithCursor(
+    const result = wrapWithSource(
       paragraph,
       width,
       paragraphCursor >= 0 && paragraphCursor <= paragraphLength
@@ -185,10 +198,11 @@ function wrapTextWithCursor(
       cursorPlaced = true;
     }
     rows.push(...result.rows);
+    sourceOffsets.push(...result.sourceOffsets.map((row) => row.map((position) => position + offset)));
     offset += paragraphLength + 1;
   }
 
-  return { rows, cursorRow, cursorCol };
+  return { rows, cursorRow, cursorCol, sourceOffsets };
 }
 
 function makeBorder(columns: number, unicode: boolean): string {

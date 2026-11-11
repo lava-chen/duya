@@ -60,10 +60,13 @@ export interface NormalizedKey {
 
 /** The terminal's mouse reports. Screens convert coordinates; this does not. */
 export interface InputMouseEvent {
-  readonly action: 'wheelup' | 'wheeldown' | 'mousedown' | 'mouseup';
+  readonly action: 'wheelup' | 'wheeldown' | 'mousedown' | 'mouseup' | 'mousemove';
   readonly x: number;
   readonly y: number;
   readonly button: number;
+  readonly shift?: boolean;
+  readonly meta?: boolean;
+  readonly ctrl?: boolean;
   /**
    * Reserved for hit-testing (plan 615 Phase 2.4).
    *

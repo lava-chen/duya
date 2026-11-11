@@ -50,8 +50,12 @@ import {
 import { frameRecord, frameString, TranscriptModel, readBlockKey, type LegacyFrame, type Block } from './blocks.js';
 import { ActivityTracker } from './components/activity.js';
 import { TranscriptPane } from './components/transcript-pane.js';
+import { WorkbenchSidebar } from './components/workbench-sidebar.js';
+import { HStack } from './core/containers.js';
+import { resolveDisplayProfile } from './display-profiles.js';
 import { StatusBar } from './components/status-bar.js';
-import { renderTree } from './core/component.js';
+import { renderTree, type UIComponent } from './core/component.js';
+import { PointerDispatcher, type HitRegion } from './core/pointer.js';
 import { tagViewOf, spansToTags } from './markdown/inline.js';
 import { DeltaBuffer, DEFAULT_STALE_MS } from './delta-buffer.js';
 import { RenderScheduler } from './render-scheduler.js';
@@ -72,6 +76,7 @@ import {
 import { OverlayState, isDestructiveRequest, type PermissionDecision, type QuestionAnswers } from './overlay.js';
 import {
   DEFAULT_RENDER_OPTIONS,
+  thinkingExpanded,
   escapeTags,
   stylesOf,
   type RenderOptions,
@@ -88,7 +93,7 @@ import {
   type TerminalInputDriver,
 } from './terminal/input-driver.js';
 import { popKittyKeyboardFlags, pushKittyKeyboardFlags } from './terminal/ansi.js';
-import { buildComposerLayout } from './composer-layout.js';
+import { buildComposerLayout, type ComposerLayout } from './composer-layout.js';
 import { paintComposerRow, NO_SHELL_PROMPT, type ShellPrompt } from './composer-paint.js';
 import { shellDraftOf } from './shell-command.js';
 import { LOCAL_SHELL_TOOL } from './tool-render.js';
@@ -375,6 +380,11 @@ export interface TUIAppOptions {
   readonly onSubmit: (text: string, attachments: readonly FileAttachment[]) => void | Promise<void>;
   /** Let the controller own accepted-message echo and pending drafts. */
   readonly echoSubmitted?: boolean;
+  /** Trusted sidebar controls enter the same slash dispatcher without consuming the draft. */
+  readonly onWorkbenchCommand?: (command: string) => void | Promise<void>;
+  readonly workbenchSessionId?: () => string;
+  readonly sidebarWidth?: number;
+  readonly onSidebarWidthChange?: (columns: number) => void | Promise<void>;
   readonly canSubmit?: () => boolean;
   /**
    * Drafts still WAITING for a turn to carry them.
@@ -590,6 +600,22 @@ export interface TuiLivePreferences {
 }
 
 export class TUIApp {
+  private sidebar: WorkbenchSidebar | null = null;
+  private sidebarLayout: { column: number; width: number; height: number } | null = null;
+  private preferredSidebarWidth: number | undefined;
+  private sidebarDragStart: { preferred: number | undefined } | undefined;
+  private sidebarVisible = true;
+  private mouseReporting = false;
+  private composerPointerRows: ComposerLayout['pointerRows'] = [];
+  private readonly pointer = new PointerDispatcher();
+  private readonly actionHandlers = new Map<string, () => void>();
+  private pointerCompletion: Array<{ row: number; index: number }> = [];
+  private pointerPrompt: Array<{ row: number; index: number }> = [];
+  private get mouseMode(): 'off' | 'wheel' | 'all' {
+    const value = process.env['DUYA_TUI_MOUSE'];
+    return value === 'off' || value === 'wheel' ? value : 'all';
+  }
+
   private readonly options: TUIAppOptions;
   /**
    * Null in inline mode until an overlay needs it.
@@ -948,6 +974,7 @@ export class TUIApp {
     };
     proxy.renderConfig = renderConfig;
 
+    this.preferredSidebarWidth = options.sidebarWidth;
     const inline = options.inline === true;
     this.inlineSurface = inline
       ? new InlineSurface({
@@ -1041,11 +1068,14 @@ export class TUIApp {
    */
   private ensureAltScreen(): void {
     this.fullScreen.ensure();
+    this.setMouseReporting(this.mouseMode !== 'off');
   }
 
   /** Leave the modal buffer without destroying the shared input Program. */
   private suspendAltScreen(): void {
     this.fullScreen.leave();
+    this.setMouseReporting(false);
+    this.pointer.clear();
     this.inlineSurface?.invalidate();
   }
 
@@ -1077,6 +1107,7 @@ export class TUIApp {
     if (this.disposed) return;
     this.disposed = true;
     this.running = false;
+    this.pointer.clear();
     this.settleInteractivePrompt(null);
     this.overlay.abortAll();
     this.windowMgr.close();
@@ -1685,6 +1716,7 @@ export class TUIApp {
       this.paintStatus();
       this.paintOverlay();
       this.fullScreen.render();
+      this.commitPointerRegions();
       this.placeCursor();
     } finally {
       this.output.write(SYNC_END);
@@ -1717,6 +1749,7 @@ export class TUIApp {
     if (this.fullScreen.ready && !this.fullScreen.suspended) {
       this.paintOverlay();
       this.fullScreen.render();
+      this.commitPointerRegions();
       this.placeCursor();
       return;
     }
@@ -2002,7 +2035,7 @@ export class TUIApp {
       // full pane width rather than a zero-column wrap budget.
       width: this.inlineSurface !== null
         ? this.terminalSize().columns
-        : transcriptWidth(this.fullScreen.measure('transcript'), this.terminalSize().columns),
+        : this.transcriptContentWidth(),
       liveRows: this.liveTranscriptRows(),
     };
   }
@@ -2035,6 +2068,19 @@ export class TUIApp {
     this.transcriptRevision += 1;
   }
 
+  private workbenchColumns(total: number): number {
+    if (this.inlineSurface !== null || !this.sidebarVisible || !this.options.onWorkbenchCommand
+      || process.env['DUYA_TUI_SIDEBAR'] === '0' || this.terminalSize().columns < 120
+      || this.visibleTranscriptRows() < 6) return 0;
+    const preferred = this.preferredSidebarWidth ?? Math.round(total * 0.22);
+    return Math.max(18, Math.min(72, Math.floor(preferred), total - 60));
+  }
+
+  private transcriptContentWidth(): number {
+    const total = transcriptWidth(this.fullScreen.measure('transcript'), this.terminalSize().columns);
+    return Math.max(1, total - this.workbenchColumns(total));
+  }
+
   /**
    * Hand the pane this frame's inputs, then paint what it answers.
    *
@@ -2046,9 +2092,11 @@ export class TUIApp {
    */
   private paintTranscript(): void {
     const columns = this.terminalSize().columns;
-    const width = this.inlineSurface !== null
+    const totalWidth = this.inlineSurface !== null
       ? columns
       : transcriptWidth(this.fullScreen.measure('transcript'), columns);
+    const sidebarWidth = this.workbenchColumns(totalWidth);
+    const width = totalWidth - sidebarWidth;
     const pane = this.transcriptPane;
     pane.props = {
       renderer: this.transcript,
@@ -2066,6 +2114,34 @@ export class TUIApp {
       this.inlineTranscriptLines = [...pane.lines(width)];
       return;
     }
+    this.sidebarLayout = null;
+    let content: UIComponent = pane;
+    if (sidebarWidth > 0) {
+      const model = this.options.modelLabel?.();
+      const tools = this.model.blocks.filter((block) => block.kind === 'tool');
+      const cwd = this.options.workspaceDirectory?.() ?? process.cwd();
+      const branch = this.gitBranch(cwd);
+      const props = {
+        styles: stylesOf({ theme: this.theme.tags, renderer: 'own' }),
+        sessionId: this.options.workbenchSessionId?.() ?? '',
+        sessionTitle: this.options.sessionTitle?.() ?? 'Current session',
+        sessions: (this.options.completionSources?.slashOptions?.('/resume') ?? []).map((item) => ({ id: item.value, label: item.label })),
+        model: model?.model ?? 'unknown', provider: model?.provider ?? 'unknown',
+        effort: this.effortLevel() ?? 'auto', cwd: branch ? `${cwd} (${branch})` : cwd,
+        inputTokens: this.lastUsage?.input ?? null, outputTokens: this.lastUsage?.output ?? null,
+        sessionTokens: this.sessionTokens, contextTokens: this.contextTokens(),
+        contextBudget: this.options.contextBudgetTokens?.() ?? null,
+        tokensPerSecond: this.lastUsage?.tokensPerSecond ?? null,
+        profile: resolveDisplayProfile({ showThinking: this.showThinking, expandBlocks: this.expanded, showToolResults: this.showToolResults, toolGroupMode: this.toolGroupMode }),
+        tools: { total: tools.length, running: tools.filter((tool) => tool.status === 'running').length, errors: tools.filter((tool) => tool.status === 'error').length },
+      };
+      if (this.sidebar === null) this.sidebar = new WorkbenchSidebar(props);
+      else this.sidebar.props = props;
+      const split = new HStack('workbench', [{ component: pane, size: 'flex' }, { component: this.sidebar, size: sidebarWidth }]);
+      const slot = split.arrange({ row: 0, column: 0, width: totalWidth, height: this.visibleTranscriptRows() })[1];
+      if (slot) this.sidebarLayout = { column: slot.viewport.column, width: slot.viewport.width, height: slot.viewport.height };
+      content = split;
+    }
     this.fullScreen.update('transcript', {
       // The border is the focus tell in full-screen mode: the task list owns
       // the arrows while the transcript does not respond to them at all.
@@ -2073,7 +2149,7 @@ export class TUIApp {
       // Route the established pane through the retained component renderer.
       // ScreenSurface still owns borders and layout; the tree owns the pane's
       // viewport and clipping, so this is a safe first integration step.
-      lines: renderTree(pane, width, this.visibleTranscriptRows()).rows.map((row) =>
+      lines: renderTree(content, totalWidth, this.visibleTranscriptRows()).rows.map((row) =>
         spansToTags(row, tagViewOf(stylesOf({ theme: this.theme.tags, renderer: 'own' }))),
       ),
     });
@@ -2208,6 +2284,7 @@ export class TUIApp {
       ...(draft === null ? {} : { shellPrefix: draft }),
       ...(this.options.turnSuggestion?.() ? { placeholder: this.options.turnSuggestion!() ?? undefined } : {}),
     });
+    this.composerPointerRows = layout.pointerRows;
     const borderRows = layout.lines.length - layout.bodyRows;
     const shellGlyph = draft?.glyph ?? '';
     if (!inline) {
@@ -2457,6 +2534,7 @@ export class TUIApp {
  * completing against.
  */
   private paintCompletion(): void {
+    this.pointerCompletion = [];
     const state = this.completion.snapshot;
     // A secondary page owns the slot the popup would open into. Hiding rather
     // than closing keeps the popup's state intact for a window opened over
@@ -2482,6 +2560,7 @@ export class TUIApp {
     for (let i = first; i < first + visible; i += 1) {
       const entry = state.items[i];
       if (entry === undefined) continue;
+      this.pointerCompletion.push({ row: rows.length + (first > 0 ? 1 : 0), index: i });
       const selected = i === state.selectedIndex;
       const marker = selected ? '❯' : ' ';
       const head = `${marker} ${entry.label}`;
@@ -2620,15 +2699,16 @@ export class TUIApp {
     const badgePlain = badge === null ? '' : `${badge.plain}${badge.hint}`;
     const badgeWidth = badgePlain === '' ? 0 : visibleWidth(badgePlain) + 1;
     const showBadge = badge !== null && badgeWidth < width;
+    const jump = this.follow ? '' : '[↓ Latest] ';
     const activity = '{gray-fg}' + escapeTags(compactActivity(
       fixed,
-      Math.max(1, width - (showBadge ? badgeWidth : 0)),
+      Math.max(1, width - (showBadge ? badgeWidth : 0) - visibleWidth(jump)),
     )) + '{/gray-fg}';
     const badgeTagged = badge === null || !showBadge
       ? ''
       : ' ' + taggedWith(this.theme.tags, badge.token, escapeTags(badgePlain));
     this.fullScreen.update('status', {
-      lines: [activity + badgeTagged],
+      lines: [(jump ? taggedWith(this.theme.tags, 'accent', escapeTags(jump)) : '') + activity + badgeTagged],
     });
   }
 
@@ -2831,6 +2911,7 @@ export class TUIApp {
   }
 
   private renderInteractivePrompt(prompt: InteractivePrompt, width: number, maxRows: number): string {
+    this.pointerPrompt = [];
     const lines = [`{bold}{cyan-fg}${escapeTags(prompt.title)}{/cyan-fg}{/bold}`, ''];
     // Title, a blank, the ellipsis markers and the hint row: the list gets
     // whatever is left of the slot the composer would have occupied.
@@ -2846,6 +2927,7 @@ export class TUIApp {
       for (let i = first; i < Math.min(count, first + visibleChoices); i += 1) {
         const choice = prompt.choices[i];
         if (choice === undefined) continue;
+        this.pointerPrompt.push({ row: lines.reduce((count, line) => count + line.split('\n').length, 0), index: i });
         const selected = i === prompt.selectedIndex;
         const label = escapeTags(compactActivity(choice.label, Math.max(12, maxLineChars - 14)));
         const descriptionLimit = Math.max(0, maxLineChars - Array.from(label).length - 4);
@@ -3219,8 +3301,8 @@ export class TUIApp {
     this.scheduleRender();
   }
 
-  /** Clear the transcript and the input. */
-  clearTranscript(): void {
+  /** Clear history; sidebar session creation keeps the unsent composer intact. */
+  clearTranscript(preserveDraft = false): void {
     const hadTranscript = this.model.blocks.length > 0;
     this.model.clear();
     this.selectedBlockId = undefined;
@@ -3229,7 +3311,7 @@ export class TUIApp {
     if (hadTranscript) this.noteTranscriptMutation();
     this.textBuffer.reset();
     this.thinkingBuffer.reset();
-    this.editor.clear();
+    if (!preserveDraft) this.editor.clear();
     this.follow = true;
     this.scrollTop = 0;
     this.focus = 'input';
@@ -3449,6 +3531,7 @@ export class TUIApp {
    * and a broken chord in config is the user's own to notice.
    */
   private bindAction(id: string, handler: () => void): void {
+    this.actionHandlers.set(id, handler);
     if (!REBINDABLE_ACTIONS.has(id)) return;
     const def = this.actionDefs.find((candidate) => candidate.id === id);
     if (def === undefined) return;
@@ -3497,6 +3580,7 @@ export class TUIApp {
   private dispatchInput(event: InputEvent): void {
     switch (event.kind) {
       case 'key': {
+        this.pointer.cancel();
         this.keypressHandler?.(event.key.ch ?? '', event.key);
         const handlers = this.keyHandlers.get(event.key.full);
         if (handlers === undefined) return;
@@ -3504,6 +3588,7 @@ export class TUIApp {
         return;
       }
       case 'paste':
+        this.pointer.clear();
         this.handleBracketedPaste(event.text);
         return;
       case 'mouse':
@@ -3553,6 +3638,10 @@ export class TUIApp {
       }
       lines.push('');
     }
+    lines.push(styles.accent('Mouse (fullscreen)'));
+    lines.push('  Click options or tool/thinking titles; drag does not activate.');
+    lines.push('  Shift+drag selects text in terminals with a mouse override.');
+    lines.push('  DUYA_TUI_MOUSE=off restores terminal mouse handling.');
     this.windowMgr.open({ title: 'Key bindings', lines, footer: 'F1 / Esc close' });
     this.scheduler.requestImmediate();
   }
@@ -3889,23 +3978,24 @@ exportHistory(): string[] {
     this.bindAction('help', () => { this.toggleWindow('help'); });
     this.bindAction('history', () => { this.toggleWindow('history'); });
     this.bindAction('usage', () => { this.toggleWindow('usage'); });
+    this.bindAction('sidebar-next-tab', () => {
+      if (this.dockPanelActive() || this.overlay.isActive || !this.sidebarLayout || !this.sidebar) return;
+      const tabs = ['sessions', 'context', 'view'] as const;
+      this.sidebar.selectTab(tabs[(tabs.indexOf(this.sidebar.tab) + 1) % tabs.length]!);
+      this.scheduler.requestImmediate();
+    });
+    this.bindAction('sidebar-toggle', () => {
+      if (this.dockPanelActive() || this.overlay.isActive) return;
+      this.pointer.cancel();
+      this.sidebarVisible = !this.sidebarVisible;
+      this.scheduler.requestImmediate();
+    });
     this.bindAction('transcript-previous', () => selectBlock(-1));
     this.bindAction('transcript-next', () => selectBlock(1));
     this.bindAction('transcript-toggle-block', () => {
-      if (this.interactivePrompt !== null || this.swallowForWindow()) return;
-      const id = this.selectedBlockId;
-      if (id === undefined) return;
-      if (this.collapsedBlockIds.has(id)) {
-        this.collapsedBlockIds.delete(id);
-        this.expandedBlockIds.add(id);
-      } else if (this.expandedBlockIds.has(id) || this.expanded) {
-        this.expandedBlockIds.delete(id);
-        this.collapsedBlockIds.add(id);
-      } else {
-        this.expandedBlockIds.add(id);
+      if (this.interactivePrompt === null && !this.swallowForWindow() && this.selectedBlockId) {
+        this.toggleTranscriptBlock(this.selectedBlockId);
       }
-      this.noteTranscriptMutation();
-      this.scheduler.requestImmediate();
     });
 
     // Ctrl+C is deliberately NOT rebindable: it is the interrupt-and-exit
@@ -3917,8 +4007,8 @@ exportHistory(): string[] {
     // reporting ENABLED the terminal ships the wheel as SGR sequences instead
     // of scrolling its own scrollback — and instead of a terminal like Warp
     // translating it into ↑/↓, which would recall input history. Only the
-    // wheel is consumed; clicks stay with the terminal so text selection keeps
-    // working.
+    // wheel and component clicks are consumed. Native selection uses the
+    // terminal's override modifier (usually Shift); DUYA_TUI_MOUSE=off opts out.
     //
     // Inline mode deliberately does the opposite. There the terminal owns the
     // scrollback (that is the point of the mode), and the live area is only one
@@ -3926,18 +4016,32 @@ exportHistory(): string[] {
     // the wheel would take scrolling away from the one buffer that has the
     // history. The popup windows lose wheel scrolling in inline; they still
     // page with PgUp/PgDn.
-    if (this.inlineSurface === null) {
-      this.output.write(enableMouseReporting());
+    this.setMouseReporting(this.inlineSurface === null && this.mouseMode !== 'off');
+    if (this.mouseMode !== 'off') {
       this.onMouse((event) => {
-        const action = event.action;
-        if (action !== 'wheelup' && action !== 'wheeldown') return;
-        if (this.interactivePrompt !== null || this.overlay.isActive) return;
-        if (this.windowMgr.isActive) {
-          this.windowMgr.handleKey(action === 'wheelup' ? 'up' : 'down');
-          this.scheduler.requestImmediate();
+        const wheel = event.action === 'wheelup' || event.action === 'wheeldown';
+        if (wheel) {
+          this.pointer.cancel();
+          if (this.interactivePrompt !== null || this.overlay.isActive) return;
+          const transcript = this.fullScreen.measure('transcript');
+          const layout = this.sidebarLayout;
+          if (!this.windowMgr.isActive && transcript && layout
+            && event.x >= transcript.left + transcript.innerLeft + layout.column
+            && event.y >= transcript.top + transcript.innerTop
+            && event.y < transcript.top + transcript.innerTop + layout.height) {
+            this.sidebar?.scroll(event.action === 'wheelup' ? -WHEEL_STEP_LINES : WHEEL_STEP_LINES);
+            this.scheduler.requestImmediate();
+            return;
+          }
+          if (this.windowMgr.isActive) {
+            this.windowMgr.handleKey(event.action === 'wheelup' ? 'up' : 'down');
+            this.scheduler.requestImmediate();
+            return;
+          }
+          this.scrollByLines(event.action === 'wheelup' ? -WHEEL_STEP_LINES : WHEEL_STEP_LINES);
           return;
         }
-        this.scrollByLines(action === 'wheelup' ? -WHEEL_STEP_LINES : WHEEL_STEP_LINES);
+        if (this.mouseMode === 'all') this.pointer.handle(event);
       });
     }
     this.bindKey(['left'], () => {
@@ -4607,6 +4711,7 @@ exportHistory(): string[] {
   }
 
   private followTail(): void {
+    this.pointer.clear();
     this.exitTaskView();
     this.follow = true;
     this.scrollTop = 0;
@@ -4711,6 +4816,7 @@ exportHistory(): string[] {
   }
 
   private scrollBy(pages: number): void {
+    this.pointer.cancel();
     const rows = this.visibleTranscriptRows();
     const total = this.transcript.totalLines(this.model, this.renderOptions());
     const maxTop = Math.max(0, total - rows);
@@ -4732,6 +4838,7 @@ exportHistory(): string[] {
    * `scrollBy` — reaching the newest line resumes following.
    */
   private scrollByLines(lines: number): void {
+    this.pointer.cancel();
     const total = this.transcript.totalLines(this.model, this.renderOptions());
     const maxTop = Math.max(0, total - this.visibleTranscriptRows());
     // Negative lines scroll UP: `scrollTop` counts from the top of the
@@ -4741,6 +4848,184 @@ exportHistory(): string[] {
     this.scrollTop = next;
     this.follow = next >= maxTop;
     this.scheduler.requestImmediate();
+  }
+
+  private toggleTranscriptBlock(id: string): void {
+    const block = this.model.blocks.find(item => item.id === id);
+    if (!block || !['tool', 'thinking'].includes(block.kind))
+      return;
+    this.selectedBlockId = id;
+    if (this.collapsedBlockIds.has(id)) {
+      this.collapsedBlockIds.delete(id);
+      this.expandedBlockIds.add(id);
+    }
+    else if (block.kind === 'thinking' ? thinkingExpanded(id, this.renderOptions()) : this.expandedBlockIds.has(id) || this.expanded) {
+      this.expandedBlockIds.delete(id);
+      this.collapsedBlockIds.add(id);
+    }
+    else
+      this.expandedBlockIds.add(id);
+    this.noteTranscriptMutation();
+    this.scheduler.requestImmediate();
+  }
+
+  private resizeSidebar(phase: 'start' | 'move' | 'end' | 'cancel', x: number): void {
+    if (phase === 'start') {
+      this.sidebarDragStart = { preferred: this.preferredSidebarWidth };
+      return;
+    }
+    const start = this.sidebarDragStart;
+    if (start === undefined) return;
+    if (phase === 'cancel') {
+      this.preferredSidebarWidth = start.preferred;
+    } else {
+      const region = this.fullScreen.measure('transcript');
+      if (region) this.preferredSidebarWidth = Math.max(18, Math.min(72,
+        region.left + region.innerLeft + region.width - region.innerWidth - x));
+    }
+    if (phase === 'end' || phase === 'cancel') this.sidebarDragStart = undefined;
+    if (phase === 'end' && this.preferredSidebarWidth !== undefined && this.preferredSidebarWidth !== start.preferred) {
+      const columns = this.preferredSidebarWidth;
+      void Promise.resolve().then(() => this.options.onSidebarWidthChange?.(columns)).catch((error: unknown) => {
+        this.printError(`Sidebar resized, but could not save width: ${error instanceof Error ? error.message : String(error)}`);
+      });
+    }
+    if (phase === 'cancel') this.scheduler.request();
+    else this.scheduler.requestImmediate();
+  }
+
+  private setMouseReporting(enabled: boolean): void {
+    if (enabled === this.mouseReporting) return;
+    this.mouseReporting = enabled;
+    this.output.write(enabled ? enableMouseReporting() : disableMouseReporting());
+  }
+
+  private commitPointerRegions(): void {
+    if (!this.mouseReporting || this.mouseMode !== 'all') {
+      this.pointer.clear();
+      return;
+    }
+    const hits: HitRegion[] = [];
+    const add = (id: string, region: RegionMetrics | null, row: number, column: number, width: number, activate: HitRegion['activate'], revision?: string | number) => {
+      if (!region?.laidOut || row < 0 || row >= region.height - region.innerHeight || width <= 0)
+        return;
+      hits.push({ id, row: region.top + region.innerTop + row, column: region.left + region.innerLeft + column, width: Math.min(width, region.width - region.innerWidth - column), height: 1, activate, revision });
+    };
+    if (this.overlay.isActive) {
+      const geometry = this.fullScreen.measure('overlay'), id = this.overlay.request?.requestId;
+      for (const target of this.overlay.pointerTargets())
+        add(`approval:${id}:${target.key}`, geometry, target.row, target.column ?? 0, target.width ?? geometry?.width ?? 0, () => {
+          if (this.overlay.request?.requestId !== id || !(this.options.canAnswerPermissions?.() ?? false))
+            return;
+          if (target.key === 'confirm-back' || target.key === 'confirm-proceed') {
+            this.overlay.handleKey({ name: target.key === 'confirm-back' ? 'up' : 'down' });
+            this.overlay.handleKey({ name: 'return' });
+          }
+          else if (target.key.startsWith('option:')) {
+            this.overlay.handleKey({ optionIndex: Number(target.key.slice('option:'.length)) });
+          }
+          else {
+            this.overlay.handleKey(target.key === 'return' ? { name: 'return' } : { ch: target.key });
+          }
+          this.scheduler.requestImmediate();
+        }, id);
+      this.pointer.commit(hits);
+      return;
+    }
+    const input = this.fullScreen.measure('input');
+    if (this.interactivePrompt) {
+      const prompt = this.interactivePrompt;
+      if (prompt.kind === 'select')
+        for (const target of this.pointerPrompt)
+          add(`prompt:${target.index}`, input, target.row, 0, input?.width ?? 0, () => {
+            if (this.interactivePrompt !== prompt)
+              return;
+            prompt.selectedIndex = target.index;
+            this.handleInteractivePromptKey('return');
+            this.scheduler.requestImmediate();
+          }, prompt.title);
+      this.pointer.commit(hits);
+      return;
+    }
+    if (this.windowMgr.isActive) {
+      const revision = this.windowMgr.pointerRevision;
+      for (const target of this.windowMgr.pointerTargets())
+        add(`window:${target.id}`, input, target.row, target.column, target.width ?? input?.width ?? 0, () => {
+          if (this.windowMgr.pointerRevision !== revision)
+            return;
+          target.activate();
+          this.scheduler.requestImmediate();
+        }, revision);
+      this.pointer.commit(hits);
+      return;
+    }
+    if (this.completion.isOpen) {
+      const geometry = this.fullScreen.measure('completion');
+      const snapshot = this.completion.snapshot;
+      for (const target of this.pointerCompletion) {
+        const item = snapshot.items[target.index];
+        if (!item)
+          continue;
+        add(`completion:${snapshot.mode}:${item.value}`, geometry, target.row, 0, geometry?.width ?? 0, () => {
+          const current = this.completion.snapshot;
+          if (current.items[target.index] !== item)
+            return;
+          this.completion.select(target.index);
+          this.routeContended('return');
+          this.scheduler.requestImmediate();
+        }, this.editor.text);
+      }
+    }
+    const draft = this.editor.text;
+    this.composerPointerRows.forEach((boundaries, row) => {
+      if (boundaries.length === 0 || input === null)
+        return;
+      add(`editor:${row}`, input, row, 0, input.width - input.innerWidth, (point) => {
+        if (this.editor.text !== draft)
+          return;
+        const column = point.x - input.left - input.innerLeft;
+        let nearest = boundaries[0]!;
+        for (const boundary of boundaries) {
+          if (Math.abs(boundary.column - column) < Math.abs(nearest.column - column))
+            nearest = boundary;
+        }
+        this.editor.moveTo(nearest.offset);
+        this.focus = 'input';
+        this.refreshCompletion();
+        this.scheduler.requestImmediate();
+      }, draft);
+    });
+    const geometry = this.fullScreen.measure('transcript');
+    const width = this.transcriptContentWidth();
+    for (const target of this.transcriptPane.disclosureTargets(width, this.visibleTranscriptRows())) {
+      add(`block:${target.id}`, geometry, target.row, 0, target.width, () => this.toggleTranscriptBlock(target.id));
+    }
+    if (this.sidebar && this.sidebarLayout) {
+      const layout = this.sidebarLayout;
+      const sessionId = this.options.workbenchSessionId?.() ?? '';
+      if (geometry?.laidOut) hits.push({
+        id: 'sidebar-divider', row: geometry.top + geometry.innerTop,
+        column: geometry.left + geometry.innerLeft + layout.column, width: 1, height: layout.height,
+        activate: () => {}, drag: (phase, point) => this.resizeSidebar(phase, point.x),
+      });
+      for (const target of this.sidebar.pointerTargets()) {
+        add(`sidebar:${target.id}`, geometry, target.row, layout.column + target.column, target.width, () => {
+          if ((this.options.workbenchSessionId?.() ?? '') !== sessionId) return;
+          if ('tab' in target.action) {
+            this.sidebar?.selectTab(target.action.tab);
+            this.scheduler.requestImmediate();
+          } else {
+            const command = target.action.command;
+            void Promise.resolve().then(() => this.options.onWorkbenchCommand?.(command)).catch((error: unknown) => {
+              this.printError(error instanceof Error ? error.message : String(error));
+            });
+          }
+        }, sessionId);
+      }
+    }
+    if (!this.follow)
+      add('follow-tail', this.fullScreen.measure('status'), 0, 0, visibleWidth('[↓ Latest]'), () => this.actionHandlers.get('follow-tail')?.());
+    this.pointer.commit(hits);
   }
 
   // ------------------------------------------------------------------ plumbing
@@ -4753,6 +5038,7 @@ exportHistory(): string[] {
 
   private bindResize(): void {
     this.writer.on('resize', () => {
+      this.pointer.clear();
       this.scheduler.requestImmediate();
     });
   }

@@ -164,6 +164,7 @@ export function renderOverlay(
   request: OverlayRequest,
   answerable: boolean,
   view: OverlayView = { selectedIndex: 0, staged: false, queueDepth: 0 },
+  onChoice?: (row: number, key: string, column?: number, width?: number) => void,
 ): string {
   const lines: string[] = [];
   lines.push(`{bold}{yellow-fg}Permission required{/yellow-fg}{/bold}`);
@@ -184,6 +185,7 @@ export function renderOverlay(
         && view.selectedIndex === index
         ? '  {yellow-fg}press Enter again to confirm{/yellow-fg}'
         : '';
+      onChoice?.(lines.reduce((count,line)=>count+line.split('\n').length,0),String(index+1));
       lines.push(`${marker} [${index + 1}] ${option.label} (${option.key})${stagedNote}`);
     });
     if (request.destructive === true) {
@@ -259,8 +261,13 @@ export class OverlayState {
     return this.staged;
   }
 
+  private pointerRows: Array<{ row: number; key: string; column?: number; width?: number }> = [];
+  pointerTargets(): readonly { row: number; key: string; column?: number; width?: number }[]{return this.pointerRows;}
+
   /** Body to render, or `null` when the overlay is closed. */
   body(answerable: boolean): string | null {
+    this.pointerRows=[];
+    const remember = (row: number, key: string, column?: number, width?: number) => { this.pointerRows.push({ row, key, column, width }); };
     if (this.current === null) return null;
     if (this.questionAsk !== null) {
       // A questionnaire cannot be answered without a responder wired, and
@@ -268,13 +275,13 @@ export class OverlayState {
       if (!answerable) {
         return '{red-fg}no permission responder is attached to this run; this question cannot be answered here{/red-fg}';
       }
-      return this.questionAsk.render({ queueDepth: this.queue.length });
+      return this.questionAsk.render({ queueDepth: this.queue.length },remember);
     }
     return renderOverlay(this.current, answerable, {
       selectedIndex: this.selectedIndex,
       staged: this.staged,
       queueDepth: this.queue.length,
-    });
+    },remember);
   }
 
   /**
@@ -339,7 +346,7 @@ export class OverlayState {
    * caller can keep swallowing them (they must not reach the prompt under a
    * modal) without the picker jumping on stray input.
    */
-  handleKey(input: { readonly name?: string; readonly ch?: string }): boolean {
+  handleKey(input: { readonly name?: string; readonly ch?: string; readonly optionIndex?: number }): boolean {
     if (this.current === null) return false;
 
     // An ask-user-question head owns its own loop. Esc means "cancel the ask"

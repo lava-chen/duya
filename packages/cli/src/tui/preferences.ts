@@ -80,12 +80,15 @@ export const TUI_EFFORT_BY_MODEL_SETTING = 'cli.tui.effortByModel';
 
 export type TuiThemePreference = 'system' | ThemeName;
 export type TuiDisplayMode = 'fullscreen' | 'inline';
+export const TUI_SIDEBAR_WIDTH_SETTING = 'cli.tui.sidebarWidth';
 
 export interface TuiPreferences {
   /** Shared Desktop/TUI language preference from the global `locale` setting. */
   readonly locale: CommandLocale;
   readonly theme: TuiThemePreference;
   readonly displayMode: TuiDisplayMode;
+  /** Preferred fullscreen sidebar width; narrow terminals only clamp its display. */
+  readonly sidebarWidth?: number;
   readonly effort: EffortLevel;
   /**
    * Default effort per model id, overriding `effort` for that model only.
@@ -165,11 +168,11 @@ export const COMPLETION_ROWS_RANGE = { min: 3, max: 12 } as const;
 export const INPUT_ROWS_RANGE = { min: 2, max: 16 } as const;
 
 /** The tool-group modes, in the order the `/settings` row cycles them. */
-export const TOOL_GROUP_MODES: readonly ToolGroupMode[] = ['full', 'names', 'running'];
+export const TOOL_GROUP_MODES: readonly ToolGroupMode[] = ['full', 'names', 'running', 'focus', 'hidden'];
 
 /** Unknown values fall back: a mode the renderer does not implement is worse than the one it does. */
 function parseToolGroupMode(value: string | undefined, fallback: ToolGroupMode): ToolGroupMode {
-  return value === 'full' || value === 'names' || value === 'running' ? value : fallback;
+  return TOOL_GROUP_MODES.find((mode) => mode === value) ?? fallback;
 }
 
 /** `'false' | '0' | 'off'` are the ways a setting endpoint can say no. */
@@ -246,7 +249,9 @@ export function parseTuiPreferences(values: Readonly<Record<string, string>>): T
   const storedTheme = values[TUI_THEME_SETTING];
   const storedDisplayMode = values[TUI_DISPLAY_MODE_SETTING];
   const storedEffort = values[TUI_EFFORT_SETTING];
+  const sidebarWidth = Number(values[TUI_SIDEBAR_WIDTH_SETTING]);
   return {
+    ...(Number.isInteger(sidebarWidth) && sidebarWidth >= 18 && sidebarWidth <= 72 ? { sidebarWidth } : {}),
     locale: storedLocale === 'zh' || storedLocale === 'en' ? storedLocale : DEFAULT_TUI_PREFERENCES.locale,
     theme: storedTheme === 'dark' || storedTheme === 'light' || storedTheme === 'system'
       ? storedTheme
@@ -340,6 +345,8 @@ export function describeRows(value: number): string {
 
 /** Menu spelling of the tool-group mode: what the reader will see per batch. */
 export function describeToolGroupMode(mode: ToolGroupMode): string {
+  if (mode === 'focus') return 'Focus: reasoning open';
+  if (mode === 'hidden') return 'Hidden';
   if (mode === 'names') return 'Names only';
   if (mode === 'running') return 'Running only';
   return 'All calls';

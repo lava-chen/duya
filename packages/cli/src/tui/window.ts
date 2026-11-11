@@ -106,6 +106,21 @@ export interface ListSection {
  * `open()`; a panel creates one per tab and swaps the active one in.
  */
 export class ListState {
+  private renderedRows: Array<{row:number;value:string}>=[];
+  private renderedOffset=0;
+
+  pointerRows(): readonly {
+    row: number;
+    value: string;
+  }[] { return this.renderedRows.map(hit => ({ ...hit, row: hit.row + this.renderedOffset })); }
+
+  pick(value: string): boolean {
+    if (!this.visibleItems().some(item => item.value === value))
+      return false;
+    this.reveal(value);
+    return true;
+  }
+
   items: readonly WindowItem[] = [];
   emptyMessage = 'No items.';
   filterable = false;
@@ -286,12 +301,15 @@ export class ListState {
     // both ceilings: render(20) must still show 12 rows (the modal default),
     // while the dock — which derives viewportSize FROM its budget — fills it.
     const viewport = Math.max(1, Math.min(this.viewportRows, maxRows - lines.length));
+    const offset=lines.length;
     lines.push(...this.renderRows(viewport, width));
+    this.renderedOffset=offset;
     return lines;
   }
 
   /** The list rows only: `…` markers, selectable rows, the detail line. */
   renderRows(maxRows: number, width: number): string[] {
+    this.renderedRows=[];this.renderedOffset=0;
     const viewport = Math.max(1, maxRows);
     const lines: string[] = [];
     const rows = this.visibleItems();
@@ -309,7 +327,8 @@ export class ListState {
     const last = Math.min(rows.length, first + viewport);
     if (first > 0) lines.push('{gray-fg}  …{/gray-fg}');
     for (let i = first; i < last; i += 1) {
-      lines.push(renderItem(rows[i] as WindowItem, i === this.selected, width));
+      const item=rows[i] as WindowItem;this.renderedRows.push({row:lines.length,value:item.value});
+      lines.push(renderItem(item, i === this.selected, width));
     }
     if (last < rows.length) lines.push('{gray-fg}  …{/gray-fg}');
     // The selected row's explanation. Under the list, not on it: the same
@@ -476,6 +495,7 @@ export class RichPanelController implements PanelController {
     const list = this.lists.get(tabId) ?? new ListState();
     list.refresh({ ...tab, ...section });
     this.lists.set(tabId, list);
+    this.manager?.invalidatePointer();
     if (this.activeTabId() === tabId) this.manager?.repaint();
   }
 
@@ -500,12 +520,31 @@ export class RichPanelController implements PanelController {
     return 5;
   }
 
+  private pointerTabs:Array<{column:number;width:number;index:number}>=[];
+
+  pointerHeader(): readonly {
+    column: number;
+    width: number;
+    index: number;
+  }[] { return this.pointerTabs; }
+
+  pickTab(index: number): void {
+    const tab = this.spec.tabs[index];
+    if (tab === undefined || tab.disabled === true) return;
+    this.activeIndex = index;
+    this.focus = 'content';
+    this.manager?.invalidatePointer();
+  }
+
+  focusContent(): void { this.focus = 'content'; }
   renderHeader(width: number): readonly string[] {
+    this.pointerTabs=[];let column=0;
     const per = Math.max(6, Math.floor(Math.max(width, 40) / Math.max(1, this.spec.tabs.length)));
     const parts = this.spec.tabs.map((tab, index) => {
       const count = this.lists.get(tab.id)?.items.length ?? 0;
       const text = count > 0 ? `${tab.label} ${count}` : tab.label;
       const clean = escapeTags(truncateToWidth(text, per));
+      const tabWidth=visibleWidth(truncateToWidth(text,per))+2;this.pointerTabs.push({column,width:tabWidth,index});column+=tabWidth+1;
       const selected = index === this.activeIndex;
       if (selected && this.focus === 'header') return `{inverse}{cyan-fg} ${clean} {/cyan-fg}{/inverse}`;
       if (selected) return `{cyan-fg}{bold} ${clean} {/bold}{/cyan-fg}`;
@@ -679,6 +718,40 @@ export interface WindowSpec {
 }
 
 export class WindowManager {
+  pointerRevision=0;
+  private renderedHeaderRows = 1;
+  private pointerRowLimit = Number.POSITIVE_INFINITY;
+
+  pointerTargets(): readonly {
+    row: number;
+    column: number;
+    width?: number;
+    id: string;
+    activate: () => void;
+  }[] {
+    if (!this.spec)
+      return [];
+    const controller = this.spec.controller;
+    const rows: Array<{
+      row: number;
+      column: number;
+      width?: number;
+      id: string;
+      activate: () => void;
+    }> = this.activeList.pointerRows().map(hit => ({ row: hit.row + this.renderedHeaderRows, column: 0, id: `row:${hit.value}`, activate: () => {
+        if (!this.spec || !this.activeList.pick(hit.value))
+          return;
+        if (this.spec.controller instanceof RichPanelController)
+          this.spec.controller.focusContent();
+        this.handleKey('return');
+        this.repaint();
+      } }));
+    if (controller instanceof RichPanelController)
+      for (const tab of controller.pointerHeader())
+        rows.push({ row: 1, column: tab.column, width: tab.width, id: `tab:${tab.index}`, activate: () => { controller.pickTab(tab.index); this.repaint(); } });
+    return rows.filter((target) => target.row < this.pointerRowLimit);
+  }
+
   private spec: WindowSpec | null = null;
   private list: ListState = new ListState();
   private staticScrollTop = 0;
@@ -688,6 +761,7 @@ export class WindowManager {
 
   /** Open (or replace) the window. Navigation state resets. */
   open(spec: WindowSpec): void {
+    this.pointerRevision++;
     this.spec = spec;
     this.staticScrollTop = 0;
     if (spec.controller !== undefined) {
@@ -701,6 +775,7 @@ export class WindowManager {
 
   /** Close whatever is open. Closing a closed window is fine. */
   close(): void {
+    this.pointerRevision++;
     const spec = this.spec;
     this.spec = null;
     // The controller flushes BEFORE the host learns the window is gone: a
@@ -724,8 +799,14 @@ export class WindowManager {
    */
   updateItems(items: readonly WindowItem[]): void {
     if (this.spec === null) return;
+    this.pointerRevision++;
     this.spec = { ...this.spec, items };
     this.activeList.updateItems(items);
+  }
+
+  /** Invalidate delayed clicks when asynchronous panel data changes. */
+  invalidatePointer(): void {
+    this.pointerRevision++;
   }
 
   /** Ask the host to repaint (controller path; kept off the spec callbacks). */
@@ -897,6 +978,7 @@ export class WindowManager {
     this.activeList.rowsViewportSize = VIEWPORT_ROWS;
     if (body === null) return null;
     const lines = body.split('\n');
+    this.pointerRowLimit = lines.length > budget ? Math.max(0, budget - 2) : budget;
     if (lines.length <= budget) return lines;
     const hint = lines[lines.length - 1] ?? '';
     return [...lines.slice(0, Math.max(0, budget - 2)), '…', hint];
@@ -910,6 +992,7 @@ export class WindowManager {
   }
 
   private compose(maxRows: number, width: number): string | null {
+    this.pointerRowLimit = maxRows > 0 ? Math.max(0, maxRows - 1) : Number.POSITIVE_INFINITY;
     const spec = this.spec;
     if (spec === null) return null;
     const controller = spec.controller;
@@ -917,6 +1000,7 @@ export class WindowManager {
     const lines: string[] = [];
     if (controller !== undefined) {
       lines.push(...controller.renderHeader(width));
+      this.renderedHeaderRows=lines.length;
       const footer = controller.footerText();
       const list = controller.activeList();
       const bodyRows = list.renderBody(Math.max(1, maxRows - lines.length - (footer === '' ? 0 : 2)), width);
@@ -926,6 +1010,7 @@ export class WindowManager {
     }
 
     lines.push(`{bold}{cyan-fg}${escapeTags(spec.title)}{/cyan-fg}{/bold}`);
+    this.renderedHeaderRows=lines.length;
 
     if (spec.items !== undefined) {
       lines.push(...this.activeList.renderBody(Math.max(1, maxRows - lines.length), width));

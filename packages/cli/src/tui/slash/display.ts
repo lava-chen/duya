@@ -43,7 +43,7 @@ function isProfileId(id: string): id is DisplayProfileId {
 }
 
 /**
- * The list: four named vectors, then the switches they are made of.
+ * The list: named vectors, then the switches they are made of.
  *
  * The current profile is marked rather than sorted to the top: a reader who
  * wants to know "which one am I on" is scanning, and a marker in the value
@@ -77,7 +77,8 @@ function applyProfile(ctx: TuiSlashContext, state: SettingsState, id: DisplayPro
 
 /** `/display compact` — the same change the list makes, without opening it. */
 function profileFromArgs(args: string): DisplayProfileId | null {
-  const wanted = args.trim().toLowerCase();
+  const input = args.trim().toLowerCase();
+  const wanted = input === 'normal' ? 'detailed' : input;
   if (wanted === '') return null;
   const match = DISPLAY_PROFILES.find(
     (profile) => profile.id === wanted || profile.label.toLowerCase() === wanted.replace(/\s+/gu, ' '),

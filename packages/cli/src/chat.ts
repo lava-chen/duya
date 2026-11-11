@@ -66,6 +66,7 @@ import {
   readTuiPreferences,
   resolveEffectiveTuiPreferences,
   TUI_EFFORT_SETTING,
+  TUI_SIDEBAR_WIDTH_SETTING,
   type TuiPreferences,
 } from './tui/preferences.js';
 import {
@@ -1258,6 +1259,10 @@ export async function chatTui(
     // to its id prefix — the same eight characters the status bar shows — which
     // is still enough to tell tabs apart.
     sessionTitle: () => activeSession.title || activeSession.id.slice(0, 8),
+    workbenchSessionId: () => activeSession.id,
+    onWorkbenchCommand: (command) => handleLine(command, [], true),
+    sidebarWidth: effectivePreferences.sidebarWidth,
+    onSidebarWidthChange: (columns) => client.setSetting(TUI_SIDEBAR_WIDTH_SETTING, String(columns)),
     // OSC 7 and the footer both follow the SESSION's directory: `/project`
     // moves the surface without changing process.cwd(), and a new tab opened
     // from this window must land where runs actually execute.
@@ -1564,6 +1569,7 @@ export async function chatTui(
   async function beginSessionInDirectory(
     directory: string,
     notice: (session: HostSessionRecord) => string,
+    preserveDraft = false,
   ): Promise<void> {
     const previousModel = activeSession.model;
     activeSession = await createChatSession(client, options, directory);
@@ -1585,15 +1591,16 @@ export async function chatTui(
     // honest moment to do it.
     void pluginCandidates.refresh();
     sessionRows = (await listWorkspaceSessions(client, activeSession)).map(sessionCompletionItem);
-    tui.clearTranscript();
+    tui.clearTranscript(preserveDraft);
     tui.printNotice(notice(activeSession));
   }
 
-  async function startNewSession(): Promise<void> {
+  async function startNewSession(preserveDraft = false): Promise<void> {
     if (refuseSessionSwitch('starting a new session')) return;
     await beginSessionInDirectory(
       projectDirectory,
       (session) => `Started a new session (${session.id.slice(0, 8)}).`,
+      preserveDraft,
     );
   }
 
@@ -1898,7 +1905,7 @@ export async function chatTui(
     }
   }
 
-  async function handleLine(line: string, attachments: readonly FileAttachment[] = []): Promise<void> {
+  async function handleLine(line: string, attachments: readonly FileAttachment[] = [], preserveDraft = false): Promise<void> {
     const text = line.trim();
     if (text === '') return;
     const command = /^\/([^\s]+)(?:\s+(.*))?$/u.exec(text);
@@ -1914,7 +1921,7 @@ export async function chatTui(
           if (sessionTransition) return;
           sessionTransition = true;
           try {
-            if (name === 'new') await startNewSession();
+            if (name === 'new') await startNewSession(preserveDraft);
             else await resumeSession(args);
           } finally {
             sessionTransition = false;

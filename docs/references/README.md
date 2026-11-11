@@ -8,6 +8,7 @@
 - [Codex thread / worktree](codex-thread-and-worktree-management.md)：2026-09-30 的源码调查，使用前核对版本。
 - [个人智能体产品](personal-agent-products.md)：2026-10-25 四产品官方机制、未公开范围与 DUYA 源码核实入口。
 - [多 Agent 协作工具能力实测](multi-agent-tool-capability.md)：2026-10-31 对 `task` 子代理派发面与跨会话协作面的 12 项实测结论，含 3 项失效的根因、复现步骤与代码锚点。
+- [Pi TUI 与工作台](pi-tui-workbench.md)：2026-11-10 对照当前 CLI 自研 TUI、Pi 核心和 pi-ui-extension 1.20.2，区分复用能力、本轮新增与侧栏缺口。
 - [Codex TUI 表面与斜杠命令体系对照](codex-tui-alignment-survey.md)：2026-11-03 以 codex @ `fbf5f0d3a7` 对照 duya @ `203d7d51`；斜杠命令（codex 65 / duya 53）、TUI 表面九轴对照、22 条差距清单与 7 个候选切片。
 
 - [多 Session Agent 协调架构](agent-coordination-models.md)：Claude Code Projects、Claude Managed Agents 与 DeepSeek 原型的公开机制，以及 Duya Bot / Session 接缝，核对至 2026-11-01。

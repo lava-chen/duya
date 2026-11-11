@@ -10,10 +10,13 @@ export interface OwnKeyEvent {
 }
 
 export interface OwnMouseEvent {
-  readonly action: 'wheelup' | 'wheeldown' | 'mousedown' | 'mouseup';
+  readonly action: 'wheelup' | 'wheeldown' | 'mousedown' | 'mouseup' | 'mousemove';
   readonly x: number;
   readonly y: number;
   readonly button: number;
+  readonly shift?: boolean;
+  readonly meta?: boolean;
+  readonly ctrl?: boolean;
 }
 
 export interface OwnKeyParserHandlers {
@@ -393,9 +396,14 @@ export class OwnKeyParser {
     const button = code & 3;
     const action = (code & 64) !== 0
       ? (button === 0 ? 'wheelup' : button === 1 ? 'wheeldown' : null)
-      : (final === 'm' ? 'mouseup' : 'mousedown');
+      : ((code & 32) !== 0 ? 'mousemove' : final === 'm' ? 'mouseup' : 'mousedown');
     if (action === null) return;
-    this.handlers.mouse?.({ action, x, y, button });
+    this.handlers.mouse?.({
+      action, x, y, button,
+      ...((code & 4) !== 0 ? { shift: true } : {}),
+      ...((code & 8) !== 0 ? { meta: true } : {}),
+      ...((code & 16) !== 0 ? { ctrl: true } : {}),
+    });
   }
 
   private emitCharacter(

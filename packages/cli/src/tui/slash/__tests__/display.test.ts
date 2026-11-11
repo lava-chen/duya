@@ -5,7 +5,7 @@
  *
  * ## What these cases pin
  *
- *  1. The list names the four profiles and then shows the same switches
+ *  1. The list names the profiles and then shows the same switches
  *     `/settings` shows, taken from the same row objects rather than
  *     re-described — two menus that disagree about `Tool groups` is the failure
  *     this file exists to prevent.
@@ -128,13 +128,16 @@ function liveVector(preferences: TuiPreferences = DEFAULT_TUI_PREFERENCES): Live
 }
 
 describe('/display', () => {
-  it('lists the four profiles and then the transcript switches', async () => {
+  it('lists the profiles and then the transcript switches', async () => {
     const harness = await run({});
     expect(harness.rows.map((row) => row.id)).toEqual([
       'detailed',
       'standard',
+      'focus',
+      'folded',
       'compact',
       'running',
+      'hidden',
       'show-thinking',
       'expand-blocks',
       'tool-results',
@@ -210,6 +213,6 @@ describe('/display', () => {
     const state = new SettingsState(parseTuiPreferences({}), liveVector(), 'm-1');
     const ids = displayRows(state).map((row) => row.id);
     // The four switch rows must be the settings menu's own, in its order.
-    expect(ids.slice(4)).toEqual(['show-thinking', 'expand-blocks', 'tool-results', 'tool-groups']);
+    expect(ids.slice(7)).toEqual(['show-thinking', 'expand-blocks', 'tool-results', 'tool-groups']);
   });
 });

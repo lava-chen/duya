@@ -416,8 +416,8 @@ export { safeHyperlink } from '../core/span.js';
  * column 223) to `ESC[<b;x;yM`, which is why the parser in `own-key-parser.ts`
  * reads SGR and why enabling the pair together is not optional.
  *
- * Only the wheel is consumed; clicks stay with the terminal so text selection
- * keeps working.
+ * Reporting captures button events as well as the wheel. Native selection
+ * needs the terminal's modifier override (usually Shift), or reporting disabled.
  */
 export function enableMouseReporting(): string {
   return `${CSI}?1002h${CSI}?1006h`;

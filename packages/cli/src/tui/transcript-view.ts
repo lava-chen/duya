@@ -112,7 +112,7 @@ export { escapeTags } from './markdown/escape.js';
  * bodies or not" and stays orthogonal, because a reader can want every call
  * listed and none of their JSON, or only the running call and its output.
  */
-export type ToolGroupMode = 'full' | 'names' | 'running';
+export type ToolGroupMode = 'full' | 'names' | 'running' | 'focus' | 'hidden';
 
 /** How a transcript is currently being drawn. */
 export interface RenderOptions {
@@ -1357,7 +1357,7 @@ function groupChildRow(
  * asked for content has to get it without leaving the mode.
  */
 function toolBodyAllowed(options: RenderOptions, id: string): boolean {
-  if (options.toolGroupMode !== 'names') return true;
+  if (options.toolGroupMode !== 'names' && options.toolGroupMode !== 'focus') return true;
   return options.expanded || options.expandedBlockIds?.has(id) === true;
 }
 
@@ -1698,7 +1698,10 @@ function nodeBody(
   styles: Styles,
 ): string[] {
   if (block.kind === 'thinking') {
-    return thinkingBody(block, blockExpanded(block.id, options), styles, plan.bodyIndent, options.width);
+    if (options.toolGroupMode === 'hidden') return [];
+    if ((options.toolGroupMode === 'focus' || options.toolGroupMode === 'names')
+      && !thinkingExpanded(block.id, options)) return [];
+    return thinkingBody(block, thinkingExpanded(block.id, options), styles, plan.bodyIndent, options.width);
   }
   if (block.kind !== 'tool') return [];
   // A spawn draws its brief before any of the ordinary body rules apply: the
@@ -1819,10 +1822,10 @@ export function renderPlannedBlock(
   // A node: a standalone tool call or a thinking block.
   const connector = plan.connector ?? '└';
   if (block.kind === 'thinking') {
-    const expanded = blockExpanded(block.id, options);
-    rows.push(
-      `${connector} ${styles.thinking(`• ${thinkingSummary(block)}`)}${styles.muted(expanded ? ' [−]' : ' [+]')}`,
-    );
+    const expanded = thinkingExpanded(block.id, options);
+    const summary = thinkingSummary(block);
+    const disclosure = options.toolGroupMode === 'hidden' ? '' : styles.muted(expanded ? ' [−]' : ' [+]');
+    rows.push(`${connector} ${styles.thinking(`• ${summary}`)}${disclosure}`);
   } else if (block.kind === 'tool') {
     rows.push(toolNodeRow(block, options, styles, connector));
   } else {
@@ -2085,6 +2088,13 @@ export function blockExpanded(id: string, options: RenderOptions): boolean {
   return options.expanded || options.expandedBlockIds?.has(id) === true;
 }
 
+/** Focus keeps reasoning open while tool bodies retain their own defaults. */
+export function thinkingExpanded(id: string, options: RenderOptions): boolean {
+  if (options.toolGroupMode === 'hidden') return false;
+  if (options.collapsedBlockIds?.has(id)) return false;
+  return blockExpanded(id, options) || options.toolGroupMode === 'focus';
+}
+
 /** Blocks that never take part in the trail. */
 function renderPlainBlock(block: Block, options: RenderOptions, styles: Styles): string {
   switch (block.kind) {
@@ -2147,8 +2157,9 @@ export function renderBlock(block: Block, options: RenderOptions, styles: Styles
  * every later block's connector.
  */
 export function visibleBlocks(blocks: readonly Block[], options: RenderOptions): readonly Block[] {
-  if (options.showThinking !== false) return blocks;
-  return blocks.filter((block) => block.kind !== 'thinking');
+  if (options.showThinking !== false && options.toolGroupMode !== 'hidden') return blocks;
+  return blocks.filter((block) => (options.showThinking !== false || block.kind !== 'thinking')
+    && (options.toolGroupMode !== 'hidden' || block.kind !== 'tool'));
 }
 
 export function renderTranscript(

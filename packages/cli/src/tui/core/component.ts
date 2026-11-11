@@ -95,24 +95,25 @@ export class SceneCanvas {
   }
 
   /** Write one already-tagged line at `(row, column)`, clipped to the canvas. */
-  writeTagged(row: number, column: number, line: string): void {
-    this.writeSpans(row, column, tagsToSpans(line));
+  writeTagged(row: number, column: number, line: string, maxWidth?: number): void {
+    this.writeSpans(row, column, tagsToSpans(line), maxWidth);
   }
 
   /** Write spans at `(row, column)`, clipped to the canvas. */
-  writeSpans(row: number, column: number, spans: readonly StyledSpan[]): void {
+  writeSpans(row: number, column: number, spans: readonly StyledSpan[], maxWidth?: number): void {
     let cursor = column;
+    const right = maxWidth === undefined ? this.width : Math.min(this.width, column + Math.max(0, maxWidth));
     for (const span of spans) {
       for (const glyph of Array.from(span.text)) {
         const width = codePointWidth(glyph);
         if (width === 0) {
           // A combining mark belongs to the cell before it. Dropping it would
           // turn every accented word into a different word.
-          const previous = this.cells[row]?.[cursor - 1];
+          const previous = maxWidth !== undefined && cursor <= column ? undefined : this.cells[row]?.[cursor - 1];
           if (previous !== undefined && !previous.continuation) previous.text += glyph;
           continue;
         }
-        if (cursor + width > this.width || cursor < 0) return;
+        if (cursor + width > right || cursor < 0) return;
         const target = this.cells[row]?.[cursor];
         if (target === undefined) return;
         target.text = glyph;
