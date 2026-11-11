@@ -29,7 +29,7 @@
 - [x] S1：Desktop 与独立 Host 收敛到一个 SQLite handle/owner lock；旧 `duya-core.db` 按目标 schema 列名幂等合并，冲突/未知 schema 时回滚并拒绝启动，成功后留 `.pre-unification` 备份。
 - [x] S2：main/core 迁移与 store 在 `duya-main.db` 共用同一物理 schema/连接；memory-state 保留自己的校验账本但在同一连接迁移，复用正式 `projects` 表；旧 `memory-state.db` 表按主键合并、成功后留备份。
 - [x] S3：`message_index.payload` 迁移保存完整 rollout 行；启动扫描旧 JSONL 回填缺行 payload，timeline/search 从 SQLite 读写，JSONL 保留为恢复镜像和导出格式。
-- [x] S4：验证升级、新安装与失败回滚；更新 tracked Host bundle；实现提交 `0b62e8d13` 已推送，PR #628 已开。PR 首轮 CI 的 worker state ratchet 找到新增可变集合声明，现已改为只读数组；相关门禁、Data 测试与类型检查通过，等待修复提交上的 CI/review。未合并。
+- [x] S4：验证升级、新安装与失败回滚；更新 tracked Host bundle；实现提交 `0b62e8d13` 已推送，PR #628 已开。PR CI 发现 importer 表名单需要是只读状态且 tracked bundle 必须包含修复；已改为只读数组并重建 bundle，等待 freshness 与 CI 重跑。未合并。
 
 ## 发现与决策
 
@@ -60,6 +60,7 @@
 | `0b62e8d13` / 干净提交树 | Linux x64，managed worktree | `git status --short`; `git show --stat --oneline HEAD` | 0 / 实现提交已推送到 `origin/codex/unified-database` | tracked Host bundle 已由 `npm run electron:build` 重建 |
 | `0b62e8d13` / PR #628 | GitHub | `gh pr create --base master` | 0 / PR 已创建，未合并 | 等待必需 CI/review |
 | `7b8577f05` / importer 表名单 | Linux x64，managed worktree | 首轮 PR CI `Worker module-level state ratchet` | 失败 / 新增 `NON_DURABLE_TABLES` Set 被门禁拦截；改为只读数组后 `npm run architecture:worker-module-state` 通过，`npm run test --workspace @duya/data` 148 项通过，`npm run typecheck --workspace @duya/data` 通过 | 修复仍待提交并触发新的 PR CI |
+| `63d95e78f` / importer 与 tracked bundle | Linux x64，managed worktree | `npm run bundle:worker`; `npm run architecture:worker-module-state` | worker state gate 通过；bundle 重建完成。提交前 `npm run bundle:verify` 按预期报告该 source 在 bundle commit 后变更 | 将 bundle artifacts 与 rebuild 结果一并提交后重跑 freshness |
 
 ## 接续 / 结果
 
