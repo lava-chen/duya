@@ -63,6 +63,7 @@ import {
   type ScrollbarThumb,
 } from './scrollbar.js';
 import { nextTurnAnchor, previousTurnAnchor } from './turn-navigation.js';
+import { regionBoxes, type RegionBoxes } from './screen/own/layout-tree.js';
 import { tagViewOf, spansToTags } from './markdown/inline.js';
 import { DeltaBuffer, DEFAULT_STALE_MS } from './delta-buffer.js';
 import { RenderScheduler } from './render-scheduler.js';
@@ -829,6 +830,16 @@ export class TUIApp {
   private scrollbarLayout: { column: number; height: number } | null = null;
   /** Rows between the drag's press point and the thumb's top, held while dragging. */
   private scrollbarDragOffset: number | null = null;
+  /**
+   * The fullscreen regions as ONE layout tree (P0 step 3): computed once per
+   * frame in `paintInput` — composer height is known there — and projected by
+   * every later patch. The patches are now PROJECTIONS of these boxes, not
+   * three independent subtractions; `screen/own/layout-tree.test.ts` pins
+   * their parity with the old arithmetic, and the tiny-terminal divergence
+   * (the tree compresses bottom-up instead of sliding boxes to negative
+   * tops) is pinned as a deliberate choice.
+   */
+  private frameBoxes: RegionBoxes | null = null;
   private lastCtrlCAt = Number.NEGATIVE_INFINITY;
   private running = false;
   /** Lines committed to the model but not yet accounted for by a render. */
@@ -2282,10 +2293,6 @@ export class TUIApp {
    * BELOW the composer (pi's order), so opening it lifts the input box by its
    * own height instead of covering the transcript above it.
    */
-  private composerBottom(size: TerminalSize): number {
-    return Math.min(STATUS_ROWS + this.popupRows(), Math.max(0, size.rows - 1));
-  }
-
   /** Rows the popup occupies right now, borders included. Zero when closed. */
   private popupRows(): number {
     // A secondary page owns the slot the popup would hang below, so the popup
@@ -2362,6 +2369,10 @@ export class TUIApp {
       const body = borderRows > 0 ? layout.lines.slice(1, -1) : layout.lines;
       const colored = this.colorComposerBody(body, 0, layout.hasPlaceholder, { row: 0, glyph: shellGlyph });
       const height = layout.bodyRows + this.inputChromeRows() + searchRowOffset;
+      // The tree owns the boxes; the patches are projections of it. On the
+      // feasible domain these bottoms are the same numbers the old
+      // subtractions produced (parity is pinned in layout-tree.test.ts).
+      const boxes = this.projectBoxes(height);
       this.fullScreen.update('input', {
         // The composer's frame is the effort indicator: the two rules the user
         // types between carry the level the next message will run at.
@@ -2370,11 +2381,11 @@ export class TUIApp {
         // so the box the user types into reads as one solid surface.
         background: resolveComposerBackground(this.theme.tags) ?? null,
         height,
-        bottom: this.composerBottom(size),
+        bottom: size.rows - boxes.composer.top - height,
         lines: searchRow === null ? colored : [searchRow.line, ...colored],
       });
       this.fullScreen.update('transcript', {
-        bottom: height + STATUS_ROWS + this.popupRows(),
+        bottom: size.rows - boxes.composer.top,
       });
     } else {
       const painted = this.colorComposerRules(
@@ -2443,6 +2454,7 @@ export class TUIApp {
       this.inlineInputLines = [rule, ...visible, rule];
     } else {
       const height = visible.length + this.inputChromeRows();
+      const boxes = this.projectBoxes(height);
       this.fullScreen.update('input', {
         borderColor: 'cyan',
         // The panel takes the composer's slot, so it does NOT take the
@@ -2450,11 +2462,11 @@ export class TUIApp {
         // input box.
         background: undefined,
         height,
-        bottom: this.composerBottom(size),
+        bottom: size.rows - boxes.composer.top - height,
         lines: visible,
       });
       this.fullScreen.update('transcript', {
-        bottom: height + STATUS_ROWS + this.popupRows(),
+        bottom: size.rows - boxes.composer.top,
       });
     }
     this.inputRows = visible.length;
@@ -2673,7 +2685,11 @@ export class TUIApp {
     // overlap.
     this.fullScreen.update('completion', {
       height: rows.length + 2,
-      bottom: STATUS_ROWS,
+      // Projected from the frame's boxes: the popup docks between the
+      // composer and the status row, so its bottom is the status row's top.
+      // paintInput ran first and computed the boxes for this frame; the
+      // popup's painted height equals what `popupRows()` reserved there.
+      bottom: this.terminalSize().rows - (this.frameBoxes?.status.top ?? this.terminalSize().rows - STATUS_ROWS) - (rows.length + 2),
       lines: rows,
       hidden: false,
     });
@@ -5157,6 +5173,27 @@ exportHistory(): string[] {
     const maxTop = Math.max(0, total - this.visibleTranscriptRows());
     this.scrollTop = Math.max(0, Math.min(maxTop, anchor.line - ANCHOR_CONTEXT_ROWS));
     this.scheduler.requestImmediate();
+  }
+
+  /**
+   * Compute this frame's region boxes from the composer height the paint pass
+   * just derived. The docked patches (input / transcript bottom / completion)
+   * project from these boxes; the overlay stays patch-driven (it floats, it
+   * is not part of the docked tree).
+   */
+  private projectBoxes(composerHeight: number): RegionBoxes {
+    const size = this.terminalSize();
+    const boxes = regionBoxes({
+      rows: size.rows,
+      columns: size.columns,
+      statusRows: STATUS_ROWS,
+      composerHeight,
+      popupRows: this.popupRows(),
+      overlayRows: 0,
+      overlayWidth: 0,
+    });
+    this.frameBoxes = boxes;
+    return boxes;
   }
 
   private scrollBy(pages: number): void {

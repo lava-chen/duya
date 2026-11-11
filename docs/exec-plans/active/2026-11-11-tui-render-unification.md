@@ -35,6 +35,27 @@
   **已开工（2026-11-11）**：`core/layout.ts` 纯分发器落地（basis/grow/shrink/
   min/max + 精确和不变量，`layout.test.ts` 8/8 含 54 项 total 扫描），未接线——
   P0 余下部分（五区域迁移）在 #624/#625 集成后继续。
+  **Step 2（2026-11-11）**：`screen/own/layout-tree.ts` `regionBoxes` 落地——
+  五区域作为一棵布局树（transcript flex / composer / popup / status 自底向上
+  dock），以 `layoutRegion` patch 算术为 ground truth 的黄金对拍测试
+  （`layout-tree.test.ts` 6/6，可行域 sweep + 邻接 + overlay 居中公式），仍零
+  接线。对拍发现并钉住一处语义分歧：不可行域（dock 高于终端）下 patch 算术
+  滑入负 top，树则自底向上压缩——保留哪个属 step 3 决策。**开单顺序澄清**：
+  依赖条款约束的是 MERGE 顺序（P0 不得先于 #624/#625 合入 master），不是开工
+  顺序；本切片在其独立分支/PR 上交付，可独立 review。
+  **Step 3 待做**：Surface 消费 `regionBoxes`（换核）+ 帧级视觉对拍 + 不可行域
+  行为裁定。
+  **Step 3 首片已落地（2026-11-11，本分支）**：`TUIApp.paintInput`/`paintDockPanel`
+  逐帧调用 `projectBoxes(composerHeight)` 计算整帧盒，input/transcript bottom 与
+  completion bottom 改为**树的投影**（`bottom = rows − composer.top` 等），
+  `composerBottom()` 退役删除；overlay 仍为 patch 驱动（浮动，不属于 dock 树）。
+  可行域输出与旧算术逐字节一致（对拍 pin），不可行域从「负 top 滑出屏幕」改为
+  「自底向上压缩」（已 pin 的裁定，review 可推翻）。验证：全套件 92 文件 /
+  1202 passed / 0 失败、architecture exit 0、typecheck:all 0 错、bundle 4.77 MB、
+  **两轮 PTY 实机冒烟在换核后的 bundle 上复跑**——功能级 7/7、内容级 6/7（唯一
+  FAIL 为已定性的 `!`-only 无锚点前提，非回归）。
+  **Step 3 余下**：overlay 是否入树、`visibleTranscriptRows()` 等行预算算术与树
+  的最终归一、inline chrome 组件化（P1）。
 - **P1 inline chrome 组件化**：working tail、task view、queue preview、composer、
   footer 各自成为 `UIComponent`，`paintInline` 退化为「按序收集组件行」；
   inline 与全屏从此渲染同一组件实例。验收：inline 全部既有测试不改断言通过，
@@ -64,3 +85,12 @@
 | SHA / dirty | 命令 | 结果 |
 | --- | --- | --- |
 | 计划建立：`783c0b70e` 工作树 | （无代码改动） | 本文档 + 索引登记 |
+
+## Stacked base synchronization (2026-11-11)
+
+- Synchronized this branch with PR #625 head `890477117a64e7eee356e3f04b26c01936d43299`,
+  which includes the #624 CI test fix and the committed PTY smoke harness.
+- The merge from the common base `617f6c5da` auto-resolved without conflicts; the #626
+  layout-tree and `TUIApp.ts` changes remain intact.
+- Prior validation on the pre-sync implementation: 92 TUI files / 1202 passed, CLI typecheck,
+  architecture check, and bundle build passed. Re-run CI on the synchronized head before merge.
