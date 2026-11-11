@@ -1,13 +1,13 @@
 /**
  * remote-probe.ts — ask one configured provider what it serves.
  *
- * ## Why one call answers both questions
+ * ## Dynamic model-list providers
  *
- * The TUI needs a connectivity test (`t`) and a remote model list (`r`), and
- * the only request a key-having endpoint will answer for a chat provider is
- * its own model list. Two routes would fetch the same URL twice and report two
- * different verdicts about the same endpoint, so there is one: the probe
- * returns its health AND the ids it got back.
+ * For providers that expose a model-list route, one request answers both the
+ * connectivity test (`t`) and the model list (`r`). Static catalog providers
+ * have no remote list route, so probing `/models` cannot establish whether a
+ * key works. Test those providers by sending a real message after credentials
+ * are saved.
  *
  * ## What the built-in catalog contributes
  *
@@ -101,6 +101,8 @@ interface ProbeStyle {
   readonly testable: boolean;
   /** List endpoints to try, best guess first. */
   readonly paths: readonly string[];
+  /** Catalog models for an exact static preset that cannot be tested by listing models. */
+  readonly staticModelIds: readonly string[];
 }
 
 /**
@@ -147,6 +149,10 @@ function resolveStyle(target: ProbeTarget, isLoopback: boolean): ProbeStyle {
     keyOptional: named?.providerCategory === 'local' || isLoopback,
     testable: target.providerType !== 'bedrock' && target.providerType !== 'vertex',
     paths,
+    staticModelIds:
+      preset?.modelsSource?.type === 'static'
+        ? preset.defaultModels.map((model) => model.modelId)
+        : [],
   };
 }
 
@@ -240,6 +246,17 @@ export async function probeProvider(
       latencyMs: 0,
       modelIds: [],
       truncated: false,
+    };
+  }
+
+  if (style.staticModelIds.length > 0) {
+    return {
+      ok: false,
+      code: 'not_testable',
+      message: 'this provider has no model-list endpoint; send a message to verify the API key',
+      latencyMs: 0,
+      modelIds: style.staticModelIds.slice(0, MAX_MODEL_IDS),
+      truncated: style.staticModelIds.length > MAX_MODEL_IDS,
     };
   }
 

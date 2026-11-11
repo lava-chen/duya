@@ -153,7 +153,7 @@ describe('/provider — guards', () => {
 });
 
 describe('/provider add', () => {
-  it('writes a full row and reports the probe', async () => {
+  it('writes a full custom-provider row without blocking on a probe', async () => {
     const { ctx, notices, upserted } = makeContext({
       pick: ['openai-compatible'],
       answers: [
@@ -175,7 +175,32 @@ describe('/provider add', () => {
       defaultModel: 'deepseek-chat',
       apiKey: 'sk-new',
     });
+    expect(upserted[0]).not.toHaveProperty('validateConnection');
     expect(notices[0]).toContain('Added');
+    expect(notices[0]).toContain('API key not verified');
+  });
+
+  it('uses the selected built-in preset and only asks for its API key', async () => {
+    const { ctx, notices, prompts, upserted } = makeContext({
+      pick: ['minimax-cn'],
+      answers: ['sk-cp-secret'],
+    });
+
+    await COMMAND.run(ctx, 'add');
+
+    expect(prompts.map((prompt) => prompt.title)).toEqual(['API key']);
+    expect(upserted[0]).toMatchObject({
+      providerId: 'minimax-cn',
+      name: 'MiniMax (CN)',
+      providerType: 'anthropic',
+      baseUrl: 'https://api.minimax.cn/anthropic',
+      models: ['MiniMax-M3', 'MiniMax-M3.1-Flash', 'MiniMax-M2.7', 'MiniMax-M2.5', 'MiniMax-M2.1', 'MiniMax-M2'],
+      defaultModel: 'MiniMax-M3',
+      apiKey: 'sk-cp-secret',
+    });
+    expect(upserted[0]).not.toHaveProperty('validateConnection');
+    expect(notices[0]).toContain('API key not verified');
+    expect(notices[0]).not.toContain('sk-cp-secret');
   });
 
   it('never puts the key in a notice', async () => {
@@ -228,8 +253,8 @@ describe('/provider add', () => {
     expect(upserted).toHaveLength(0);
   });
 
-  it('asks Host to validate before creating a row', async () => {
-    const { ctx, errors, deleted, upserted } = makeContext({
+  it('saves a provider even when the optional connection probe would fail', async () => {
+    const { ctx, errors, notices, upserted } = makeContext({
       pick: ['openai-compatible'],
       answers: ['fresh', 'Fresh', 'https://x.test/v1', 'm1', 'sk-1'],
       probe: { ok: false, message: '401 unauthorized' },
@@ -237,9 +262,9 @@ describe('/provider add', () => {
     await COMMAND.run(ctx, 'add');
 
     expect(upserted).toHaveLength(1);
-    expect(deleted).toEqual([]);
-    expect(upserted[0]).toMatchObject({ validateConnection: true });
-    expect(errors[0]).toContain('401 unauthorized');
+    expect(upserted[0]).not.toHaveProperty('validateConnection');
+    expect(errors).toEqual([]);
+    expect(notices[0]).toContain('API key not verified');
   });
 
   it('cancelling the wizard writes nothing', async () => {
@@ -309,9 +334,8 @@ describe('/provider <id> — the edit form', () => {
       providers: [provider()],
       pick: ['models'],
       answers: ['deepseek-chat'],
-      // The candidate probe fails, but the save-time check succeeds: the point
-      // of the case is that a failed probe degrades the FORM, it does not stop
-      // the user from saving a list they typed themselves.
+      // A failed candidate probe degrades the form; the user can still save a
+      // list they typed without a second preflight request.
       probe: { ok: false, message: 'timeout' },
       restoreProbe: { ok: true, modelIds: ['deepseek-chat'] },
     });
@@ -322,12 +346,14 @@ describe('/provider <id> — the edit form', () => {
     expect(upserted).toHaveLength(1);
   });
 
-  it('leaves rollback to Host validation and never claims restoration', async () => {
-    const { ctx, errors, upserted } = makeContext({ providers: [provider()], pick: ['apiKey'], answers: ['bad-key'], probe: { ok: false, message: 'invalid key' } });
+  it('saves a replacement API key without requiring a model-list probe', async () => {
+    const { ctx, errors, notices, upserted } = makeContext({ providers: [provider()], pick: ['apiKey'], answers: ['bad-key'], probe: { ok: false, message: 'invalid key' } });
     await COMMAND.run(ctx, 'deepseek');
     expect(upserted).toHaveLength(1);
-    expect(upserted[0]).toMatchObject({ apiKey: 'bad-key', validateConnection: true });
-    expect(errors).toEqual(['invalid key']);
+    expect(upserted[0]).toMatchObject({ apiKey: 'bad-key' });
+    expect(upserted[0]).not.toHaveProperty('validateConnection');
+    expect(errors).toEqual([]);
+    expect(notices[0]).toContain('send a message to verify the connection');
   });
 
   it('replaces the key when one is typed, and keeps the mask out of the write', async () => {

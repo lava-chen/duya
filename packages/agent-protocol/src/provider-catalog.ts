@@ -204,13 +204,7 @@ export interface HostProviderTestResult {
   /** Never carries the key: the Host redacts before this crosses the wire. */
   readonly message?: string;
   readonly latencyMs: number;
-  /**
-   * Model ids the endpoint listed, capped by the Host.
-   *
-   * The same call answers "is this reachable" and "what does it serve",
-   * because the only probe a key-having endpoint can be given is its own
-   * model list. `truncated` says whether the tail was dropped.
-   */
+  /** Model ids from a remote list or static preset, capped by the Host. */
   readonly modelIds: readonly string[];
   readonly truncated: boolean;
 }
@@ -234,11 +228,7 @@ export type HostProviderProbeCode =
   | 'empty_list'
   | 'network'
   | 'timeout'
-  /**
-   * Nothing to dial: the vendor authenticates from the environment (a Bedrock
-   * bearer token, Vertex application default credentials), so no key-bearing
-   * model endpoint exists to ask.
-   */
+  /** The provider has no safe model-list endpoint to use as a connection test. */
   | 'not_testable'
   | 'unknown';
 
@@ -254,7 +244,7 @@ export interface HostLocalProviderManagementApiV1 {
     providerId: string | null,
     expectedRevision?: string,
   ): Promise<HostProviderDefaultResult>;
-  /** Probe one stored provider: connectivity plus its remote model list. */
+  /** Probe a provider through its model-list route when that route is available. */
   testProvider(providerId: string): Promise<HostProviderTestResult>;
 }
 
@@ -262,6 +252,8 @@ export interface HostLocalProviderManagementApiV1 {
 export interface HostProviderMutationResult {
   readonly provider: HostProviderDetail;
   readonly revision: string;
+  /** Probe caveat when a static catalog was used instead of a remote model list. */
+  readonly probeMessage?: string;
 }
 
 /** What a delete removed, with the revision to echo back. */

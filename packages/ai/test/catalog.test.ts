@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { createProviderCatalog, type ProviderCatalogEntry } from '../src/providers/catalog.js';
 
 const entries: ProviderCatalogEntry[] = [
-  { id: 'minimax-cn', name: 'MiniMax (CN)', descriptionZh: 'MiniMax 编程套餐 — 中国区', protocol: 'anthropic', authTypes: ['auth_token'], baseUrl: 'https://api.minimaxi.com/anthropic', iconKey: 'minimax', defaultModels: [{ modelId: 'MiniMax-M3', displayName: 'MiniMax-M3' }] },
+  { id: 'minimax-cn', name: 'MiniMax (CN)', descriptionZh: 'MiniMax 编程套餐 — 中国区', protocol: 'anthropic', authTypes: ['auth_token'], baseUrl: 'https://api.minimax.cn/anthropic', iconKey: 'minimax', defaultModels: [{ modelId: 'MiniMax-M3', displayName: 'MiniMax-M3' }] },
 ];
 
 describe('ProviderCatalog', () => {
