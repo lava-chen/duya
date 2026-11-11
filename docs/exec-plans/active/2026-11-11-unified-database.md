@@ -29,7 +29,7 @@
 - [x] S1：Desktop 与独立 Host 收敛到一个 SQLite handle/owner lock；旧 `duya-core.db` 按目标 schema 列名幂等合并，冲突/未知 schema 时回滚并拒绝启动，成功后留 `.pre-unification` 备份。
 - [x] S2：main/core 迁移与 store 在 `duya-main.db` 共用同一物理 schema/连接；memory-state 保留自己的校验账本但在同一连接迁移，复用正式 `projects` 表；旧 `memory-state.db` 表按主键合并、成功后留备份。
 - [x] S3：`message_index.payload` 迁移保存完整 rollout 行；启动扫描旧 JSONL 回填缺行 payload，timeline/search 从 SQLite 读写，JSONL 保留为恢复镜像和导出格式。
-- [x] S4：验证升级、新安装与失败回滚；更新 tracked Host bundle；实现提交 `0b62e8d13` 已推送，PR #628 已开。PR CI 发现 importer 表名单需要是只读状态且 tracked bundle 必须包含修复；已改为只读数组并重建 bundle，等待 freshness 与 CI 重跑。未合并。
+- [x] S4：验证升级、新安装与失败回滚；更新 tracked Host bundle；实现提交 `0b62e8d13` 已推送，PR #628 已开。CI 暴露 SQLite 投影遗漏 rotation 过滤，以及旧 JSONL 测试约定、Host 测试旧路径、共享架构 fixture 并发和过期行号引用；均已修复。完整本地测试、类型检查与架构检查通过，修复提交后的 CI 待确认。未合并。
 
 ## 发现与决策
 
@@ -41,7 +41,7 @@
 - `memory-state.db` 作为新安装活跃文件已取消；原有数据库作为导入来源，错误时保留并安全停机。
 - worker 模块状态 ratchet 不允许新增模块级可变 `Set`；遗留表名单用只读字符串数组表达，避免把迁移过滤条件变成 worker 进程状态。
 - 本计划优先保留现有配置的数据库路径，统一的是文件与生命周期；密钥、二进制附件、用户项目数据仍按其安全与所有权边界保存在外部。
-- 根仓库要求所有改动经 PR 集成；本轮在当前授权下可实现、验证和开 Draft PR，不会直接合并。
+- 根仓库要求所有改动经 PR 集成；合并遵循最新 head 的必需检查与 review 门禁。
 
 ## 验证记录
 
@@ -61,11 +61,18 @@
 | `0b62e8d13` / PR #628 | GitHub | `gh pr create --base master` | 0 / PR 已创建，未合并 | 等待必需 CI/review |
 | `7b8577f05` / importer 表名单 | Linux x64，managed worktree | 首轮 PR CI `Worker module-level state ratchet` | 失败 / 新增 `NON_DURABLE_TABLES` Set 被门禁拦截；改为只读数组后 `npm run architecture:worker-module-state` 通过，`npm run test --workspace @duya/data` 148 项通过，`npm run typecheck --workspace @duya/data` 通过 | 修复仍待提交并触发新的 PR CI |
 | `63d95e78f` / importer 与 tracked bundle | Linux x64，managed worktree | `npm run bundle:worker`; `npm run architecture:worker-module-state` | worker state gate 通过；bundle 重建完成。提交前 `npm run bundle:verify` 按预期报告该 source 在 bundle commit 后变更 | 将 bundle artifacts 与 rebuild 结果一并提交后重跑 freshness |
+| `2d3dc233b` / 最新 CI head | GitHub | PR CI #42983343574 | architecture、typecheck、build 通过；完整 test 失败 15 tests / 7 files，另 2 个架构 fixture 套件并发 ENOENT | 失败中 13 项为 DB rollout 读路径约定/rotation 过滤，1 项 Host 测试仍用旧 `duya-core.db`，1 项 agent-protocol 行号引用在 base 已过期；架构 fixture 使用共用静态路径 |
+| `3e2390141` / baseline 只读 linked worktree | Linux x64 | `npx vitest run packages/agent-protocol/test/13-citation-drift.test.ts ...` | 确认 citation drift 基线已有 6 条 router 行号引用失败；Host aliveness 与其余 5 个目标文件通过 | baseline build:packages 后复跑；临时 linked worktree 用于对照 |
+| 当前 dirty tree / 数据库与 CI 回归修复 | Linux x64，Node 26 | 五个 DB 投影测试文件 76 tests；CI 失败相关文件 45 tests | 0 / 全部通过 | 包括 SQLite payload 为权威源、rotation audit 行过滤、Host 使用统一 main DB；架构 fixture 改为按进程隔离 |
+| 当前 dirty tree / 全部改动 | Linux x64，Node 26 | `npm test` | 0 / 1420 files passed，2 skipped；15459 passed，1 expected fail，24 skipped | pretest 构建 22 个包并重建 worker bundle |
+| 当前 dirty tree / 全部改动 | Linux x64，Node 26 | `npm run typecheck:all` | 0 / 通过；无新类型错误，164 个 Electron 已登记基线错误 | 21 个旧基线项收敛；Vite 保留既存 chunk/comment 警告 |
+| 当前 dirty tree / 全部改动 | Linux x64，Node 26 | `npm run architecture:check` | 0 / 无新增边界违规 | 3206 findings 均在 baseline，60 个旧指纹未触发 |
+| 当前 dirty tree / worker bundle 来源变更 | Linux x64，Node 26 | `npm run bundle:verify` | 提交前失败 / 3 个 worker 输入在上个 bundle commit 后修改，bundle 已由 `npm test` pretest 重建 | commit 后重跑 freshness |
 
 ## 接续 / 结果
 
 已实现：任务计划、数据库目标盘点；DataHost 已具备当 main/core 文件路径相同时复用一个 handle、owner lock 和 WAL checkpoint owner 的基础，并按平台安全比较路径及关闭共享连接。已验证：主检出干净、当前数据导入 marker 和 source ownership；全量类型/包构建门禁及 Data 包类型、架构门禁通过。已合并：否。
 
-下一步：观察 PR #628 的必需 CI/review；若需修复，在当前 managed worktree 修改并重验。合并必须等待用户集成授权。
+下一步：提交当前数据库投影、测试与 bundle 修复，等待 PR #628 最新 head 的必需 CI/review 通过，再执行已授权的 merge-commit 合并并重验。
 
 回收：保留 managed worktree，直到 PR 合并并完成合并后验证；ignored 依赖和构建产物需在回收前单独核对。

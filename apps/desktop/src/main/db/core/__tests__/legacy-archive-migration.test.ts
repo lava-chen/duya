@@ -163,7 +163,7 @@ describe('Plan 582 §8.1 — legacy archive migration', () => {
     return rowOf(sessionId).rolloutPath!.split(path.sep).join('/');
   }
 
-  it('a Plan 549 archive row reads as empty history — the bug being fixed', () => {
+  it('a Plan 549 archived rollout mirror does not hide SQLite history', () => {
     const sessionId = 'legacy-empty';
     const created = Date.UTC(2026, 8, 1, 10, 0, 0);
     seedHistory(sessionId, created, 2);
@@ -173,8 +173,12 @@ describe('Plan 582 §8.1 — legacy archive migration', () => {
 
     // The file really is on disk, just at the Plan 549 archive location.
     expect(fs.existsSync(path.join(rootDir, rowOf(sessionId).archivedPath!))).toBe(true);
-    // ...and the session is invisible, because recovery never scans `archived/`.
-    expect(log.listBySession(sessionId)).toEqual([]);
+    // The database payload remains readable even though the legacy mirror is
+    // outside the old path layout.
+    expect(log.listBySession(sessionId).map((event) => event.id)).toEqual([
+      `${sessionId}-m-0`,
+      `${sessionId}-m-1`,
+    ]);
   });
 
   it('migrates a Plan 549 row to the mirrored layout and restores its history', () => {

@@ -802,7 +802,7 @@ export class MessageLog {
           .map((row) => [row.id, row]),
       );
       return this.applySourceFilter(databaseTimeline, options?.source)
-        .filter((row) => row.entry.type !== 'rebase')
+        .filter((row) => row.entry.type !== 'rebase' && row.entry.type !== 'rotation')
         .map(({ entry, seq }) => ({
           id: entry.id ?? `seq:${seq}`,
           sessionId,
