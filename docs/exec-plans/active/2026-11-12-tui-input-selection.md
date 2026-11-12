@@ -97,9 +97,10 @@ base：`2af62ce3c81b059e3e82c5b41e9f5299bdfd61fc`。独占路径：`packages/cli
 | PR head `037791891844d3b7c64df1f00553c0bdf5103274` | GitHub Actions | `gh pr view 631 --json headRefOid,statusCheckRollup` | architecture, test scope, typecheck, test, build 全部 SUCCESS | 这是工具详情代码变更前的 PR head |
 | `bc0649969` + 当前工作区改动 | Linux x64 / Node 26.13.0 | 5 个相关 TUI 测试文件；`npm run typecheck:all`; `npm run architecture:check`; `npm run build:cli-dev`; fullscreen PTY `functional` | 相关用例 62/62；typecheck:all exit 0；architecture exit 0；CLI/worker build exit 0；PTY 10 项通过。全 TUI 共 123 文件：1613 passed、1 expected fail，另有 6 项 `tui-file-diff-stream.test.ts` 失败 | 失败签名也出现在 PR #631 旧 head 的必需 test CI；该文件及对应 transcript 渲染源码未改。生成的 Host worker bundle 变化已还原 |
 | PR #631 head `cb15fe5493b7b67cda18515c1e0d0db44dbcc933` | GitHub Actions run `43210652815` | `gh pr checks 631`; `gh run view 43210652815 --job 131157218167 --log-failed` | architecture / test scope / typecheck / build 均 PASS；test FAIL，仍是 `tui-file-diff-stream.test.ts` 同 6 项、同一错误签名 | PR 仍为 OPEN / DRAFT；未合并 |
+| PR #631 head `9a381c5e2c5b96e35681aba9f3afd68d04efbfef` | GitHub Actions run `43211687631` | `gh pr checks 631` | architecture / test scope / typecheck / build 均 PASS；test FAIL，仍是 `tui-file-diff-stream.test.ts` 同 6 项 | 这是仅含验证记录的文档提交；运行时代码仍是 `cb15fe549` |
 
 ## 接续 / 结果
 
 输入、选择、回底按钮、可见工具行点击展开、单面板工作台、三档显示和输入框下方的两行 footer 已实现。Pi 插件 UI 槽位与 Duya 合同建议已写入参考文档；通用插件 UI API 仍未实施。当前相关 TUI 测试 62/62 通过，完整 TUI 目录 123 文件中 122 文件通过、1 个未变更的 `tui-file-diff-stream.test.ts` 文件有 6 个失败：预览渲染只输出 `└ ⏺ write [-]`。相同失败签名出现在 PR #631 旧 head 的 GitHub test job；本轮没有改动该测试及对应 transcript 渲染源码。全量类型/架构门禁、CLI/worker bundle 和实际 PTY smoke 通过。构建改动过的 tracked Host worker bundle 已按生成产物路径还原。
 
-工作台改动已提交为 `cb15fe5493b7b67cda18515c1e0d0db44dbcc933` 并推送到 PR #631。最新 CI 的 architecture、test scope、typecheck、build 通过；test 仍因未变更的流式 write 预览 6 项失败，PR 保持 OPEN / DRAFT，未合并。当前 HEAD 与该提交相同，代码工作区干净。下一步：单独定位 `tui-file-diff-stream.test.ts` 的预览渲染，再更新 PR；不要在未评估该失败时集成。
+工作台改动已提交为 `cb15fe5493b7b67cda18515c1e0d0db44dbcc933`，验证记录为 `9a381c5e2c5b96e35681aba9f3afd68d04efbfef`，均已推送到 PR #631。最新 CI 的 architecture、test scope、typecheck、build 通过；test 仍因未变更的流式 write 预览 6 项失败。PR 保持 OPEN / DRAFT，未合并。下一步：单独定位 `tui-file-diff-stream.test.ts` 的预览渲染，再更新 PR；不要在未评估该失败时集成。
