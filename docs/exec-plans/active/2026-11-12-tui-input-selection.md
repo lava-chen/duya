@@ -25,7 +25,7 @@ base：`2af62ce3c81b059e3e82c5b41e9f5299bdfd61fc`。独占路径：`packages/cli
 - [x] 阅读 CLI TUI 约束、当前全屏计划与 Pi 全屏选择实现。
 - [x] 按用户确认的闪烁光标与普通拖选语义实现三项改进。
 - [x] 验证相关测试、类型检查、架构门禁和真实 PTY 启停。
-- [ ] 提交并创建 draft PR；未经授权不合并。
+- [x] 提交并创建 draft PR；未经授权不合并。
 
 ## 发现与决策
 
@@ -40,7 +40,8 @@ base：`2af62ce3c81b059e3e82c5b41e9f5299bdfd61fc`。独占路径：`packages/cli
 | --- | --- | --- | --- | --- |
 | `2af62ce3`，只读 | Linux x64 / Node 26.13.0 | `git status --short --branch`; 检查 TUI 文档与 Pi 源码 | exit 0；共享检出干净 | 本会话对账 |
 | `2af62ce3` + TUI 修改 | Linux x64 / Node 26.13.0 | 7 个 TUI 测试文件；`npm run typecheck:all`; `npm run architecture:check`; `python3 scripts/smoke-tui-pty.py functional ...` | 111 tests passed；typecheck exit 0；architecture exit 0（无新增违规）；PTY 7 项检查全通过 | worktree `codex/tui-cursor-selection`；`git diff --check` clean |
+| implementation `2a942f1b0c5e5963be2d4d85c725647810198f1b` | Linux x64 / GitHub Actions | 推送 `codex/tui-cursor-selection` 并创建 [draft PR #631](https://github.com/lava-chen/duya/pull/631) | PR open、draft；architecture queued，test scope running | no merge; CI pending |
 
 ## 接续 / 结果
 
-实现与验证已完成。下一步：提交独立逻辑变更并创建 draft PR；保留 worktree，等待 review 与用户授权集成。
+实现与本地验证已完成；变更已提交并推送到 draft PR #631。保留 worktree，下一步跟进必需 CI/review；未经用户授权不合并。
