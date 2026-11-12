@@ -97,6 +97,7 @@ import {
 } from './markdown/inline.js';
 import { wrapAtoms, wrapSpans } from './markdown/wrap.js';
 import { colorFromTagBody } from './core/color.js';
+import { tagsToSpans } from './core/tags.js';
 import { spanText, tokensToSpans, attrs, PLAIN_STYLE, type SpanStyle, type StyledSpan } from './core/span.js';
 
 export { escapeTags } from './markdown/escape.js';
@@ -1351,10 +1352,10 @@ function groupChildRow(
 /**
  * Whether this tool's result body is drawn at all.
  *
- * `names` folds a call to its row: no body, and no `[+ N lines]` marker to
- * hint at one. It is a default rather than a lock — the transcript-wide expand
- * and an individually expanded block both win, because a reader who explicitly
- * asked for content has to get it without leaving the mode.
+ * `names` folds a call to its row. It is a default rather than a lock — the
+ * transcript-wide expand and an individually expanded block both win, because
+ * a reader who explicitly asked for content has to get it without leaving the
+ * mode. The row still carries a disclosure marker so the override is visible.
  */
 function toolBodyAllowed(options: RenderOptions, id: string): boolean {
   if (options.toolGroupMode !== 'names' && options.toolGroupMode !== 'focus') return true;
@@ -1387,7 +1388,8 @@ function toolResultText(block: Extract<Block, { kind: 'tool' }>): string {
 
 /** Whether this call's details are on screen right now. */
 function showsToolDetails(block: Extract<Block, { kind: 'tool' }>, options: RenderOptions): boolean {
-  return options.collapsedBlockIds?.has(block.id) !== true &&
+  return toolBodyAllowed(options, block.id) &&
+    options.collapsedBlockIds?.has(block.id) !== true &&
     (options.showToolResults || blockExpanded(block.id, options));
 }
 
@@ -1401,6 +1403,7 @@ function showsToolDetails(block: Extract<Block, { kind: 'tool' }>, options: Rend
  * this, so it cannot drift from the fold's arithmetic.
  */
 function resultBudget(block: Extract<Block, { kind: 'tool' }>, options: RenderOptions): number {
+  if (blockExpanded(block.id, options)) return Number.MAX_SAFE_INTEGER;
   if (isLocalShellTool(block.name)) return LOCAL_SHELL_RESULT_LINES;
   const base = block.status === 'error' ? options.toolResultLines * 2 : options.toolResultLines;
   return Math.max(1, base);
@@ -1420,6 +1423,7 @@ function shownResultLines(
   block: Extract<Block, { kind: 'tool' }>,
   options: RenderOptions,
 ): number {
+  if (!toolBodyAllowed(options, block.id)) return 0;
   if (block.subagent !== undefined || isTodoTool(block.name)) return total;
   if (block.diff !== undefined && block.diff.length > 0) return total;
   const cap = showsToolDetails(block, options) ? resultBudget(block, options) : COLLAPSED_RESULT_LINES;
@@ -1446,9 +1450,13 @@ function toolDisclosureOf(
   styles: Styles,
 ): string {
   const result = toolResultText(block);
-  if (result.trim() === '') return '';
-  if (!toolBodyAllowed(options, block.id)) return '';
   const showDetails = showsToolDetails(block, options);
+  const argumentText = block.argumentText?.trim();
+  const hasArguments = argumentText !== undefined && argumentText !== '' && argumentText !== '{}' && argumentText !== 'null';
+  if (result.trim() === '') {
+    if (!hasArguments) return '';
+    return styles.muted(showDetails ? ' [-]' : ' [+ details · Ctrl+T]');
+  }
   // A file change's size is the CHANGE's size, not the prose's line count:
   // `[+ 3 lines]` on a 200-line rewrite says nothing about the rewrite, while
   // `(+200 -0)` says exactly what happened.
@@ -1460,7 +1468,71 @@ function toolDisclosureOf(
   const total = countReportLines(block, result);
   const hidden = total - shownResultLines(total, block, options);
   const unit = isShellTool(block.name) ? 'output lines' : 'lines';
+  if (hidden <= 0 && hasArguments && !blockExpanded(block.id, options)) {
+    return styles.muted(' [+ details · Ctrl+T]');
+  }
   return toolDisclosure(true, hidden, showDetails, styles, unit);
+}
+
+/** Full invocation arguments, shown only after an individual/global expansion. */
+function toolArgumentBody(
+  block: Extract<Block, { kind: 'tool' }>,
+  styles: Styles,
+  indent: string,
+  width: number | undefined,
+): string[] {
+  const raw = block.argumentText;
+  if (raw === undefined || raw.trim() === '' || raw.trim() === '{}' || raw.trim() === 'null') return [];
+
+  let input: unknown;
+  try { input = JSON.parse(raw) as unknown; }
+  catch { input = raw; }
+  const entries: Array<[string, unknown]> = input !== null && typeof input === 'object' && !Array.isArray(input)
+    ? Object.entries(input)
+    : [['args', input]];
+  if (entries.length === 0) return [];
+
+  const rows: string[] = [];
+  const firstPrefix = `${indent}  `;
+  const continuationPrefix = `${indent}    `;
+  const wrap = (text: string, prefix: string): string[] => {
+    const budget = width === undefined
+      ? undefined
+      : Math.max(1, width - Math.max(visibleWidth(prefix), visibleWidth(continuationPrefix)));
+    const parts = text.split('\n');
+    const wrapped = parts.flatMap((part) => budget === undefined
+      ? [part]
+      : wrapWithCursor(part, budget, 0).rows);
+    return wrapped.map((part, index) => `${index === 0 ? prefix : continuationPrefix}${styles.muted(escapeTags(part))}`);
+  };
+
+  rows.push(`${indent}${styles.muted('Arguments:')}`);
+  for (const [key, value] of entries) {
+    const rendered = typeof value === 'string' ? value : JSON.stringify(value, null, 2) ?? String(value);
+    const lines = rendered.replace(/\r/g, '').replace(/\t/g, '   ').split('\n');
+    const first = lines.shift() ?? '';
+    rows.push(...wrap(`${key}: ${first}`, firstPrefix));
+    for (const line of lines) rows.push(...wrap(line, continuationPrefix));
+  }
+  return rows;
+}
+
+/** Give every row of a failed call a palette-specific red background band. */
+function paintToolErrorRows(
+  rows: readonly string[],
+  block: Block,
+  options: RenderOptions,
+  styles: Styles,
+  from: number,
+): string[] {
+  if (block.kind !== 'tool' || block.status !== 'error') return [...rows];
+  const background = styles.tags.toolErrorBg;
+  return rows.map((row, index) => {
+    if (index < from) return row;
+    const textWidth = visibleWidth(tagsToSpans(row).map((span) => span.text).join(''));
+    const padding = options.width === undefined ? '' : ' '.repeat(Math.max(0, Math.floor(options.width) - textWidth));
+    return `{${background}}${row}${padding}{/${background}}`;
+  });
 }
 
 /**
@@ -1704,10 +1776,13 @@ function nodeBody(
     return thinkingBody(block, thinkingExpanded(block.id, options), styles, plan.bodyIndent, options.width);
   }
   if (block.kind !== 'tool') return [];
+  const argumentsRows = blockExpanded(block.id, options)
+    ? toolArgumentBody(block, styles, plan.bodyIndent, options.width)
+    : [];
   // A spawn draws its brief before any of the ordinary body rules apply: the
   // brief identifies the agent, so it is not "content behind a fold".
   if (block.subagent !== undefined) {
-    return subagentBody(block, block.subagent, options, styles, plan.bodyIndent);
+    return [...argumentsRows, ...subagentBody(block, block.subagent, options, styles, plan.bodyIndent)];
   }
   // `names` folds every tool body, a todo list included: the row above already
   // says `Todo list 2/4`, which is the same fact in fewer lines.
@@ -1717,8 +1792,8 @@ function nodeBody(
   // IS the result of the call, and a disclosure that hid it would hide the only
   // thing the reader came for.
   if (isTodoTool(block.name)) {
-    if (block.status === 'running') return [];
-    return todoBody(block.todos ?? [], styles, plan.bodyIndent, options.width);
+    if (block.status === 'running') return argumentsRows;
+    return [...argumentsRows, ...todoBody(block.todos ?? [], styles, plan.bodyIndent, options.width)];
   }
 
   const result = toolResultText(block);
@@ -1727,14 +1802,14 @@ function nodeBody(
     // preview is bounded by the live area, because a block that scrolls out
     // while it is still changing keeps its frozen half-written rows forever.
     const written = streamingFileBody(block, options, styles, plan.bodyIndent);
-    if (written.length > 0) return written;
-    return liveShellBody(block, options, styles, plan.bodyIndent);
+    if (written.length > 0) return [...argumentsRows, ...written];
+    return [...argumentsRows, ...liveShellBody(block, options, styles, plan.bodyIndent)];
   }
-  if (result.trim() === '') return [];
+  if (result.trim() === '') return argumentsRows;
   if (!showsToolDetails(block, options)) {
-    return foldedResultBody(block, result, styles, plan.bodyIndent, options);
+    return [...argumentsRows, ...foldedResultBody(block, result, styles, plan.bodyIndent, options)];
   }
-  return toolBody(block, result, options, styles, plan.bodyIndent);
+  return [...argumentsRows, ...toolBody(block, result, options, styles, plan.bodyIndent)];
 }
 
 /**
@@ -1797,7 +1872,7 @@ export function renderPlannedBlock(
 
   if (plan.role === 'plain') {
     rows.push(...renderBlock(block, options, styles).split('\n'));
-    return rows;
+    return paintToolErrorRows(rows, block, options, styles, plan.gap ? 1 : 0);
   }
 
   if (plan.role === 'group-head') {
@@ -1807,16 +1882,19 @@ export function renderPlannedBlock(
     // as two of three targets. When it is the only thing the batch shows, the
     // header alone is the answer: `Read 3 files` is the whole sentence.
     if (block.kind === 'tool' && !folded) {
+      const errorRowsFrom = rows.length;
       rows.push(groupChildRow(block, plan, options, styles));
       rows.push(...nodeBody(block, plan, options, styles));
+      return paintToolErrorRows(rows, block, options, styles, errorRowsFrom);
     }
     return rows;
   }
 
   if (plan.role === 'group-child' && block.kind === 'tool') {
+    const errorRowsFrom = rows.length;
     rows.push(groupChildRow(block, plan, options, styles));
     rows.push(...nodeBody(block, plan, options, styles));
-    return rows;
+    return paintToolErrorRows(rows, block, options, styles, errorRowsFrom);
   }
 
   // A node: a standalone tool call or a thinking block.
@@ -1827,12 +1905,14 @@ export function renderPlannedBlock(
     const disclosure = options.toolGroupMode === 'hidden' ? '' : styles.muted(expanded ? ' [−]' : ' [+]');
     rows.push(`${connector} ${styles.thinking(`• ${summary}`)}${disclosure}`);
   } else if (block.kind === 'tool') {
+    const errorRowsFrom = rows.length;
     rows.push(toolNodeRow(block, options, styles, connector));
+    rows.push(...nodeBody(block, plan, options, styles));
+    return paintToolErrorRows(rows, block, options, styles, errorRowsFrom);
   } else {
     rows.push(...renderBlock(block, options, styles).split('\n'));
     return rows;
   }
-  rows.push(...nodeBody(block, plan, options, styles));
   return rows;
 }
 

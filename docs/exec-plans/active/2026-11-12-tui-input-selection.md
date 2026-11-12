@@ -1,4 +1,4 @@
-# CLI TUI 输入、选择、滚动与消息色彩
+# CLI TUI 输入、选择、工具详情与消息色彩
 
 状态：active。负责人：本会话。更新：2026-11-12。
 分支：`codex/tui-cursor-selection`。worktree：`/home/lavachen/.codex/worktrees/tui-cursor-selection/duya`。
@@ -9,6 +9,7 @@ base：`2af62ce3c81b059e3e82c5b41e9f5299bdfd61fc`。独占路径：`packages/cli
 - 输入光标稳定显示在当前输入位置，交互表现按用户对 Pi 的预期确认。
 - 移除 composer 的实色填充，保留输入文本与边框提示。
 - 全屏转录支持普通鼠标拖选，选区反白并通过 OSC 52 复制到终端剪贴板；离开底部时，将回底按钮移到输入框上方居中显示。
+- 工具行支持点击展开/收起完整调用参数与结果；错误调用按主题显示红色背景，显示模式保留单块交互。
 - 为消息渲染定义基于语义角色与 256 色号的色彩体系；本轮记录方案，后续按该体系逐步迁移渲染器。
 - 本轮仅改 CLI TUI，不改 Host、协议或 Desktop UI。
 
@@ -18,6 +19,7 @@ base：`2af62ce3c81b059e3e82c5b41e9f5299bdfd61fc`。独占路径：`packages/cli
 
 - 在全屏与 inline 两种模式中检查光标、输入背景及选中反馈。
 - 全屏滚离底部时，回底提示显示在转录区最后一行、输入框上方居中，点击该提示恢复跟随。
+- `full/names/focus/running` 中可见的工具行都能通过点击切换单块详情；展开后显示完整参数和完整结果，收起后恢复当前 view 的预览；错误行及其详情带有 dark/light 主题错误背景。
 - 覆盖窄终端、CJK 文本、滚动视口与输入焦点切换。
 - 颜色角色不依赖终端自定义 ANSI 色；正文、弱化文本、Markdown、工具输出和状态色均有明确语义 token 与 dark/light 映射。
 - 运行受影响的 CLI TUI 检查及仓库要求的类型/架构门禁；记录 SHA、dirty 范围、环境、命令和结果。
@@ -31,6 +33,7 @@ base：`2af62ce3c81b059e3e82c5b41e9f5299bdfd61fc`。独占路径：`packages/cli
 - [x] 提交并创建 draft PR；未经授权不合并。
 - [x] 将回底按钮从底部状态栏移至输入框上方居中，并验证鼠标命中仍可回底。
 - [x] 对照 Pi 与 Duya 现有主题，形成消息色彩 token 与色号映射方案。
+- [x] 使工具行点击展开完整参数与输出，在 full/names/focus/running 可见模式下验证展开、收起及错误背景。
 
 ## 发现与决策
 
@@ -38,6 +41,8 @@ base：`2af62ce3c81b059e3e82c5b41e9f5299bdfd61fc`。独占路径：`packages/cli
 - 全屏鼠标报告接管按钮事件；普通左键拖动现在在可见转录区维护选区、反色绘制并通过 OSC 52 复制，交互控件仍优先响应点击。
 - `placeCursor()` 以前在异步 diff 写出前移动硬件光标，随后被行重绘移走；现在 surface 在每帧 diff 后定位并显示光标，保留终端默认闪烁样式。
 - `[↓ Latest]` 原先位于最底部状态栏左侧；现仿照 Pi 叠在转录视口最后一行并水平居中，鼠标命中范围随按钮坐标移动；快捷键文案读取有效 keymap。
+- 原有 pointer target 已能点击可见工具标题，但展开主要展示受行数预算限制的结果；现将原始调用 JSON 留在 `ToolBlock.argumentText`，单块展开时格式化完整参数，并将结果行预算放开至完整输出。names/focus 行也始终显示可点击的 disclosure 提示；running 仍只允许其在运行中的行点击，settled 工具仍按 view 过滤。
+- 错误调用的标题和结果行由 `toolErrorBg` 主题 token 铺满 pane 宽度；dark 用 `52-bg`，light 用 `224-bg`，文本前景与其余状态色保持原样。
 - 用户已确认使用普通终端闪烁光标与无需 Shift 的普通鼠标拖选。
 - Duya 已有 dark/light palette，但缺少 `text` 基础正文 token；未包裹语义标签的普通文本继承终端前景色。dark palette 的 `gray/cyan/green` 等 named ANSI 颜色还可被终端主题重定义，因此相同输出会随终端外观改变。
 - Pi 的消息颜色有明确的角色层级：`text`、`muted`、`dim`、`thinkingText`、`toolTitle`、`toolOutput`，并分别定义 Markdown heading/link/link URL/code/code block/quote/list 等角色；正文主要是低饱和浅灰，强调色用于结构与语义，不给整段 prose 染色。
@@ -65,7 +70,7 @@ base：`2af62ce3c81b059e3e82c5b41e9f5299bdfd61fc`。独占路径：`packages/cli
   | `quote` | 248 | 244 | 引用正文 |
   | `listBullet` | 141 | 90 | 列表符号 |
 
-  保持已有 `promptBg`、`diff*Bg`、`search*Bg` 的背景用途，另行评估其色号，不把背景色混入前景 token。所有正文渲染必须显式落到 `text` 或内容角色，避免透传终端默认前景色。色号表是首版建议，合入渲染器时需用 dark/light 真实 PTY 检查长文、选区、代码和链接的辨识度。
+  背景 token 与前景色分开：保留 `promptBg`、`diff*Bg`、`search*Bg`，工具错误行使用 `toolErrorBg=52`（dark）/`224`（light）。所有正文渲染必须显式落到 `text` 或内容角色，避免透传终端默认前景色。色号表是首版建议，合入渲染器时需用 dark/light 真实 PTY 检查长文、选区、代码和链接的辨识度。
 - 分阶段实施：先扩展主题 token 并在 `transcript-view.ts` 为 assistant prose、thinking、tool title/output 和 Markdown 统一应用角色；随后迁移其他 TUI renderer 的硬编码颜色。兼容既有 `ThemeTags` 注入点，逐步迁移期间保留默认映射；色彩验证检查 token 覆盖、两套 palette 色号、CJK/代码/链接渲染，以及 dark/light PTY 截图。
 - `workspace_get_context` 工具当前不可用，按版本化计划和 Git 状态对账；共享检出干净，HEAD 与 `origin/master` 一致。
 
@@ -80,7 +85,9 @@ base：`2af62ce3c81b059e3e82c5b41e9f5299bdfd61fc`。独占路径：`packages/cli
 | base `ca10d76d` + follow button change | Linux x64 / Node 26.13.0 | 7 个 TUI 测试文件；`npm run -w @duya/cli typecheck`; `npm run typecheck:all`; `npm run architecture:check`; `node scripts/build-cli-bundle.mjs`; `python3 scripts/smoke-tui-pty.py content ...` | 113 tests passed；CLI/full typecheck exit 0；architecture exit 0；bundle exit 0；PTY content 6/6 checks passed | diff check clean; PTY capture `/tmp/duya-tui-latest-button-final-pty.log` |
 | PR head `f294b17e393389b77399c7f73808079fadf320e8` | GitHub Actions | `gh pr view 631 --json headRefOid,state,isDraft,statusCheckRollup` | PR #631 open、draft；architecture, test scope, typecheck, test, build 全部 SUCCESS | button change 已推送；此 SHA 对应代码改动 |
 | PR head `a8550af2538cffeff49c832eab8487eca85af55b` | Linux x64 / Node 26.13.0 | `git diff --check`; `gh pr view 631 --json headRefOid,statusCheckRollup` | `test scope` SUCCESS；architecture/typecheck/test 当时 IN_PROGRESS；文档色号细化为此记录后的 dirty change | 仅任务计划文档有改动，代码 head `f294b17e` 已通过上述全套 CI |
+| base `03779189` + 工具详情改动（6 个源码/测试路径 + 本计划） | Linux x64 / Node 26.13.0 | `npx vitest run` tool-render/blocks；pointer 模式矩阵；`toolGroupMode` 定向用例；`npm run typecheck:all`; `npm run -w @duya/cli typecheck`; `npm run architecture:check`; `node scripts/build-cli-bundle.mjs`; `python3 scripts/smoke-tui-pty.py content ...`; `git diff --check` | tool-render/blocks 60/60；pointer 展开/收起 4/4；display mode 8/8；typecheck:all 与 CLI typecheck exit 0；architecture exit 0；最终 bundle exit 0；最终 PTY 6/6 pass；聚合运行中 106 passed、2 个 thinking-preview 断言失败 | PTY log `/tmp/duya-tui-tool-disclosure-final-pty.log`；两个失败都在未修改的 thinking 预览路径 |
+| PR head `037791891844d3b7c64df1f00553c0bdf5103274` | GitHub Actions | `gh pr view 631 --json headRefOid,statusCheckRollup` | architecture, test scope, typecheck, test, build 全部 SUCCESS | 这是工具详情代码变更前的 PR head |
 
 ## 接续 / 结果
 
-输入、选区、回底按钮四项改进已在 PR #631 的代码 head `f294b17e393389b77399c7f73808079fadf320e8` 实现；该代码 head 的全部必需 CI 均通过。消息色彩体系方案和逐项色号映射已记录在本计划；当前 PR head 为 `a8550af2538cffeff49c832eab8487eca85af55b`，更新计划文档后产生的新 head 检查待完成。色彩方案尚未迁移渲染器代码。下一步可按该基线实现 token 与消息渲染迁移。PR 保持 draft，未经用户授权不合并。
+输入、选择、回底按钮和可见工具行的点击展开已在当前 worktree 实现；工具行显示完整调用参数/结果并支持单块折叠，错误详情按 dark/light 主题铺红色背景。消息色彩体系设计基线也已记录，正文色彩的全局迁移仍未实施。本次工具交互改动需提交并更新 PR #631；此前 head `037791891844d3b7c64df1f00553c0bdf5103274` 的必需 CI 全部通过。PR 保持 draft，未经用户授权不合并。

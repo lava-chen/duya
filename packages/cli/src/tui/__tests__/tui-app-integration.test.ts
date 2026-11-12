@@ -672,6 +672,75 @@ describe('TUIApp integration', () => {
     expect(internals.follow).toBe(true);
     app.stop();
   });
+
+  it.each(['full', 'names', 'focus', 'running'] as const)(
+    'lets a click on a tool row reveal complete arguments and output in %s view',
+    async (toolGroupMode) => {
+      const out = sink();
+      const stdin = input();
+      const terminalOutput = out.stream as Writable & { columns: number; rows: number; isTTY: boolean };
+      terminalOutput.columns = 80;
+      terminalOutput.rows = 24;
+      terminalOutput.isTTY = true;
+      const app = new TUIApp({
+        output: out.stream,
+        input: stdin,
+        onSubmit: () => {},
+        keyOverrides: {},
+        toolGroupMode,
+        showToolResults: false,
+        terminalEnv: detectTerminalEnvironment({ TERM: 'xterm-256color', TERM_PROGRAM: 'WezTerm' }),
+      });
+      app.start();
+      app.push({ type: 'tool_use', data: { id: 'call-details', name: 'bash', input: { command: 'printf full-command' } } });
+      const output = Array.from({ length: 6 }, (_, i) => `output-${i}`).join('\n');
+      if (toolGroupMode === 'running') {
+        app.push({ type: 'tool_output', data: { toolUseId: 'call-details', data: output } });
+      } else {
+        app.push({ type: 'tool_result', data: { id: 'call-details', result: output } });
+      }
+      await settleRendered();
+
+      const internals = app as unknown as {
+        lastTranscriptRows: readonly (readonly { text: string }[])[];
+        fullScreen: { measure(region: 'transcript'): { top: number; innerTop: number; left: number; innerLeft: number } | null };
+      };
+      const rowIndex = internals.lastTranscriptRows.findIndex((row) => row.map((span) => span.text).join('').includes('bash'));
+      const rowText = internals.lastTranscriptRows[rowIndex]?.map((span) => span.text).join('') ?? '';
+      const transcript = internals.fullScreen.measure('transcript');
+      expect(rowIndex).toBeGreaterThanOrEqual(0);
+      expect(rowText).toContain('[+');
+      expect(transcript).not.toBeNull();
+
+      const column = transcript!.left + transcript!.innerLeft + Math.max(0, rowText.indexOf('bash'));
+      const screenRow = transcript!.top + transcript!.innerTop + rowIndex;
+      const clickAt = (x: number, y: number): void => {
+        stdin.write(`\x1b[<0;${x + 1};${y + 1}M\x1b[<0;${x + 1};${y + 1}m`);
+      };
+      clickAt(column, screenRow);
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      await settleRendered();
+
+      const written = plainText(out.text());
+      expect(written).toContain('command: printf full-command');
+      expect(written).toContain('output-0');
+      expect(written).toContain('output-5');
+
+      const expandedRow = internals.lastTranscriptRows.findIndex((row) => row.map((span) => span.text).join('').includes('bash'));
+      const expandedText = internals.lastTranscriptRows[expandedRow]?.map((span) => span.text).join('') ?? '';
+      const updatedTranscript = internals.fullScreen.measure('transcript');
+      expect(expandedRow).toBeGreaterThanOrEqual(0);
+      const expandedColumn = updatedTranscript!.left + updatedTranscript!.innerLeft + Math.max(0, expandedText.indexOf('bash'));
+      const expandedScreenRow = updatedTranscript!.top + updatedTranscript!.innerTop + expandedRow;
+      clickAt(expandedColumn, expandedScreenRow);
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      await settleRendered();
+      const collapsedRows = internals.lastTranscriptRows.map((row) => row.map((span) => span.text).join('')).join('\n');
+      expect(collapsedRows).not.toContain('Arguments:');
+      if (toolGroupMode !== 'running') expect(collapsedRows).not.toContain('output-5');
+      app.stop();
+    },
+  );
 });
 
 /**

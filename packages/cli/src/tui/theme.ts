@@ -49,6 +49,7 @@ export type ThemeToken =
   | 'accent'
   | 'success'
   | 'error'
+  | 'toolErrorBg'
   | 'warning'
   | 'user'
   | 'thinking'
@@ -109,6 +110,7 @@ export const DARK_THEME_TAGS: ThemeTags = {
   accent: 'cyan-fg',
   success: 'bright-green-fg',
   error: 'bright-red-fg',
+  toolErrorBg: '52-bg',
   warning: 'yellow-fg',
   user: 'bright-green-fg',
   thinking: 'magenta-fg',
@@ -143,6 +145,7 @@ export const LIGHT_THEME_TAGS: ThemeTags = {
   accent: '30-fg',
   success: '28-fg',
   error: '160-fg',
+  toolErrorBg: '224-bg',
   warning: '172-fg',
   user: '28-fg',
   thinking: '128-fg',
