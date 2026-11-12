@@ -119,7 +119,7 @@ PR B 开工时要接住的三件事：`/provider` 编辑表单的"测连"只能�
 
 ### 验证与当前状态（2026-11-12）
 
-检出 `/home/lavachen/.codex/worktrees/duya-cli-trial/duya`；分支 `codex/cli-provider-default-selection`；base `2af62ce3c81b059e3e82c5b41e9f5299bdfd61fc`；当前环境 Linux x64 / Node v26.13.0。当前源代码改动尚未提交，最终 SHA 待提交后补记；dirty 范围见 `git status --short`。
+检出 `/home/lavachen/.codex/worktrees/duya-cli-trial/duya`；分支 `codex/cli-provider-default-selection`；base `2af62ce3c81b059e3e82c5b41e9f5299bdfd61fc`；实现提交 `64ec5d1cb1f1bbb24afbec0c3732a59f943babaa`；当前环境 Linux x64 / Node v26.13.0；源码工作树干净。
 
 | 命令 | 退出码 | 结果 |
 | --- | --- | --- |
