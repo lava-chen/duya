@@ -56,7 +56,8 @@ base：`2af62ce3c81b059e3e82c5b41e9f5299bdfd61fc`。独占路径：`packages/cli
 | PR head `ca10d76d645bead2eb1b9d40b29ca68a5be9ff0f` | GitHub Actions | `gh pr view 631 --json statusCheckRollup` | architecture, test scope, typecheck, test, build 全部 SUCCESS | PR #631 当前 head |
 | base `ca10d76d` + follow button change | Linux x64 / Node 26.13.0 | 7 个 TUI 测试文件；`npm run -w @duya/cli typecheck`; `npm run typecheck:all`; `npm run architecture:check`; `node scripts/build-cli-bundle.mjs`; `python3 scripts/smoke-tui-pty.py content ...` | 113 tests passed；CLI/full typecheck exit 0；architecture exit 0；bundle exit 0；PTY content 6/6 checks passed | diff check clean; PTY capture `/tmp/duya-tui-latest-button-final-pty.log` |
 | PR head `f294b17e393389b77399c7f73808079fadf320e8` | GitHub Actions | `gh pr view 631 --json headRefOid,state,isDraft,statusCheckRollup` | PR #631 open、draft；architecture, test scope, typecheck, test, build 全部 SUCCESS | button change 已推送；此 SHA 对应代码改动 |
+| PR head `58e5f18315e9ce582c30a720b2c75efd5f2c6eac` | Linux x64 / Node 26.13.0 | `git diff --check`; `gh pr view 631 --json headRefOid,state,isDraft,statusCheckRollup` | diff check exit 0；设计记录已推送；该 head 的 CI 尚未出现 | 仅任务计划文档有改动，代码 head `f294b17e` 已通过上述 CI |
 
 ## 接续 / 结果
 
-输入、选区、回底按钮四项改进已在 PR #631 的 `f294b17e393389b77399c7f73808079fadf320e8` 实现；该 head 的全部必需 CI 均通过。消息色彩体系已形成设计基线，尚未迁移渲染器代码。当前计划文档的色彩设计记录尚未提交；下一步可按该基线实现 token 与消息渲染迁移。PR 保持 draft，未经用户授权不合并。
+输入、选区、回底按钮四项改进已在 PR #631 的代码 head `f294b17e393389b77399c7f73808079fadf320e8` 实现；该代码 head 的全部必需 CI 均通过。消息色彩体系方案已提交到同一 PR，当前 head 为 `58e5f18315e9ce582c30a720b2c75efd5f2c6eac`，文档提交后的 CI 尚待完成；色彩方案尚未迁移渲染器代码。下一步可按该基线实现 token 与消息渲染迁移。PR 保持 draft，未经用户授权不合并。
