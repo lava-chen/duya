@@ -63,7 +63,7 @@ export type ThemeToken =
    * code's colours. `diffGutter` is the number's foreground, `diffHunk` the
    * `⋮` between hunks, and `diffHeader` the path of a multi-file change.
    *
-   * They are BACKGROUNDS, like `composerBg` and `promptBg`: the tag bodies
+   * They are BACKGROUNDS, like `promptBg`: the tag bodies
    * end in `-bg` and they fill the cell behind the text.
    *
    * The values are codex's own 256-colour fallbacks for its RGB diff fills
@@ -80,15 +80,6 @@ export type ThemeToken =
   | 'diffHeader'
   | 'heading'
   | 'link'
-  /**
-   * The fill behind the composer.
-   *
-   * The two `*Bg` tokens are BACKGROUNDS, not foregrounds: their tag bodies
-   * end in `-bg` and they fill the cell behind the text. They live in the same
-   * table because they are the same kind of thing — a decision the palette
-   * makes — and because every consumer already carries a `ThemeTags` around.
-   */
-  | 'composerBg'
   | 'promptBg'
   /**
    * The fills behind transcript search matches.
@@ -134,7 +125,6 @@ export const DARK_THEME_TAGS: ThemeTags = {
   diffHeader: 'cyan-fg',
   heading: 'cyan-fg',
   link: 'gray-fg',
-  composerBg: '236-bg',
   promptBg: '238-bg',
   // Dark yellows: the hit is dim, the cursor's hit one step brighter.
   searchMatchBg: '58-bg',
@@ -169,7 +159,6 @@ export const LIGHT_THEME_TAGS: ThemeTags = {
   diffHeader: '30-fg',
   heading: '30-fg',
   link: '243-fg',
-  composerBg: '255-bg',
   promptBg: '254-bg',
   // Pale cream and sand: readable under dark text, distinct from the
   // greenish/rose diff fills (194/224).
@@ -185,21 +174,6 @@ const PALETTES: Readonly<Record<ThemeName, ThemeTags>> = {
 /** The theme used when nothing else is configured. */
 export function defaultTheme(): ThemeName {
   return 'dark';
-}
-
-/**
- * Resolve the composer's fill independently of the text palette.
- *
- * `DUYA_TUI_COMPOSER_BG=transparent` leaves the terminal's own background in
- * place. The default keeps the themed surface used by existing installations.
- */
-export function resolveComposerBackground(
-  tags: ThemeTags,
-  env: NodeJS.ProcessEnv = process.env,
-): string | undefined {
-  return env['DUYA_TUI_COMPOSER_BG']?.toLowerCase() === 'transparent'
-    ? undefined
-    : tags.composerBg;
 }
 
 /**

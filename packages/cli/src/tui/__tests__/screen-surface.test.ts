@@ -160,6 +160,17 @@ describe('screen surface regions', () => {
     surface.destroy();
   });
 
+  it('places the caret after the asynchronous frame diff', async () => {
+    const { surface, output } = makeSurface({ attach: true });
+    surface.update('input', { lines: ['hello'], height: 3 });
+    surface.setCaret({ row: 17, column: 8 });
+    surface.render();
+    await settle();
+
+    expect(output.text()).toMatch(/\x1b\[18;9H\x1b\[\?25h$/u);
+    surface.destroy();
+  });
+
   it('hides and shows without giving up the region', () => {
     const { surface } = makeSurface({ attach: true });
     surface.update('completion', { lines: ['a'], hidden: true });

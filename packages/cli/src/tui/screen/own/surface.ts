@@ -1,6 +1,6 @@
 import { changedRows, composeFrame, type SurfaceFrame } from './frame.js';
 import { layoutRegion, screenRegions, type SurfaceSize } from './geometry.js';
-import { enableMouseReporting } from '../../terminal/ansi.js';
+import { cursorTo, enableMouseReporting, hideCursor, showCursor } from '../../terminal/ansi.js';
 import type { RegionMetrics, RegionPatch, ScreenSurface, SurfaceRegion } from '../types.js';
 import type { SceneLine } from '../../core/span.js';
 
@@ -31,6 +31,7 @@ export class OwnScreenSurface implements ScreenSurface {
   private suspendedFlag = false;
   private activeFlag = false;
   private laidOutFlag = false;
+  private caret: { readonly row: number; readonly column: number } | null | undefined;
   /** A frame is already queued for the next microtask. */
   private renderScheduled = false;
 
@@ -128,6 +129,10 @@ export class OwnScreenSurface implements ScreenSurface {
     return this.lastContent.get(region) ?? [];
   }
 
+  setCaret(position: { readonly row: number; readonly column: number } | null): void {
+    this.caret = position;
+  }
+
   /**
    * Compose and write the frame.
    *
@@ -172,6 +177,10 @@ export class OwnScreenSurface implements ScreenSurface {
     this.previousFrame = composed.frame;
     this.laidOutFlag = true;
     if (output.length > 0) this.options.output.write(output);
+    if (this.caret !== undefined) {
+      if (this.caret === null) this.options.output.write(hideCursor());
+      else this.options.output.write(cursorTo(this.caret.row + 1, this.caret.column + 1) + showCursor());
+    }
   }
 
   enter(): void {

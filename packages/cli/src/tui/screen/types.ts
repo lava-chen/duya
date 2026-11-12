@@ -162,6 +162,8 @@ export interface ScreenSurface {
   update(region: SurfaceRegion, patch: RegionPatch): void;
   /** What the renderer laid out for a region, or null if it has none. */
   measure(region: SurfaceRegion): RegionMetrics | null;
+  /** Place the hardware cursor after the next completed frame; null hides it. */
+  setCaret(position: { readonly row: number; readonly column: number } | null): void;
   /**
    * The body lines the caller last handed to a region.
    *

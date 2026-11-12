@@ -3,6 +3,7 @@ import { Writable, PassThrough } from 'stream';
 import { readFileSync } from 'fs';
 import { TUIApp } from '../TUIApp.js';
 import { MIN_RENDER_INTERVAL_MS } from '../render-scheduler.js';
+import { TerminalIntegration } from '../terminal-integration.js';
 import { renderTranscript, escapeTags } from '../transcript-view.js';
 import { TranscriptModel } from '../blocks.js';
 import { detectTerminalEnvironment } from '../terminal-env.js';
@@ -577,6 +578,53 @@ describe('TUIApp integration', () => {
     // The offset is absolute, so the viewport did not move with the tail.
     expect(after.scrollTop).toBe(scrolled.scrollTop);
 
+    app.stop();
+  });
+
+  it('selects transcript text with an ordinary mouse drag and sends it to the terminal clipboard', async () => {
+    const out = sink();
+    const stdin = input();
+    const terminalOutput = out.stream as Writable & { columns: number; rows: number; isTTY: boolean };
+    terminalOutput.columns = 80;
+    terminalOutput.rows = 24;
+    terminalOutput.isTTY = true;
+    const app = new TUIApp({
+      output: out.stream,
+      input: stdin,
+      onSubmit: () => {},
+      keyOverrides: {},
+      terminalEnv: detectTerminalEnvironment({ TERM: 'xterm-256color', TERM_PROGRAM: 'WezTerm' }),
+      terminalIntegration: new TerminalIntegration({
+        writer: terminalOutput,
+        enabled: true,
+        env: {},
+        flags: { clipboard: true },
+      }),
+    });
+    app.start();
+    app.printNotice('ordinary-drag-select');
+    await settleRendered();
+
+    const internals = app as unknown as {
+      fullScreen: { measure(region: 'transcript'): { top: number; innerTop: number; left: number; innerLeft: number } | null };
+      lastTranscriptRows: readonly (readonly { text: string }[])[];
+    };
+    const screen = internals.fullScreen.measure('transcript');
+    const markerRow = internals.lastTranscriptRows.findIndex((row) => row.map((span) => span.text).join('').includes('ordinary-drag-select'));
+    const rowText = internals.lastTranscriptRows[markerRow]?.map((span) => span.text).join('') ?? '';
+    const markerColumn = rowText.indexOf('ordinary-drag-select');
+    expect(screen).not.toBeNull();
+    expect(markerRow).toBeGreaterThanOrEqual(0);
+    expect(markerColumn).toBeGreaterThanOrEqual(0);
+
+    const screenX = screen!.left + screen!.innerLeft + markerColumn;
+    const screenY = screen!.top + screen!.innerTop + markerRow;
+    const endX = screenX + 'ordinary-drag-select'.length - 1;
+    stdin.write(`\x1b[<0;${screenX + 1};${screenY + 1}M\x1b[<32;${endX + 1};${screenY + 1}M\x1b[<0;${endX + 1};${screenY + 1}m`);
+    await settleRendered();
+
+    expect(out.text()).toContain('\x1b[7;90m');
+    expect(out.text()).toContain(Buffer.from('ordinary-drag-select').toString('base64'));
     app.stop();
   });
 });
