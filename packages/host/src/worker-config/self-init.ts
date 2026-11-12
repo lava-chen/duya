@@ -58,7 +58,7 @@ export function createWorkerSelfInitMessage(
   if (!resolution.ok) {
     return {
       ok: false,
-      message: `worker self-init could not resolve a provider: ${resolution.message}`,
+      message: userFacingProviderError(resolution),
     };
   }
 
@@ -79,4 +79,25 @@ export function createWorkerSelfInitMessage(
       language: 'zh',
     },
   };
+}
+
+function userFacingProviderError(
+  resolution: Extract<ReturnType<typeof resolveProvider>, { ok: false }>,
+): string {
+  switch (resolution.reason) {
+    case 'config-missing':
+      return '还没有配置模型服务。输入 `/provider add` 添加服务。';
+    case 'no-provider-selected':
+      return '还没有选择模型服务。输入 `/provider` 选择服务，或输入 `/model` 为当前会话选择模型。';
+    case 'api-key-missing':
+    case 'secrets-missing':
+      return '模型服务还没有 API key。输入 `/provider` 添加或更新密钥。';
+    case 'model-unresolved':
+      return '模型服务没有默认模型。输入 `/model` 选择模型，或在 `/provider` 设置默认模型。';
+    case 'config-unreadable':
+    case 'config-malformed':
+    case 'provider-unknown':
+    case 'secrets-malformed':
+      return `模型服务配置有问题：${resolution.message}`;
+  }
 }
