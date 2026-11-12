@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { paintTranscriptSelection, selectedTranscriptText, transcriptSelection } from '../transcript-selection.js';
+import {
+  centeredTranscriptButton,
+  paintTranscriptSelection,
+  selectedTranscriptText,
+  transcriptSelection,
+} from '../transcript-selection.js';
 
 const TAG_VIEW = {
   renderer: 'own' as const,
@@ -32,5 +37,18 @@ describe('transcriptSelection', () => {
     ];
     const selection = transcriptSelection({ row: 0, column: 1 }, { row: 2, column: 2 })!;
     expect(selectedTranscriptText(rows, selection, 3)).toBe('ne\ntwo\nthr');
+  });
+
+  it('centers a button on the transcript row while preserving text and selection outside it', () => {
+    const row = [
+      { text: 'left', fg: { kind: 'named' as const, name: 'cyan' } },
+      { text: '.........................right' },
+    ];
+    const button = centeredTranscriptButton(row, 40, 'Go latest', TAG_VIEW, { start: 0, end: 4 });
+
+    expect(button).toMatchObject({ column: 14, width: 11 });
+    expect(button?.line).toContain('{inverse}{cyan-fg}left{/cyan-fg}{/inverse}');
+    expect(button?.line).toContain('{inverse} Go latest {/inverse}');
+    expect(button?.line).toContain('right');
   });
 });

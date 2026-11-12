@@ -127,6 +127,7 @@ import {
 } from './theme.js';
 import { compactActivity } from './text.js';
 import {
+  centeredTranscriptButton,
   paintTranscriptSelection,
   selectedTranscriptText,
   transcriptSelection as buildTranscriptSelection,
@@ -2236,6 +2237,13 @@ export class TUIApp {
     const styles = stylesOf({ theme: this.theme.tags, renderer: 'own' });
     const tagView = tagViewOf(styles);
     const selection = this.currentTranscriptSelection();
+    const indicatorRow = renderedRows.length - 1;
+    const indicatorSelection = selection === undefined || indicatorRow < 0
+      ? undefined
+      : transcriptSelectionColumns(renderedRows[indicatorRow] ?? [], indicatorRow, selection, this.lastPaneWidth);
+    const followButton = !this.follow && indicatorRow >= 0
+      ? centeredTranscriptButton(renderedRows[indicatorRow] ?? [], totalWidth, this.followTailButtonLabel(), tagView, indicatorSelection)
+      : undefined;
     this.fullScreen.update('transcript', {
       // The border is the focus tell in full-screen mode: the task list owns
       // the arrows while the transcript does not respond to them at all.
@@ -2244,6 +2252,7 @@ export class TUIApp {
       // ScreenSurface still owns borders and layout; the tree owns the pane's
       // viewport and clipping, so this is a safe first integration step.
       lines: renderedRows.map((row, index) => {
+        if (index === indicatorRow && followButton !== undefined) return followButton.line;
         const columns = selection === undefined
           ? undefined
           : transcriptSelectionColumns(row, index, selection, this.lastPaneWidth);
@@ -2788,17 +2797,21 @@ export class TUIApp {
     const badgePlain = badge === null ? '' : `${badge.plain}${badge.hint}`;
     const badgeWidth = badgePlain === '' ? 0 : visibleWidth(badgePlain) + 1;
     const showBadge = badge !== null && badgeWidth < width;
-    const jump = this.follow ? '' : '[↓ Latest] ';
     const activity = '{gray-fg}' + escapeTags(compactActivity(
       fixed,
-      Math.max(1, width - (showBadge ? badgeWidth : 0) - visibleWidth(jump)),
+      Math.max(1, width - (showBadge ? badgeWidth : 0)),
     )) + '{/gray-fg}';
     const badgeTagged = badge === null || !showBadge
       ? ''
       : ' ' + taggedWith(this.theme.tags, badge.token, escapeTags(badgePlain));
     this.fullScreen.update('status', {
-      lines: [(jump ? taggedWith(this.theme.tags, 'accent', escapeTags(jump)) : '') + activity + badgeTagged],
+      lines: [activity + badgeTagged],
     });
+  }
+
+  private followTailButtonLabel(): string {
+    const shortcuts = this.actionDefs.find((action) => action.id === 'follow-tail')?.keys.join(' / ');
+    return `↓ Jump to latest message${shortcuts ? ` · ${shortcuts}` : ''}`;
   }
 
   /**
@@ -5501,8 +5514,15 @@ exportHistory(): string[] {
         drag: (phase, point) => this.scrollbarDrag(phase, point.y),
       });
     }
-    if (!this.follow)
-      add('follow-tail', this.fullScreen.measure('status'), 0, 0, visibleWidth('[↓ Latest]'), () => this.actionHandlers.get('follow-tail')?.());
+    if (!this.follow) {
+      const transcript = this.fullScreen.measure('transcript');
+      const indicatorWidth = Math.min(visibleWidth(` ${this.followTailButtonLabel()} `), this.terminalSize().columns);
+      const indicatorColumn = Math.floor((this.terminalSize().columns - indicatorWidth) / 2);
+      add(
+        'follow-tail', transcript, this.visibleTranscriptRows() - 1, indicatorColumn, indicatorWidth,
+        () => this.actionHandlers.get('follow-tail')?.(),
+      );
+    }
     this.pointer.commit(hits);
   }
 

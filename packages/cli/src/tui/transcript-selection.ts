@@ -2,6 +2,7 @@
 
 import type { SpanTagView } from './markdown/inline.js';
 import { spansToTags } from './markdown/inline.js';
+import { escapeTags } from './markdown/escape.js';
 import { codePointWidth, visibleWidth } from './width.js';
 import type { StyledSpan } from './core/span.js';
 
@@ -14,6 +15,12 @@ export interface TranscriptSelection {
   readonly start: TranscriptPoint;
   /** Exclusive end, including the cell under the drag endpoint. */
   readonly end: TranscriptPoint;
+}
+
+export interface CenteredTranscriptButton {
+  readonly line: string;
+  readonly column: number;
+  readonly width: number;
 }
 
 /** Order two inclusive drag endpoints into a half-open selection range. */
@@ -117,4 +124,99 @@ export function selectedTranscriptText(
   }
   const text = lines.join('\n');
   return text.length === 0 ? undefined : text;
+}
+
+/** Overlay a centered inverse-video button on a transcript row. */
+export function centeredTranscriptButton(
+  spans: readonly StyledSpan[],
+  totalWidth: number,
+  label: string,
+  tagView: SpanTagView,
+  selection?: { readonly start: number; readonly end: number },
+): CenteredTranscriptButton | undefined {
+  if (totalWidth <= 0) return undefined;
+  const buttonText = truncateButtonText(` ${label} `, totalWidth);
+  const buttonWidth = visibleWidth(buttonText);
+  if (buttonWidth <= 0) return undefined;
+  const column = Math.floor((totalWidth - buttonWidth) / 2);
+  const end = column + buttonWidth;
+  const before: StyledSpan[] = [];
+  const after: StyledSpan[] = [];
+  const append = (target: StyledSpan[], span: StyledSpan, point: string): void => {
+    const last = target[target.length - 1];
+    if (last !== undefined && sameSpanStyle(last, span)) {
+      target[target.length - 1] = { ...last, text: last.text + point };
+    } else {
+      target.push({ ...span, text: point });
+    }
+  };
+  let afterStart: number | undefined;
+  let cell = 0;
+  let zeroWidthDestination: 'before' | 'after' | undefined;
+  for (const span of spans) {
+    for (const point of span.text) {
+      const width = codePointWidth(point);
+      if (width === 0) {
+        const destination = zeroWidthDestination;
+        if (destination === 'before') append(before, span, point);
+        else if (destination === 'after') append(after, span, point);
+        continue;
+      }
+      const start = cell;
+      cell += width;
+      if (cell <= column) {
+        append(before, span, point);
+        zeroWidthDestination = 'before';
+      } else if (start >= end && start < totalWidth) {
+        afterStart ??= start;
+        append(after, span, point);
+        zeroWidthDestination = 'after';
+      } else {
+        zeroWidthDestination = undefined;
+      }
+    }
+  }
+
+  const beforeWidth = before.reduce((width, span) => width + visibleWidth(span.text), 0);
+  const beforeRange = selection === undefined
+    ? undefined
+    : { start: Math.max(0, selection.start), end: Math.min(column, selection.end) };
+  const beforeText = beforeRange !== undefined && beforeRange.end > beforeRange.start
+    ? paintTranscriptSelection(before, beforeRange.start, beforeRange.end, tagView)
+    : spansToTags(before, tagView);
+  const afterRange = selection === undefined || afterStart === undefined
+    ? undefined
+    : {
+        start: Math.max(0, selection.start - afterStart),
+        end: Math.max(0, Math.min(cell, selection.end) - afterStart),
+      };
+  const afterText = afterRange !== undefined && afterRange.end > afterRange.start
+    ? paintTranscriptSelection(after, afterRange.start, afterRange.end, tagView)
+    : spansToTags(after, tagView);
+  const rightGap = afterStart === undefined ? 0 : Math.max(0, afterStart - end);
+  return {
+    line: `${beforeText}${' '.repeat(Math.max(0, column - beforeWidth))}{inverse}${escapeTags(buttonText)}{/inverse}${' '.repeat(rightGap)}${afterText}`,
+    column,
+    width: buttonWidth,
+  };
+}
+
+function truncateButtonText(text: string, width: number): string {
+  if (visibleWidth(text) <= width) return text;
+  let result = '';
+  let used = 0;
+  for (const point of text) {
+    const next = codePointWidth(point);
+    if (used + next > width) break;
+    result += point;
+    used += next;
+  }
+  return result;
+}
+
+function sameSpanStyle(left: StyledSpan, right: StyledSpan): boolean {
+  return left.linkId === right.linkId
+    && JSON.stringify(left.fg) === JSON.stringify(right.fg)
+    && JSON.stringify(left.bg) === JSON.stringify(right.bg)
+    && JSON.stringify(left.attrs) === JSON.stringify(right.attrs);
 }

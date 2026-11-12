@@ -627,6 +627,51 @@ describe('TUIApp integration', () => {
     expect(out.text()).toContain(Buffer.from('ordinary-drag-select').toString('base64'));
     app.stop();
   });
+
+  it('centers the return-to-latest button above the composer and keeps it clickable', async () => {
+    const out = sink();
+    const stdin = input();
+    const terminalOutput = out.stream as Writable & { columns: number; rows: number; isTTY: boolean };
+    terminalOutput.columns = 80;
+    terminalOutput.rows = 24;
+    terminalOutput.isTTY = true;
+    const app = new TUIApp({
+      output: out.stream,
+      input: stdin,
+      onSubmit: () => {},
+      keyOverrides: {},
+      terminalEnv: detectTerminalEnvironment({ TERM: 'xterm-256color', TERM_PROGRAM: 'WezTerm' }),
+    });
+    app.start();
+    for (let index = 0; index < 48; index += 1) app.printNotice(`history-row-${index}`);
+    await settleRendered();
+    stdin.write('\x1b[5~');
+    await settleRendered();
+
+    const internals = app as unknown as {
+      follow: boolean;
+      lastTranscriptRows: readonly unknown[];
+      fullScreen: {
+        measure(region: 'transcript'): { top: number; innerTop: number; height: number } | null;
+        content(region: 'transcript'): readonly unknown[];
+      };
+    };
+    const transcript = internals.fullScreen.measure('transcript');
+    expect(internals.follow).toBe(false);
+    expect(transcript).not.toBeNull();
+    expect(JSON.stringify(internals.fullScreen.content('transcript'))).toContain('Jump to latest message');
+
+    const labelWidth = ' ↓ Jump to latest message · Ctrl+End '.length;
+    const buttonColumn = Math.floor((80 - labelWidth) / 2);
+    const buttonRow = transcript!.top + transcript!.innerTop + internals.lastTranscriptRows.length - 1;
+    const buttonX = buttonColumn + Math.floor(labelWidth / 2);
+    stdin.write(`\x1b[<0;${buttonX + 1};${buttonRow + 1}M\x1b[<0;${buttonX + 1};${buttonRow + 1}m`);
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    await settleRendered();
+
+    expect(internals.follow).toBe(true);
+    app.stop();
+  });
 });
 
 /**
