@@ -267,7 +267,7 @@ describe('the DUYA_TUI_KEY_INTERRUPT case', () => {
 describe('the rebindable surface', () => {
   it('covers exactly the simple global toggles', () => {
     expect([...REBINDABLE_ACTIONS].sort()).toEqual([
-      'clear', 'expand-all', 'follow-tail', 'focus', 'help', 'history', 'sidebar-next-tab', 'sidebar-toggle', 'transcript-next',
+      'clear', 'expand-all', 'follow-tail', 'focus', 'help', 'history', 'sidebar-toggle', 'transcript-next',
       'transcript-next-turn', 'transcript-previous', 'transcript-previous-turn', 'transcript-search', 'transcript-toggle-block', 'usage',
     ].sort());
     // Ctrl+C stays out: the interrupt channel is never rebindable.

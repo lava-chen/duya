@@ -145,7 +145,10 @@ with open(LOG, 'w', encoding='utf-8') as handle:
 
 if MODE == 'functional':
     checks = {
-        'started (fullscreen chrome + sidebar drawn)': 'Sess' in plain and len(out) > 4000,
+        'started (fullscreen chrome + single workbench panel)': 'WORKBENCH' in plain and len(out) > 4000,
+        'sidebar keeps only the two session actions': all(label in plain for label in ('New session', 'All sessions')),
+        'sidebar exposes the three display presets': all(label in plain for label in ('Minimal', 'Default', 'Detailed')),
+        'workspace path is shown below the composer': 'codex/tui-cursor-selection' in plain,
         'Ctrl+F opened search bar (hint rendered)': 'Enter next' in plain,
         'query text rendered in search bar': '/ du' in plain,
         'match highlight painted (searchMatchBg SGR)': b'48;5;58' in bytes(out) or b'48;5;100' in bytes(out),

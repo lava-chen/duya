@@ -11,6 +11,8 @@ base：`2af62ce3c81b059e3e82c5b41e9f5299bdfd61fc`。独占路径：`packages/cli
 - 全屏转录支持普通鼠标拖选，选区反白并通过 OSC 52 复制到终端剪贴板；离开底部时，将回底按钮移到输入框上方居中显示。
 - 工具行支持点击展开/收起完整调用参数与结果；错误调用按主题显示红色背景，显示模式保留单块交互。
 - 为消息渲染定义基于语义角色与 256 色号的色彩体系；本轮记录方案，后续按该体系逐步迁移渲染器。
+- 精简工作台侧栏为单面板与两个会话入口；显示模式菜单只保留极简、默认、详细；路径和活动状态置于输入框下方的两行 footer。
+- 对照 Pi 扩展 API 记录 Duya 插件 UI 扩展的可行接口边界；本轮先形成合同建议，不新增通用插件 UI API。
 - 本轮仅改 CLI TUI，不改 Host、协议或 Desktop UI。
 
 关联：[Pi / Duya TUI 对照](../../references/pi-tui-workbench.md)、[TUI 全屏框架](2026-11-11-tui-fullscreen-framework.md)。
@@ -34,6 +36,10 @@ base：`2af62ce3c81b059e3e82c5b41e9f5299bdfd61fc`。独占路径：`packages/cli
 - [x] 将回底按钮从底部状态栏移至输入框上方居中，并验证鼠标命中仍可回底。
 - [x] 对照 Pi 与 Duya 现有主题，形成消息色彩 token 与色号映射方案。
 - [x] 使工具行点击展开完整参数与输出，在 full/names/focus/running 可见模式下验证展开、收起及错误背景。
+- [x] 合并 Sess/CTX/View 为单面板，简化会话入口与 context，移除默认资源链接。
+- [x] 将显示模式压缩为 Minimal / Default / Detailed，旧命令名做兼容映射。
+- [x] 将 fullscreen footer 调整为路径/分支在上、活动状态在下；验证 inline/footer 与提示弹层布局。
+- [x] 阅读 Pi 扩展的 widget、header/footer、custom UI、editor/theme、tool renderer 与 RPC 接口，并记录 Duya 合同建议。
 
 ## 发现与决策
 
@@ -46,6 +52,8 @@ base：`2af62ce3c81b059e3e82c5b41e9f5299bdfd61fc`。独占路径：`packages/cli
 - 用户已确认使用普通终端闪烁光标与无需 Shift 的普通鼠标拖选。
 - Duya 已有 dark/light palette，但缺少 `text` 基础正文 token；未包裹语义标签的普通文本继承终端前景色。dark palette 的 `gray/cyan/green` 等 named ANSI 颜色还可被终端主题重定义，因此相同输出会随终端外观改变。
 - Pi 的消息颜色有明确的角色层级：`text`、`muted`、`dim`、`thinkingText`、`toolTitle`、`toolOutput`，并分别定义 Markdown heading/link/link URL/code/code block/quote/list 等角色；正文主要是低饱和浅灰，强调色用于结构与语义，不给整段 prose 染色。
+- 侧栏重新布局：一个可滚动面板里只留新建/全部会话入口、简要 context、三档显示方式；Skills/Plugins/MCP 继续由现有命令打开。路径从侧栏移除，fullscreen 与 inline footer 均按路径/分支在上、活动与提示在下排列。
+- Pi 的扩展 UI 是明确槽位：`ExtensionUIContext` 支持 widget、header/footer、自定义聚焦组件、editor、theme、status/working indicator；工具定义支持 call/result renderer 和 renderer resolver。Duya 本轮只形成受限注册槽位建议，不开放 `TUIApp`/屏幕坐标访问。
 - 色彩体系建议固定为 **语义 token → dark/light palette 色号 → renderer tag** 三层。renderer 不直接写色号；前景与背景角色分开命名，背景 token 统一以 `Bg` 结尾。新增 `text` 作为正文默认前景，`muted` 作为次级信息，`dim` 作为辅助/占位信息；内容角色包含 `thinking`、`toolTitle`、`toolOutput`、`user`；Markdown 角色包含 `heading`、`link`、`linkUrl`、`code`、`codeBlock`、`quote`、`listBullet`；状态角色沿用 `accent/success/warning/error`，填充沿用 `promptBg/diff*Bg/search*Bg`。
 - 建议的 256 色 token 基线如下（编号是 xterm 256 palette index；映射为前景色，背景角色继续使用 `*-bg`）：
 
@@ -87,7 +95,10 @@ base：`2af62ce3c81b059e3e82c5b41e9f5299bdfd61fc`。独占路径：`packages/cli
 | PR head `a8550af2538cffeff49c832eab8487eca85af55b` | Linux x64 / Node 26.13.0 | `git diff --check`; `gh pr view 631 --json headRefOid,statusCheckRollup` | `test scope` SUCCESS；architecture/typecheck/test 当时 IN_PROGRESS；文档色号细化为此记录后的 dirty change | 仅任务计划文档有改动，代码 head `f294b17e` 已通过上述全套 CI |
 | PR head `d2b1ecacb052fa2b8852e2c11214e525fc8f832e` + 工具详情改动 | Linux x64 / Node 26.13.0 | 4 个 CLI TUI 测试文件；`npm run typecheck:all`; `npm run architecture:check`; `node scripts/build-cli-bundle.mjs`; `python3 scripts/smoke-tui-pty.py content ...`; `git diff --check`; `gh pr view 631 --json headRefOid,statusCheckRollup` | 4 files / 109 tests passed；typecheck:all exit 0；architecture exit 0；bundle exit 0；PTY 6/6 pass；diff check clean；PR test scope SUCCESS、其余 CI 进行中 | thinking body 回归已在 `d2b1ecac` 修复；PTY log `/tmp/duya-tui-tool-disclosure-final3-pty.log` |
 | PR head `037791891844d3b7c64df1f00553c0bdf5103274` | GitHub Actions | `gh pr view 631 --json headRefOid,statusCheckRollup` | architecture, test scope, typecheck, test, build 全部 SUCCESS | 这是工具详情代码变更前的 PR head |
+| `bc0649969` + 当前工作区改动 | Linux x64 / Node 26.13.0 | 5 个相关 TUI 测试文件；`npm run typecheck:all`; `npm run architecture:check`; `npm run build:cli-dev`; fullscreen PTY `functional` | 相关用例 62/62；typecheck:all exit 0；architecture exit 0；CLI/worker build exit 0；PTY 10 项通过。全 TUI 共 123 文件：1613 passed、1 expected fail，另有 6 项 `tui-file-diff-stream.test.ts` 失败 | 失败签名也出现在 PR #631 旧 head 的必需 test CI；该文件及对应 transcript 渲染源码未改。生成的 Host worker bundle 变化已还原 |
 
 ## 接续 / 结果
 
-输入、选择、回底按钮和可见工具行的点击展开已实现；工具行显示完整调用参数/结果并支持单块折叠，错误详情按 dark/light 主题铺红色背景。thinking body 回归已在 `d2b1ecacb052fa2b8852e2c11214e525fc8f832e` 修复，4 个相关测试文件 109/109 通过、全量 typecheck/架构门禁及 bundle/PTy 验收通过；该 head 的 GitHub test scope 已通过，其余 CI 仍在运行。消息色彩体系设计基线已记录，正文色彩的全局迁移仍未实施。PR 保持 draft，未经用户授权不合并。
+输入、选择、回底按钮、可见工具行点击展开、单面板工作台、三档显示和输入框下方的两行 footer 已实现。Pi 插件 UI 槽位与 Duya 合同建议已写入参考文档；通用插件 UI API 仍未实施。当前相关 TUI 测试 62/62 通过，完整 TUI 目录 123 文件中 122 文件通过、1 个未变更的 `tui-file-diff-stream.test.ts` 文件有 6 个失败：预览渲染只输出 `└ ⏺ write [-]`。相同失败签名出现在 PR #631 旧 head 的 GitHub test job；本轮没有改动该测试及对应 transcript 渲染源码。全量类型/架构门禁、CLI/worker bundle 和实际 PTY smoke 通过。构建改动过的 tracked Host worker bundle 已按生成产物路径还原。
+
+当前工作区仍有本任务的未提交改动；分支 `codex/tui-cursor-selection`，HEAD `bc0649969b389cedfba9933fc4c658ab8110d33c`，PR #631 保持 draft 且未合并。下一步：核对最终 diff 与 `git diff --check`，提交并更新该 PR；保留未改动的流式 write 预览失败供单独定位。

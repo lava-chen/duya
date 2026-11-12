@@ -57,7 +57,7 @@ describe('resolveDisplayProfile', () => {
 
 describe('displayProfileSettings', () => {
   it('writes all four keys, every time', () => {
-    expect(Object.keys(displayProfileSettings('running')).sort()).toEqual([
+    expect(Object.keys(displayProfileSettings('minimal')).sort()).toEqual([
       TUI_EXPAND_BLOCKS_SETTING,
       TUI_SHOW_THINKING_SETTING,
       TUI_SHOW_TOOL_RESULTS_SETTING,
@@ -86,12 +86,11 @@ describe('displayProfileSettings', () => {
     }
   });
 
-  it('differs from its neighbour by the axis the name promises', () => {
-    // Compact and Live only are the pair a reader is most likely to confuse, so
-    // they may only differ in how many call rows the trail lists.
-    expect(profileById('compact').toolGroupMode).toBe('names');
-    expect(profileById('running').toolGroupMode).toBe('running');
-    expect(profileById('compact').showThinking).toBe(profileById('running').showThinking);
+  it('offers only Minimal, Default, and Detailed', () => {
+    expect(DISPLAY_PROFILES.map((profile) => profile.label)).toEqual(['Minimal', 'Default', 'Detailed']);
+    expect(profileById('minimal').toolGroupMode).toBe('names');
+    expect(profileById('standard').expandBlocks).toBe(false);
+    expect(profileById('detailed').expandBlocks).toBe(true);
   });
 
   it('refuses an id that is not in the list', () => {

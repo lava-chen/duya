@@ -186,17 +186,16 @@ const SYNC_END = '\x1b[?2026l';
 /** Lines the input box may grow to before it scrolls internally. */
 const MAX_INPUT_ROWS = 8;
 
-/** Height of the full-screen status bar, in rows. */
-const STATUS_ROWS = 1;
+/** Full-screen footer rows: workspace location, then live activity. */
+const STATUS_ROWS = 2;
 
 /**
  * Footer rows in inline mode.
  *
  * Two, like pi: the path row and the stats/model row. Inline mode is the
  * default and the pi-aligned presentation, so it gets the footer that carries
- * the same information in the same two places. Full-screen mode keeps its
- * single status row — it is a fixed window with a bordered transcript, and
- * spending another row on chrome there costs the conversation directly.
+ * the same information in the same two places. Full-screen uses the same
+ * location-then-status order beneath the composer.
  */
 const INLINE_FOOTER_ROWS = 2;
 
@@ -2209,19 +2208,13 @@ export class TUIApp {
     if (sidebarWidth > 0) {
       const model = this.options.modelLabel?.();
       const tools = this.model.blocks.filter((block) => block.kind === 'tool');
-      const cwd = this.options.workspaceDirectory?.() ?? process.cwd();
-      const branch = this.gitBranch(cwd);
       const props = {
         styles: stylesOf({ theme: this.theme.tags, renderer: 'own' }),
-        sessionId: this.options.workbenchSessionId?.() ?? '',
         sessionTitle: this.options.sessionTitle?.() ?? 'Current session',
-        sessions: (this.options.completionSources?.slashOptions?.('/resume') ?? []).map((item) => ({ id: item.value, label: item.label })),
         model: model?.model ?? 'unknown', provider: model?.provider ?? 'unknown',
-        effort: this.effortLevel() ?? 'auto', cwd: branch ? `${cwd} (${branch})` : cwd,
-        inputTokens: this.lastUsage?.input ?? null, outputTokens: this.lastUsage?.output ?? null,
-        sessionTokens: this.sessionTokens, contextTokens: this.contextTokens(),
+        effort: this.effortLevel() ?? 'auto',
+        contextTokens: this.contextTokens(),
         contextBudget: this.options.contextBudgetTokens?.() ?? null,
-        tokensPerSecond: this.lastUsage?.tokensPerSecond ?? null,
         profile: resolveDisplayProfile({ showThinking: this.showThinking, expandBlocks: this.expanded, showToolResults: this.showToolResults, toolGroupMode: this.toolGroupMode }),
         tools: { total: tools.length, running: tools.filter((tool) => tool.status === 'running').length, errors: tools.filter((tool) => tool.status === 'error').length },
       };
@@ -2804,8 +2797,15 @@ export class TUIApp {
     const badgeTagged = badge === null || !showBadge
       ? ''
       : ' ' + taggedWith(this.theme.tags, badge.token, escapeTags(badgePlain));
+    const cwd = this.options.workspaceDirectory?.() ?? process.cwd();
+    const branch = this.gitBranch(cwd);
+    const location = branch ? `${cwd} · ${branch}` : cwd;
     this.fullScreen.update('status', {
-      lines: [activity + badgeTagged],
+      height: STATUS_ROWS,
+      lines: [
+        `{gray-fg}${escapeTags(truncateToWidth(location, width))}{/gray-fg}`,
+        activity + badgeTagged,
+      ],
     });
   }
 
@@ -4085,12 +4085,6 @@ exportHistory(): string[] {
     this.bindAction('help', () => { this.toggleWindow('help'); });
     this.bindAction('history', () => { this.toggleWindow('history'); });
     this.bindAction('usage', () => { this.toggleWindow('usage'); });
-    this.bindAction('sidebar-next-tab', () => {
-      if (this.dockPanelActive() || this.overlay.isActive || !this.sidebarLayout || !this.sidebar) return;
-      const tabs = ['sessions', 'context', 'view'] as const;
-      this.sidebar.selectTab(tabs[(tabs.indexOf(this.sidebar.tab) + 1) % tabs.length]!);
-      this.scheduler.requestImmediate();
-    });
     this.bindAction('sidebar-toggle', () => {
       if (this.dockPanelActive() || this.overlay.isActive) return;
       this.pointer.cancel();
@@ -5490,15 +5484,10 @@ exportHistory(): string[] {
       for (const target of this.sidebar.pointerTargets()) {
         add(`sidebar:${target.id}`, geometry, target.row, layout.column + target.column, target.width, () => {
           if ((this.options.workbenchSessionId?.() ?? '') !== sessionId) return;
-          if ('tab' in target.action) {
-            this.sidebar?.selectTab(target.action.tab);
-            this.scheduler.requestImmediate();
-          } else {
-            const command = target.action.command;
-            void Promise.resolve().then(() => this.options.onWorkbenchCommand?.(command)).catch((error: unknown) => {
-              this.printError(error instanceof Error ? error.message : String(error));
-            });
-          }
+          const command = target.action.command;
+          void Promise.resolve().then(() => this.options.onWorkbenchCommand?.(command)).catch((error: unknown) => {
+            this.printError(error instanceof Error ? error.message : String(error));
+          });
         }, sessionId);
       }
     }

@@ -38,7 +38,7 @@ import type { ActionDef } from './actions.js';
 
 /** Actions whose blessed bindings follow an override. */
 export const REBINDABLE_ACTIONS: ReadonlySet<string> = new Set([
-  'sidebar-next-tab', 'sidebar-toggle',
+  'sidebar-toggle',
   'help',
   'history',
   'usage',
