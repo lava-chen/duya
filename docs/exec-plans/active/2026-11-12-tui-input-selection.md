@@ -42,7 +42,30 @@ base：`2af62ce3c81b059e3e82c5b41e9f5299bdfd61fc`。独占路径：`packages/cli
 - Duya 已有 dark/light palette，但缺少 `text` 基础正文 token；未包裹语义标签的普通文本继承终端前景色。dark palette 的 `gray/cyan/green` 等 named ANSI 颜色还可被终端主题重定义，因此相同输出会随终端外观改变。
 - Pi 的消息颜色有明确的角色层级：`text`、`muted`、`dim`、`thinkingText`、`toolTitle`、`toolOutput`，并分别定义 Markdown heading/link/link URL/code/code block/quote/list 等角色；正文主要是低饱和浅灰，强调色用于结构与语义，不给整段 prose 染色。
 - 色彩体系建议固定为 **语义 token → dark/light palette 色号 → renderer tag** 三层。renderer 不直接写色号；前景与背景角色分开命名，背景 token 统一以 `Bg` 结尾。新增 `text` 作为正文默认前景，`muted` 作为次级信息，`dim` 作为辅助/占位信息；内容角色包含 `thinking`、`toolTitle`、`toolOutput`、`user`；Markdown 角色包含 `heading`、`link`、`linkUrl`、`code`、`codeBlock`、`quote`、`listBullet`；状态角色沿用 `accent/success/warning/error`，填充沿用 `promptBg/diff*Bg/search*Bg`。
-- 建议的 256 色灰阶基准为 dark：`text=254`（#e4e4e4）、`muted=248`（#a8a8a8）、`dim=242`（#6c6c6c）；light：`text=238`（#444444）、`muted=244`（#808080）、`dim=247`（#9e9e9e）。dark/light 下状态和 Markdown token 使用成对映射，优先保持可读性与低饱和度，而非要求同一 hue 色号相同。以上色号是基线建议，落地时需在常见 dark/light 终端检查对比度。
+- 建议的 256 色 token 基线如下（编号是 xterm 256 palette index；映射为前景色，背景角色继续使用 `*-bg`）：
+
+  | Token | Dark | Light | 用途 |
+  | --- | ---: | ---: | --- |
+  | `text` | 254 | 238 | assistant 正文与默认内容 |
+  | `muted` | 248 | 244 | 次级说明、工具输出 |
+  | `dim` | 242 | 247 | 时间、占位和弱提示 |
+  | `accent` | 141 | 90 | 一般交互强调 |
+  | `success` | 114 | 28 | 成功状态、添加内容 |
+  | `error` | 203 | 160 | 错误状态、删除内容 |
+  | `warning` | 221 | 172 | 警告状态 |
+  | `user` | 151 | 28 | 用户消息标记与正文 |
+  | `thinking` | 245 | 244 | thinking 正文 |
+  | `toolTitle` | 254 | 238 | 工具调用名称 |
+  | `toolOutput` | 248 | 244 | 工具结果正文 |
+  | `heading` | 221 | 136 | Markdown 标题 |
+  | `link` | 75 | 25 | Markdown 链接文字 |
+  | `linkUrl` | 245 | 244 | Markdown URL |
+  | `code` | 177 | 90 | 行内代码 |
+  | `codeBlock` | 114 | 28 | 代码块正文/语法默认色 |
+  | `quote` | 248 | 244 | 引用正文 |
+  | `listBullet` | 141 | 90 | 列表符号 |
+
+  保持已有 `promptBg`、`diff*Bg`、`search*Bg` 的背景用途，另行评估其色号，不把背景色混入前景 token。所有正文渲染必须显式落到 `text` 或内容角色，避免透传终端默认前景色。色号表是首版建议，合入渲染器时需用 dark/light 真实 PTY 检查长文、选区、代码和链接的辨识度。
 - 分阶段实施：先扩展主题 token 并在 `transcript-view.ts` 为 assistant prose、thinking、tool title/output 和 Markdown 统一应用角色；随后迁移其他 TUI renderer 的硬编码颜色。兼容既有 `ThemeTags` 注入点，逐步迁移期间保留默认映射；色彩验证检查 token 覆盖、两套 palette 色号、CJK/代码/链接渲染，以及 dark/light PTY 截图。
 - `workspace_get_context` 工具当前不可用，按版本化计划和 Git 状态对账；共享检出干净，HEAD 与 `origin/master` 一致。
 
@@ -56,8 +79,8 @@ base：`2af62ce3c81b059e3e82c5b41e9f5299bdfd61fc`。独占路径：`packages/cli
 | PR head `ca10d76d645bead2eb1b9d40b29ca68a5be9ff0f` | GitHub Actions | `gh pr view 631 --json statusCheckRollup` | architecture, test scope, typecheck, test, build 全部 SUCCESS | PR #631 当前 head |
 | base `ca10d76d` + follow button change | Linux x64 / Node 26.13.0 | 7 个 TUI 测试文件；`npm run -w @duya/cli typecheck`; `npm run typecheck:all`; `npm run architecture:check`; `node scripts/build-cli-bundle.mjs`; `python3 scripts/smoke-tui-pty.py content ...` | 113 tests passed；CLI/full typecheck exit 0；architecture exit 0；bundle exit 0；PTY content 6/6 checks passed | diff check clean; PTY capture `/tmp/duya-tui-latest-button-final-pty.log` |
 | PR head `f294b17e393389b77399c7f73808079fadf320e8` | GitHub Actions | `gh pr view 631 --json headRefOid,state,isDraft,statusCheckRollup` | PR #631 open、draft；architecture, test scope, typecheck, test, build 全部 SUCCESS | button change 已推送；此 SHA 对应代码改动 |
-| PR head `58e5f18315e9ce582c30a720b2c75efd5f2c6eac` | Linux x64 / Node 26.13.0 | `git diff --check`; `gh pr view 631 --json headRefOid,state,isDraft,statusCheckRollup` | diff check exit 0；设计记录已推送；该 head 的 CI 尚未出现 | 仅任务计划文档有改动，代码 head `f294b17e` 已通过上述 CI |
+| PR head `a8550af2538cffeff49c832eab8487eca85af55b` | Linux x64 / Node 26.13.0 | `git diff --check`; `gh pr view 631 --json headRefOid,statusCheckRollup` | `test scope` SUCCESS；architecture/typecheck/test 当时 IN_PROGRESS；文档色号细化为此记录后的 dirty change | 仅任务计划文档有改动，代码 head `f294b17e` 已通过上述全套 CI |
 
 ## 接续 / 结果
 
-输入、选区、回底按钮四项改进已在 PR #631 的代码 head `f294b17e393389b77399c7f73808079fadf320e8` 实现；该代码 head 的全部必需 CI 均通过。消息色彩体系方案已提交到同一 PR，当前 head 为 `58e5f18315e9ce582c30a720b2c75efd5f2c6eac`，文档提交后的 CI 尚待完成；色彩方案尚未迁移渲染器代码。下一步可按该基线实现 token 与消息渲染迁移。PR 保持 draft，未经用户授权不合并。
+输入、选区、回底按钮四项改进已在 PR #631 的代码 head `f294b17e393389b77399c7f73808079fadf320e8` 实现；该代码 head 的全部必需 CI 均通过。消息色彩体系方案和逐项色号映射已记录在本计划；当前 PR head 为 `a8550af2538cffeff49c832eab8487eca85af55b`，更新计划文档后产生的新 head 检查待完成。色彩方案尚未迁移渲染器代码。下一步可按该基线实现 token 与消息渲染迁移。PR 保持 draft，未经用户授权不合并。
