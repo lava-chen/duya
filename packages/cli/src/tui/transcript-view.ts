@@ -1904,6 +1904,7 @@ export function renderPlannedBlock(
     const summary = thinkingSummary(block);
     const disclosure = options.toolGroupMode === 'hidden' ? '' : styles.muted(expanded ? ' [−]' : ' [+]');
     rows.push(`${connector} ${styles.thinking(`• ${summary}`)}${disclosure}`);
+    rows.push(...nodeBody(block, plan, options, styles));
   } else if (block.kind === 'tool') {
     const errorRowsFrom = rows.length;
     rows.push(toolNodeRow(block, options, styles, connector));
