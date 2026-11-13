@@ -94,6 +94,7 @@ function makeApp(submitted: string[] = [], columns?: number) {
     keyOverrides: {},
     // Pin the capability whose escape sequence these integration tests assert.
     terminalEnv: detectTerminalEnvironment({ TERM: 'xterm-256color', TERM_PROGRAM: 'WezTerm' }),
+    ...(columns !== undefined ? { onWorkbenchCommand: () => {} } : {}),
   });
   return { app, out };
 }

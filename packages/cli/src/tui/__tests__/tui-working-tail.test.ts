@@ -44,6 +44,7 @@ function makeApp(overrides: { inline?: boolean; busy?: boolean; unicodeBox?: boo
     // assertions about the ASCII fallback — a test that passes for the wrong
     // reason, which is the thing these assertions exist to prevent.
     terminalEnv: detectTerminalEnvironment({ TERM_PROGRAM: 'WezTerm' }),
+    ...(overrides.columns !== undefined ? { onWorkbenchCommand: () => {} } : {}),
     isBusy: () => busy.value,
     onSubmit: () => {},
   });
