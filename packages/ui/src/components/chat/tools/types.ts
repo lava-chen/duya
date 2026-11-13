@@ -32,7 +32,7 @@ export interface ToolAction {
   stage?: string;
   groupId?: string;
   progressTitle?: string;
-  progressSource?: 'provider_commentary' | 'model_progress_tool' | 'tool_fallback';
+  progressSource?: 'provider_commentary' | 'tool_fallback';
 }
 
 /**

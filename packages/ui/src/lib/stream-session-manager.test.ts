@@ -867,7 +867,7 @@ describe('StreamSessionManager State Machine', () => {
           input: event.data?.input,
           groupId: event.data?.groupId as string | undefined,
           progressTitle: event.data?.progressTitle as string | undefined,
-          progressSource: event.data?.progressSource as 'provider_commentary' | 'model_progress_tool' | 'tool_fallback' | undefined,
+          progressSource: event.data?.progressSource as 'provider_commentary' | 'tool_fallback' | undefined,
           result: event.data?.result,
           error: event.data?.error as string | undefined,
           content: event.data?.content as string | undefined,
@@ -1095,7 +1095,7 @@ describe('StreamSessionManager State Machine', () => {
           input: event.data?.input,
           groupId: event.data?.groupId as string | undefined,
           progressTitle: event.data?.progressTitle as string | undefined,
-          progressSource: event.data?.progressSource as 'provider_commentary' | 'model_progress_tool' | 'tool_fallback' | undefined,
+          progressSource: event.data?.progressSource as 'provider_commentary' | 'tool_fallback' | undefined,
           result: event.data?.result,
           error: event.data?.error as string | undefined,
           content: event.data?.content as string | undefined,
@@ -1127,7 +1127,7 @@ describe('StreamSessionManager State Machine', () => {
         emit({ type: 'tool_use', data: { id: 'call-b', name: 'edit', input: {}, groupId: 'group-b' } });
         emit({ type: 'tool_use_started', data: {
           id: 'call-c', name: 'write', input: {}, groupId: 'group-c', progressTitle: 'Draft the patch',
-          progressSource: 'model_progress_tool',
+          progressSource: 'provider_commentary',
         } });
         emit({ type: 'tool_group_progress', data: { groupId: 'group-a', title: 'Review source files' } });
         emit({ type: 'tool_result', data: { id: 'call-a', result: 'done', error: false } });
@@ -1136,7 +1136,7 @@ describe('StreamSessionManager State Machine', () => {
         expect(snapshot!.toolUses).toMatchObject([
           { id: 'call-a', groupId: 'group-a', progressTitle: 'Review source files' },
           { id: 'call-b', groupId: 'group-b', progressTitle: undefined },
-          { id: 'call-c', groupId: 'group-c', progressTitle: 'Draft the patch', progressSource: 'model_progress_tool' },
+          { id: 'call-c', groupId: 'group-c', progressTitle: 'Draft the patch', progressSource: 'provider_commentary' },
         ]);
         expect(snapshot!.toolResults[0]).toMatchObject({ tool_use_id: 'call-a', content: 'done' });
       } finally {

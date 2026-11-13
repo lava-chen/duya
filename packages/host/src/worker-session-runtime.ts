@@ -122,7 +122,6 @@ import type { AgentDefinition } from '@duya/host/worker-subagents/built-in-agent
 import type { TurnPipelinePublisher } from '@duya/agent-runtime/tools/turn-pipeline-publisher';
 import { CompactionManager, createCompactionManager, type CompactionProbe } from '@duya/host/worker-compaction/bound-manager';
 import { resolveCompactionContextWindow } from '@duya/host/worker-compaction/context-window';
-import { PROGRESS_UPDATE_TOOL, PROGRESS_UPDATE_TOOL_NAME, ToolGroupProgressTracker, readProgressUpdateCall, } from '@duya/agent-runtime/turns/tool-group-progress';
 import type { CompactOptions } from '@duya/agent-runtime/context/compact/types';
 import { MessageTimeline, buildAgentContext, ingestMessage, ingestMessages, projectModelMessages, projectSystemPrompt, extractLegacySystemSegments, projectTimelinePersistenceMessages, getLegacyCompactionCheckpoint, type CompactionEntry, type RuntimeContextAgentMessage, type AgentMessage, } from '@duya/agent-core/message';
 import { AgentMessageFactory } from '@duya/agent-runtime/message/message-factories';
@@ -140,8 +139,8 @@ interface ToolResultOutcome {
 }
 const TOOL_GROUP_PROGRESS_INSTRUCTIONS = [
     'Tool-group progress: before a tool batch, provide one concise plain-text title for the work.',
-    'Use the provider structured commentary channel when it is explicitly available; otherwise call the private progress-title tool shown in the available tools with {title}.',
-    'Never derive a title from hidden reasoning or ordinary assistant prose. The progress-title call is private and does not perform work.',
+    'Use the provider structured commentary channel when it is explicitly available.',
+    'Never derive a title from hidden reasoning or ordinary assistant prose.',
 ].join(' ');
 
 /**
@@ -565,14 +564,7 @@ export class WorkerSession implements AgentRuntime {
         });
         systemPrompt = moded.systemPrompt;
         this._recordPromptSnapshot(systemPrompt, composition.overrides);
-        let progressToolName = PROGRESS_UPDATE_TOOL_NAME;
-        while (moded.resolved.tools.some((tool) => tool.name === progressToolName)) {
-            progressToolName = `duya_${progressToolName}`;
-        }
-        const resolved: ResolvedTurnTools = {
-            ...moded.resolved,
-            tools: [...moded.resolved.tools, { ...PROGRESS_UPDATE_TOOL, name: progressToolName }],
-        };
+        const resolved: ResolvedTurnTools = moded.resolved;
         const resolvedTools: Tool[] = resolved.tools;
         const { canUseTool } = buildPermissions({
             getPermissionMode: () => this.getPermissionMode(),
@@ -648,7 +640,6 @@ export class WorkerSession implements AgentRuntime {
             get turnContext() { return replacement?.turnContext ?? turnContext; },
             get tools() { return replacement?.tools ?? resolvedTools; },
             canUseTool: (...args) => replacement ? replacement.canUseTool(...args) : guardedCanUseTool(...args),
-            progressToolName,
             get systemPrompt() { return replacement?.systemPrompt ?? systemPrompt; },
             projection: {
                 // LAZY on the messages half, and EAGER on the system half --

@@ -202,15 +202,12 @@ describe('the run subscribes to live shell output before it dispatches', () => {
     expect(() => emitShellOutput({ taskId: CALL_ID, delta: 'ignored' })).not.toThrow();
   });
 
-  it('does not subscribe for the progress tool, which never spawns a command', () => {
+  it('leaves a subscriber the run did not create alone at teardown', () => {
     const stops = new Map<string, () => void>();
     const { host, queued } = hostWith({ shellOutputStops: stops });
-    (host as unknown as { progressToolName: () => string }).progressToolName = () =>
-      'progress_update';
     const sources = composeLegacyRunSources(agent, host);
 
-    // A call whose input is not a progress update still takes the shell leg;
-    // the guard is about what the composition queues, not what it tails.
+    // An ordinary call still takes the shell leg.
     sources.queueTool({ callId: 'call-real', name: 'bash', input: { command: 'ls' } } as never);
     expect(queued).toHaveLength(1);
 

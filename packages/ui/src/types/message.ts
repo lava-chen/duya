@@ -220,7 +220,7 @@ export interface ToolUseInfo {
   groupId?: string;
   /** Sanitized progress title for the owning tool group. */
   progressTitle?: string;
-  progressSource?: 'provider_commentary' | 'model_progress_tool' | 'tool_fallback';
+  progressSource?: 'provider_commentary' | 'tool_fallback';
 }
 
 export interface ToolResultInfo {

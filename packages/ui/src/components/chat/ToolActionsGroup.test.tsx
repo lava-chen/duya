@@ -123,11 +123,11 @@ describe('ToolActionsGroup shell rendering', () => {
       },
       {
         id: 'control-1', name: 'grep', input: { pattern: 'needle' }, result: 'e',
-        groupId: 'control-group', progressTitle: 'Find matching references', progressSource: 'model_progress_tool',
+        groupId: 'control-group', progressTitle: 'Find matching references', progressSource: 'provider_commentary',
       },
       {
         id: 'control-2', name: 'read', input: { path: 'src/c.ts' }, result: 'f',
-        groupId: 'control-group', progressTitle: 'Find matching references', progressSource: 'model_progress_tool',
+        groupId: 'control-group', progressTitle: 'Find matching references', progressSource: 'provider_commentary',
       },
     ];
 
@@ -139,7 +139,7 @@ describe('ToolActionsGroup shell rendering', () => {
     expect(titles[1]).toHaveAttribute('data-title-source', 'tool_fallback');
     expect(titles[1]?.textContent).not.toContain('src/b.ts');
     expect(titles[2]).toHaveTextContent('Find matching references');
-    expect(titles[2]).toHaveAttribute('data-title-source', 'model_progress_tool');
+    expect(titles[2]).toHaveAttribute('data-title-source', 'provider_commentary');
   });
 
   // The pre-existing 'powershell' / 'create_file' tests in this block

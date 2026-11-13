@@ -238,7 +238,7 @@ export const MESSAGE_CONTENT_UNION_IS_COMPLETE: MessageContentUnionIsComplete = 
  * above already uses it, and `tool-result.ts` imports from this file — the
  * reverse would be a module cycle.
  */
-export type ToolGroupProgressSource = 'provider_commentary' | 'model_progress_tool' | 'tool_fallback';
+export type ToolGroupProgressSource = 'provider_commentary' | 'tool_fallback';
 
 // ── messages ──────────────────────────────────────────────────────────────
 

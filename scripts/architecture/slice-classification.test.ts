@@ -297,6 +297,8 @@ const RETIRED_WITH_DUYA_APP_SESSION_MCP =
 
 const REMOVED_WITH_THE_PLAN_TOOL =
   'deleted with the plan tool, which the user removed on 2026-11-04 (exec-plans/active/2026-11-04-remove-plan-tool.md); the tool only read and archived plan files under ~/.duya/projects/<id>/plans/ and never created them, so no in-tree successor carries this path';
+const REMOVED_WITH_THE_PROGRESS_UPDATE_TOOL =
+  'deleted with the private progress_update control tool, which the user removed on 2026-11-13 (exec-plans/active/2026-11-13-remove-progress-update-tool.md); the tool only set a display title for a tool group and was never a capability of its own, so no in-tree successor carries this path';
 const RETIRED_WITH_THE_PROJECTION_COMPRESS_PASS =
   'deleted with the unwired projection-compress pass (plan 448 phase 4): the pass was never reachable from CompactionManager, so the legacy compact transforms and their mirrors under agent-runtime have no in-tree successor';
 const RECORDED_LOSSES: readonly RecordedLoss[] = [
@@ -1324,13 +1326,14 @@ const RECORDED_LOSSES: readonly RecordedLoss[] = [
   // wire (2)
   { path: 'packages/agent/src/channels/__tests__/prompts.test.ts', from: 'wire', why: RETIRED_WITH_THE_AGENT_TEST_SUITE },
   { path: 'packages/agent/src/channels/types.test.ts', from: 'wire', why: RETIRED_WITH_THE_AGENT_TEST_SUITE },
-  // runtime-coordination (29)
+  // runtime-coordination (30)
   { path: 'packages/agent/src/agent-profile/__tests__/config-groups.test.ts', from: 'runtime-coordination', why: RETIRED_WITH_THE_AGENT_TEST_SUITE },
   { path: 'packages/agent/src/agent/__tests__/permissions-gate.test.ts', from: 'runtime-coordination', why: RETIRED_WITH_THE_AGENT_TEST_SUITE },
   { path: 'packages/agent/src/agent/__tests__/stream-retry.test.ts', from: 'runtime-coordination', why: RETIRED_WITH_THE_AGENT_TEST_SUITE },
   { path: 'packages/agent/src/agent/__tests__/tool-group-progress.test.ts', from: 'runtime-coordination', why: RETIRED_WITH_THE_AGENT_TEST_SUITE },
   { path: 'packages/agent/src/agent/__tests__/toolInvokePermission.test.ts', from: 'runtime-coordination', why: RETIRED_WITH_THE_AGENT_TEST_SUITE },
   { path: 'packages/agent/src/agent/dm/wake-prompt.test.ts', from: 'runtime-coordination', why: RETIRED_WITH_THE_AGENT_TEST_SUITE },
+  { path: 'packages/agent/src/agent/tool-group-progress.ts', from: 'runtime-coordination', why: REMOVED_WITH_THE_PROGRESS_UPDATE_TOOL },
   { path: 'packages/agent/src/compact/__tests__/BackgroundPrefire.test.ts', from: 'runtime-coordination', why: RETIRED_WITH_THE_AGENT_TEST_SUITE },
   { path: 'packages/agent/src/compact/__tests__/CompactionManager.accounting.test.ts', from: 'runtime-coordination', why: RETIRED_WITH_THE_AGENT_TEST_SUITE },
   { path: 'packages/agent/src/compact/__tests__/CompactionManager.loop-guards.test.ts', from: 'runtime-coordination', why: RETIRED_WITH_THE_AGENT_TEST_SUITE },

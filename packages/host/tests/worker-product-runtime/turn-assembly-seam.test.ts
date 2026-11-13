@@ -72,6 +72,13 @@
  *    derive from one list. The frozen `PRE_REFACTOR_TOOL_NAMES` is now asserted
  *    whole, on the advertised surface and on the guard's own live set.
  *
+ *    **2026-11-13: the private tool itself is GONE** (see
+ *    `docs/exec-plans/active/2026-11-13-remove-progress-update-tool.md`). The
+ *    append that Plan 610 D1 moved is deleted, so the frozen list is one tool
+ *    shorter and the source-level assertions now pin the tool's ABSENCE. That
+ *    is the same claim with the sign flipped: the surface the model is handed
+ *    must carry no tool the registry does not own.
+ *
  * What DOES survive verbatim is the seam's own half: the system prompt's
  * length is stable across turns (95275 on the engine and on the legacy, the
  * observable of REPLACE-not-APPEND), the tool-group instruction rides it, and
@@ -176,7 +183,7 @@ function occurrences(pattern: RegExp, text: string = code()): number {
  * `refreshTurnSystemPrompt`'s doc comment on why the recomputed prefix REPLACES
  * rather than appends).
  */
-const PRE_REFACTOR_TOOL_NAMES = ['probe_ok', 'progress_update', 'tool_catalog', 'tool_invoke'];
+const PRE_REFACTOR_TOOL_NAMES = ['probe_ok', 'tool_catalog', 'tool_invoke'];
 const PRE_REFACTOR_TURN1_ROLES = ['user'];
 const PRE_REFACTOR_TURN2_ROLES = ['user', 'assistant', 'tool'];
 
@@ -576,9 +583,7 @@ describe('the seam did not change what the cycle sends the model', () => {
   });
 
   it('reproduces the legacy tool list EXACTLY, on the surface AND on the guard', async () => {
-    // Plan 610 D1 CLOSED the gap this file used to pin.
-    //
-    // It used to read the other way round: the legacy advertised
+    // Plan 610 D1 CLOSED the gap this file used to pin: the legacy advertised
     // `['probe_ok', 'progress_update', 'tool_catalog', 'tool_invoke']` and the
     // engine advertised the same list MINUS `progress_update`, because
     // `streamChat` appended `PROGRESS_UPDATE_TOOL` to its own `tools` local
@@ -589,42 +594,31 @@ describe('the seam did not change what the cycle sends the model', () => {
     // advertising the tool alone would leave a model told about a tool whose
     // call the guard refuses.
     //
-    // The append now lives in `beginTurnAssembly`, so the tool is in
-    // `resolved.tools` before the handle is built, and both owners derive from
-    // that one list. The whole frozen list is now asserted, because there is
-    // nothing left to except.
+    // 2026-11-13: that private tool is GONE from the product, so the frozen
+    // list is one shorter and the append that D1 moved is asserted in its
+    // ABSENCE instead.
     const run = await runThroughEngine();
 
     // The surface, against the observation recorded from the pre-refactor
     // CYCLE -- an independent source, not the engine compared with itself.
     expect(run.advertised).toEqual([...PRE_REFACTOR_TOOL_NAMES]);
-    expect(run.advertised).toContain('progress_update');
+    expect(run.advertised).not.toContain('progress_update');
 
     // The SECOND owner, read from the guard's own live set rather than inferred
     // from the advertised list. A surface that advertised the tool while the
     // guard denied it would look fixed from the model's side and still refuse
     // the call, which is the failure the previous version of these assertions
     // existed to catch.
-    expect(run.declared).toContain('progress_update');
+    expect(run.declared).not.toContain('progress_update');
     expect(run.declared).toEqual(run.advertised);
 
-    // The owner, pinned at the SOURCE. The claim is that there is exactly ONE
-    // append and that it is inside `beginTurnAssembly` -- a second owner is the
-    // thing this file exists to prevent.
-    expect(code()).toContain('PROGRESS_UPDATE_TOOL');
-    expect(occurrences(/tools: \[\.\.\.moded\.resolved\.tools, \{ \.\.\.PROGRESS_UPDATE_TOOL/)).toBe(1);
-    // The consumer reads the name off the handle rather than deciding it again:
-    // two `while` loops over the same collision are two answers that can differ.
-    expect(occurrences(/PROGRESS_UPDATE_TOOL_NAME/)).toBe(2);
-    // Plan 610 S4c-d3: the consumer was the legacy cycle. It read the name back
-    // off the handle as `const progressToolName = runAssembly.progressToolName`
-    // and then collided it a SECOND time, so two `while` loops decided the same
-    // name from two lists. That is gone with the loop, and the claim is not
-    // weakened by saying so -- it is stricter. The name is now decided in
-    // exactly one place, published once, and re-decided nowhere:
-    expect(occurrences(/let progressToolName = PROGRESS_UPDATE_TOOL_NAME/)).toBe(1);
-    expect(occurrences(/\r?\n\s*progressToolName,\r?\n/)).toBe(1);
-    expect(occurrences(/runAssembly\.progressToolName/)).toBe(0);
+    // The removed tool, pinned at the SOURCE. The claim is that the assembly
+    // appends NOTHING of its own: a tool the registry does not own is exactly
+    // what this file used to find, and its return is the strongest form of
+    // that claim -- a re-introduction would have to be spelled here again.
+    expect(code()).not.toContain('PROGRESS_UPDATE_TOOL');
+    expect(occurrences(/PROGRESS_UPDATE_TOOL_NAME/)).toBe(0);
+    expect(occurrences(/progressToolName/)).toBe(0);
   });
 });
 

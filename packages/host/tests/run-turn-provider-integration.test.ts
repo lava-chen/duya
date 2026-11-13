@@ -476,32 +476,31 @@ describe('output truncation through the production Host and worker', () => {
   }, 60_000);
 });
 
-it('executes private progress and accounts cached input through the real worker', async () => {
-  const progressStream = () => [
-    { type: 'message_start', message: { id: 'progress', type: 'message', role: 'assistant', content: [], model: 'test-model', usage: { input_tokens: 0, cache_read_input_tokens: 12000, output_tokens: 0 } } },
-    { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'progress-call', name: 'progress_update', input: {} } },
-    { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify({ title: 'Inspect provider settings' }) } },
+it('accounts cached input through the real worker, with no private progress tool on the surface', async () => {
+  const cachedStream = () => [
+    { type: 'message_start', message: { id: 'cached', type: 'message', role: 'assistant', content: [], model: 'test-model', usage: { input_tokens: 0, cache_read_input_tokens: 12000, output_tokens: 0 } } },
+    { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'CACHE_FINISHED' } },
     { type: 'content_block_stop', index: 0 },
-    { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 20 } },
+    { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 20 } },
     { type: 'message_stop' },
   ].map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join('');
-  const { host, client, provider, sessionId } = await startHarness(round => round === 1 ? progressStream() : textStream('PROGRESS_FINISHED', String(round)));
+  const { host, client, provider, sessionId } = await startHarness(round => round === 1 ? cachedStream() : textStream('CACHE_FINISHED', String(round)));
   try {
-    const started = await client.startAgentRun({ sessionId, prompt: 'CONTRACT_PROGRESS: inspect settings', model: 'test-model', providerId: 'local-test', apiFormat: 'anthropic' });
+    const started = await client.startAgentRun({ sessionId, prompt: 'CONTRACT_CACHE: inspect settings', model: 'test-model', providerId: 'local-test', apiFormat: 'anthropic' });
     if (!started.accepted) throw new Error('run refused');
     const events = [];
     for await (const event of client.watchAgentRunEvents(started.runId)) events.push(event);
     expect((await client.getAgentRun(started.runId))?.status).toBe('completed');
     const rendered = JSON.stringify(events);
-    expect(rendered).toContain('Inspect provider settings');
-    expect(rendered).toContain('tool.group_progress');
     expect(rendered).toContain('"inputTokens":12000');
-    expect(rendered).not.toContain('No such tool');
     const requests = provider.requests.filter(request => request.maxTokens === 32768);
-    expect(requests).toHaveLength(2);
-    expect(requests[0]?.raw).toContain('progress_update');
-    expect(requests[1]?.raw).toContain('Progress updated');
-    expect(rendered).toContain('PROGRESS_FINISHED');
+    expect(requests).toHaveLength(1);
+    // The private progress tool is GONE from the product, so it must not be on
+    // the surface the model is handed -- asserted on the RAW request, which is
+    // what the provider actually received.
+    expect(requests[0]?.raw).not.toContain('progress_update');
+    expect(rendered).toContain('CACHE_FINISHED');
   } finally {
     await host.close();
     await provider.close();

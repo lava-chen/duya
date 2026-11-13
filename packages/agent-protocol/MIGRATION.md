@@ -20,7 +20,7 @@ The pure transcript data moved from `packages/ai/src/types.ts` to
 | `Message`, `AssistantMessage`, `ProviderResponseMeta` | `@duya/ai` | 31 / 11 / 2 |
 | `TextContent`, `ImageContent`, `ToolUseContent`, `ToolResultContent`, `ThinkingContent`, `ProviderBlockContent`, `MessageContent` | `@duya/ai` | 5 / 2 / 8 / 4 / 5 / 4 |
 | `TokenUsage`, `UsageCall`, `StopReason` | `@duya/ai` | 8 / 9 / 9 members |
-| `ToolUse`, `ToolResultMetadata`, `ToolGroupProgressSource`, `ToolResultImage` | `@duya/ai` | 6 / 8 / 3 members |
+| `ToolUse`, `ToolResultMetadata`, `ToolGroupProgressSource`, `ToolResultImage` | `@duya/ai` | 6 / 8 / 2 members |
 | `ToolResultWire` (the JSON half of `ToolResult`) | `@duya/ai` | 9 |
 | `ConnectorToolParamsDisplayEntry`, `PermissionRequestEvent`, `AgentProgressEvent`, `HookEventPayload` | `@duya/ai` | 3 / 7 / 12 / 15 |
 | `ApiFormat`, `MessageRole`, `MessageContentType` | `@duya/ai` | 7 / 4 / 6 members |
