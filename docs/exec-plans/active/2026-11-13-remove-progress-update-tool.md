@@ -85,7 +85,7 @@
 
 **已验证**：见上表。`typecheck:all` / `architecture:check` / census / agent-protocol / UI / 真 worker 集成全部退出码 0；host 套件唯一失败经**基线检出同签名复现**，判定为既有债。
 
-**未合并**：待 PR 与授权集成。
+**未合并**：Draft PR [#635](https://github.com/lava-chen/duya/pull/635) 已开，commit `2807b46e8`，分支 `chore/remove-progress-update-tool`。待 CI 与 review；**集成需用户授权**。
 
-回收：owner 退出且 PR 集成后走管理工具回收 managed worktree。
-下一步：commit + PR，等 CI 与 review；集成需用户授权。
+回收：owner 退出且 PR 集成后走管理工具回收 managed worktree。基线对跑用的临时检出 `baseline-6d6ea333` 尚未回收（其 untracked 项全是 junction 脚本造的 `node_modules` 软链与 gitignore 的 `dist/`，无源码成果）。
+下一步：等 CI 与 review 通过后，由获授权的集成者合并；合并后重验再回收。
