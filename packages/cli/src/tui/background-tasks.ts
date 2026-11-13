@@ -55,6 +55,7 @@ export interface BackgroundTaskView {
   readonly exitCode?: number;
   readonly error?: string;
   readonly summary?: string;
+  readonly subagentSessionId?: string;
   readonly outputBytes?: number;
   readonly pid?: number;
   readonly autoPromoted?: boolean;
@@ -303,6 +304,7 @@ export class BackgroundTaskModel {
         : { endedAtMs: task.endedAtMs }),
       ...(task.error === undefined ? {} : { error: task.error }),
       ...(existing?.summary === undefined ? {} : { summary: existing.summary }),
+      ...(task.subagentSessionId === undefined ? (existing?.subagentSessionId === undefined ? {} : { subagentSessionId: existing.subagentSessionId }) : { subagentSessionId: task.subagentSessionId }),
     });
     this.trimTerminalSubagents();
   }
@@ -317,7 +319,7 @@ export class BackgroundTaskModel {
     const id = frameString(data, 'subagentId');
     if (id === '') return false;
 
-    if (eventType === 'subagent_started') {
+    if (eventType === 'subagent_started' || eventType === 'started') {
       const name = frameString(data, 'agentName') || frameString(data, 'agentType') || 'Agent';
       const type = frameString(data, 'agentType');
       const description = frameString(data, 'agentDescription');
@@ -331,16 +333,22 @@ export class BackgroundTaskModel {
         ...(detail === undefined ? {} : { detail }),
         status: 'running',
         startedAtMs,
+        ...(frameString(data, 'agentSessionId') === '' ? {} : { subagentSessionId: frameString(data, 'agentSessionId') }),
       });
       return true;
     }
 
-    if (eventType === 'subagent_completed') {
+    if (eventType === 'subagent_completed' || eventType === 'completed' || eventType === 'done' || eventType === 'failed' || eventType === 'error') {
       const durationMs = typeof data['durationMs'] === 'number' && Number.isFinite(data['durationMs'])
         ? Math.max(0, data['durationMs'])
         : null;
       const existing = this.subagents.get(id);
-      const status = readSubagentStatus(frameString(data, 'status'));
+      const reportedStatus = frameString(data, 'status');
+      const status = eventType === 'failed' || eventType === 'error'
+        ? 'failed'
+        : eventType === 'completed' || eventType === 'done'
+          ? 'completed'
+          : readSubagentStatus(reportedStatus);
       const endedAtMs = now;
       const startedAtMs = existing?.startedAtMs ?? (durationMs === null ? now : now - durationMs);
       const summary = frameString(data, 'summary');
@@ -353,6 +361,7 @@ export class BackgroundTaskModel {
         startedAtMs,
         endedAtMs,
         ...(summary === '' ? {} : { summary }),
+        ...(existing?.subagentSessionId === undefined ? {} : { subagentSessionId: existing.subagentSessionId }),
       });
       this.trimTerminalSubagents();
       return true;

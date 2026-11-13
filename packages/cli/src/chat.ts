@@ -1361,6 +1361,10 @@ export async function chatTui(
     // because the timer is deliberately quiet while nothing is live.
     onBackgroundTasksRefresh: () => { void backgroundPoller.poll(); },
     onBackgroundTaskOpen: (task) => { void openBackgroundTask(task); },
+    onSubagentTranscriptLoad: async (task) => task.subagentSessionId === undefined
+      ? []
+      : loadSessionMessages(client, task.subagentSessionId),
+    onSubagentStop: (task) => client.stopSubagentTask(activeSession.id, task.id),
   });
 
   /**

@@ -214,4 +214,11 @@ export class BackgroundTaskIndex implements HostLocalBackgroundTaskApiV1 {
       truncated: tail.truncated,
     };
   }
+
+  /** Only a currently indexed subagent can be stopped through this surface. */
+  isRunningSubagent(sessionId: string, taskId: string): boolean {
+    return (this.#agentBySession.get(sessionId) ?? []).some(
+      (task) => task.summary.id === taskId && task.summary.status === 'running',
+    );
+  }
 }

@@ -570,6 +570,10 @@ export interface TUIAppOptions {
    * and calls `showPanel`; the TUI only knows what it has already seen.
    */
   readonly onBackgroundTaskOpen?: (task: BackgroundTaskView) => void;
+  /** Load the child session's canonical transcript after it settles. */
+  readonly onSubagentTranscriptLoad?: (task: BackgroundTaskView) => Promise<readonly TranscriptMessage[]>;
+  /** Stop a running child by its parent-session task identity. */
+  readonly onSubagentStop?: (task: BackgroundTaskView) => Promise<boolean>;
   /**
    * The permission mode in force, read fresh on every repaint.
    *
@@ -770,6 +774,12 @@ export class TUIApp {
    * and Esc walks back out (panel → list → input). Null means not watching.
    */
   private watchedSubagentId: string | null = null;
+  private readonly subagentTranscripts = new Map<string, {
+    readonly model: TranscriptModel;
+    readonly toolIds: string[];
+    revision: number;
+    loadGeneration: number;
+  }>();
   /** Tail-following. Disengaged by scrolling up, restored by Ctrl+End. */
   private follow = true;
   /**
@@ -1940,7 +1950,7 @@ export class TUIApp {
     // subagent is watched in place, a bash task opens its output. `open` was
     // already a lie for the first half; `open/watch` says both.
     lines.push(escapeTags(compactActivity(
-      'Tasks · ↑↓ select · ←→ fold · Enter open/watch · Esc back',
+      'Tasks · ↑↓ select · Enter open · Ctrl+K stop · Ctrl+End follow · Esc back',
       width,
     )));
     if (rows.length === 0) {
@@ -2014,7 +2024,7 @@ export class TUIApp {
     if (card?.summary !== undefined && card.summary !== '') {
       lines.push(`{gray-fg}${compactActivity(`    ${card.summary}`, width)}{/gray-fg}`);
     }
-    lines.push(`{gray-fg}${compactActivity('    Esc back to the list · ↑↓ another agent', width)}{/gray-fg}`);
+    lines.push(`{gray-fg}${compactActivity('    Live transcript · Ctrl+K stop · Ctrl+End follow · Esc back', width)}{/gray-fg}`);
     return lines;
   }
 
@@ -2168,14 +2178,15 @@ export class TUIApp {
     const sidebarWidth = this.workbenchColumns(totalWidth);
     const width = totalWidth - sidebarWidth;
     const pane = this.transcriptPane;
+    const activeModel = this.activeTranscriptModel();
     pane.props = {
       renderer: this.transcript,
-      model: this.model,
+      model: activeModel,
       options: this.renderOptions(),
       scrollTop: this.scrollTop,
       following: this.follow,
       ...(this.hoveredToolBlockId === undefined ? {} : { hoveredBlockId: this.hoveredToolBlockId }),
-      revision: this.transcriptRevision,
+      revision: this.transcriptRevision + (activeModel === this.model ? 0 : this.activeSubagentTranscript()?.revision ?? 0),
       ...(this.search.active && this.inlineSurface === null
         ? { search: { query: this.search.query, cursor: this.search.cursor } }
         : {}),
@@ -2209,17 +2220,21 @@ export class TUIApp {
     // match's line number — depends on it.
     this.lastPaneWidth = width - (thumb !== null ? 1 : 0);
     if (sidebarWidth > 0) {
-      const tools = this.model.blocks.filter((block) => block.kind === 'tool');
+      const tools = activeModel.blocks.filter((block) => block.kind === 'tool');
       const busy = this.options.isBusy?.() ?? this.busy;
       const working = busy || this.waitingForPermission;
       const props = {
         styles: stylesOf({ theme: this.theme.tags, renderer: 'own' }),
         sessionTitle: this.options.sessionTitle?.() ?? 'Current session',
-        activity: `${working ? `${spinnerGlyph(this.spinnerFrame, this.terminalEnv.unicodeBox)} ` : ''}${this.activityLabel(busy)}`,
-        activityActive: working,
+        activity: this.watchedSubagentId === null
+          ? `${working ? `${spinnerGlyph(this.spinnerFrame, this.terminalEnv.unicodeBox)} ` : ''}${this.activityLabel(busy)}`
+          : `Subagent · ${this.backgroundTasks.tasks().find((task) => task.id === this.watchedSubagentId)?.status ?? 'live'} · Ctrl+K stop`,
+        activityActive: this.watchedSubagentId === null
+          ? working
+          : this.backgroundTasks.tasks().some((task) => task.id === this.watchedSubagentId && task.status === 'running'),
         tasks: this.backgroundTasks.tasks(),
-        contextTokens: this.contextTokens(),
-        contextBudget: this.options.contextBudgetTokens?.() ?? null,
+        contextTokens: this.watchedSubagentId === null ? this.contextTokens() : null,
+        contextBudget: this.watchedSubagentId === null ? this.options.contextBudgetTokens?.() ?? null : null,
         profile: resolveDisplayProfile({ showThinking: this.showThinking, expandBlocks: this.expanded, showToolResults: this.showToolResults, toolGroupMode: this.toolGroupMode }),
         tools: { total: tools.length, running: tools.filter((tool) => tool.status === 'running').length, errors: tools.filter((tool) => tool.status === 'error').length },
       };
@@ -3071,6 +3086,7 @@ export class TUIApp {
       this.clampTaskSelection();
       this.scheduleRender();
     }
+    this.pushSubagentTranscriptFrame(frame);
     const key = readBlockKey(frameRecord(frame.data));
     switch (frame.type) {
       case 'text_delta': {
@@ -3146,6 +3162,91 @@ export class TUIApp {
     }
     if (result.kind !== 'none' || activityChanged) this.scheduleRender();
     this.syncDeltaDrainTimer();
+  }
+
+  private activeSubagentTranscript(): {
+    readonly model: TranscriptModel;
+    readonly toolIds: string[];
+    revision: number;
+    loadGeneration: number;
+  } | null {
+    const id = this.watchedSubagentId;
+    return id === null ? null : this.subagentTranscripts.get(id) ?? null;
+  }
+
+  private activeTranscriptModel(): TranscriptModel {
+    return this.activeSubagentTranscript()?.model ?? this.model;
+  }
+
+  /** Project the child-specific progress lane into the same block model as chat. */
+  private pushSubagentTranscriptFrame(frame: LegacyFrame): void {
+    if (frame.type !== 'agent_progress') return;
+    const data = frameRecord(frame.data);
+    const id = frameString(data, 'subagentId') || frameString(data, 'agentId');
+    const eventType = frameString(data, 'agentEventType');
+    if (id === '' || eventType === '') return;
+    let child = this.subagentTranscripts.get(id);
+    if (child === undefined) {
+      child = { model: new TranscriptModel(), toolIds: [], revision: 0, loadGeneration: 0 };
+      this.subagentTranscripts.set(id, child);
+    }
+    const model = child.model;
+    const payload = data['data'];
+    if (eventType === 'subagent_started' || eventType === 'started') {
+      const brief = frameString(data, 'agentDescription') || frameString(data, 'agentType');
+      if (brief !== '' && model.blocks.length === 0) model.addUser(brief);
+    } else if (eventType === 'text') {
+      const text = typeof payload === 'string' ? payload : frameString(frameRecord(payload), 'text');
+      if (text !== '') model.apply({ type: 'text', data: { content: text } });
+    } else if (eventType === 'thinking') {
+      const thinking = typeof payload === 'string' ? payload : frameString(frameRecord(payload), 'thinking');
+      if (thinking !== '') model.apply({ type: 'thinking', data: { content: thinking } });
+    } else if (eventType === 'tool_use') {
+      const toolId = `subagent:${id}:${child.toolIds.length}`;
+      child.toolIds.push(toolId);
+      model.apply({ type: 'tool_use', data: {
+        id: toolId,
+        name: frameString(data, 'toolName') || 'tool',
+        input: data['toolInput'] ?? {},
+      } });
+    } else if (eventType === 'tool_result') {
+      const toolId = child.toolIds.pop();
+      if (toolId !== undefined) model.apply({ type: 'tool_result', data: {
+        id: toolId,
+        result: frameString(data, 'toolResult'),
+        error: frameRecord(data['toolResult'])['error'] === true,
+      } });
+    } else if (eventType === 'failed' || eventType === 'error') {
+      const error = frameString(data, 'summary') || (typeof payload === 'string' ? payload : 'Subagent failed');
+      model.addNotice(error);
+    }
+    child.revision += 1;
+    this.transcriptPane.revision += 1;
+    if (eventType === 'completed' || eventType === 'done' || eventType === 'failed' || eventType === 'error') {
+      const task = this.backgroundTasks.tasks().find((entry) => entry.id === id && entry.kind === 'subagent');
+      if (task !== undefined) void this.loadSubagentTranscript(task, child);
+    }
+    if (this.watchedSubagentId === id) this.scheduleRender();
+  }
+
+  private async loadSubagentTranscript(
+    task: BackgroundTaskView,
+    child: NonNullable<ReturnType<TUIApp['activeSubagentTranscript']>>,
+  ): Promise<void> {
+    if (task.subagentSessionId === undefined || this.options.onSubagentTranscriptLoad === undefined) return;
+    const generation = ++child.loadGeneration;
+    try {
+      const messages = await this.options.onSubagentTranscriptLoad(task);
+      if (generation !== child.loadGeneration || this.disposed) return;
+      this.replaceTranscript(messages, child.model);
+      if (this.watchedSubagentId === task.id) {
+        this.follow = true;
+        this.scrollTop = 0;
+        this.scheduleRender();
+      }
+    } catch (error) {
+      this.printError(`Could not load subagent transcript: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   private showPermission(frame: LegacyFrame): void {
@@ -3427,35 +3528,38 @@ export class TUIApp {
   }
 
   /** Replace the visible transcript with a persisted session history. */
-  replaceTranscript(messages: readonly TranscriptMessage[]): void {
-    this.model.clear();
-    this.selectedBlockId = undefined;
-    this.expandedBlockIds.clear();
-    this.collapsedBlockIds.clear();
-    this.textBuffer.reset();
-    this.thinkingBuffer.reset();
-    this.lastUsage = null;
-    this.sessionTokens = 0;
+  replaceTranscript(messages: readonly TranscriptMessage[], targetModel: TranscriptModel = this.model): void {
+    const model = targetModel;
+    model.clear();
+    if (model === this.model) {
+      this.selectedBlockId = undefined;
+      this.expandedBlockIds.clear();
+      this.collapsedBlockIds.clear();
+      this.textBuffer.reset();
+      this.thinkingBuffer.reset();
+      this.lastUsage = null;
+      this.sessionTokens = 0;
+    }
     for (const message of messages) {
       if (message.visibility === 'hidden') continue;
       if (message.role === 'user') {
         const content = message.displayContent ?? message.content;
         const text = transcriptText(content);
-        if (text !== '') this.model.addUser(text);
+        if (text !== '') model.addUser(text);
         continue;
       }
       if (message.role === 'assistant') {
         if (typeof message.thinking === 'string' && message.thinking !== '') {
-          this.model.apply({ type: 'thinking', data: { content: message.thinking } });
+          model.apply({ type: 'thinking', data: { content: message.thinking } });
         }
         if (typeof message.content === 'string') {
-          this.model.apply({ type: 'text', data: { content: message.content } });
+          model.apply({ type: 'text', data: { content: message.content } });
           continue;
         }
         let text = '';
         const flushText = (): void => {
           if (text === '') return;
-          this.model.apply({ type: 'text', data: { content: text } });
+          model.apply({ type: 'text', data: { content: text } });
           text = '';
         };
         for (const block of message.content) {
@@ -3463,16 +3567,16 @@ export class TUIApp {
             text += block.text;
           } else if (block.type === 'thinking') {
             flushText();
-            this.model.apply({ type: 'thinking', data: { content: block.thinking } });
+            model.apply({ type: 'thinking', data: { content: block.thinking } });
           } else if (block.type === 'tool_use') {
             flushText();
-            this.model.apply({
+            model.apply({
               type: 'tool_use',
               data: { id: block.id, name: block.name, input: block.input },
             });
           } else if (block.type === 'tool_result') {
             flushText();
-            this.model.apply({
+            model.apply({
               type: 'tool_result',
               data: {
                 id: block.tool_use_id,
@@ -3489,7 +3593,7 @@ export class TUIApp {
         const resultBlock = Array.isArray(message.content)
           ? message.content.find((block) => block.type === 'tool_result')
           : undefined;
-        this.model.apply({
+        model.apply({
           type: 'tool_result',
           data: {
             id: message.tool_call_id,
@@ -3502,17 +3606,27 @@ export class TUIApp {
       }
       if (message.role === 'system' && message.isCompactSummary === true) {
         const summary = transcriptText(message.content);
-        if (summary !== '') this.model.addNotice(`Context summary: ${summary}`);
+        if (summary !== '') model.addNotice(`Context summary: ${summary}`);
       }
     }
-    this.follow = true;
-    this.scrollTop = 0;
-    this.focus = 'input';
-    this.selectedTaskRow = -1;
-    this.backgroundTasks.clear();
-    this.activity.phase = 'ready';
-    this.clearActiveActivity();
-    this.noteTranscriptMutation();
+    if (model === this.model) {
+      this.follow = true;
+      this.scrollTop = 0;
+      this.focus = 'input';
+      this.selectedTaskRow = -1;
+      this.backgroundTasks.clear();
+      this.activity.phase = 'ready';
+      this.clearActiveActivity();
+      this.noteTranscriptMutation();
+    }
+    else {
+      for (const child of this.subagentTranscripts.values()) {
+        if (child.model === model) {
+          child.revision += 1;
+          break;
+        }
+      }
+    }
     this.scheduler.requestImmediate();
   }
 
@@ -3979,7 +4093,7 @@ exportHistory(): string[] {
     });
     const selectBlock = (direction: -1 | 1): void => {
       if (this.interactivePrompt !== null || this.swallowForWindow() || this.focus !== 'input') return;
-      const blocks = this.model.blocks;
+      const blocks = this.activeTranscriptModel().blocks;
       if (blocks.length === 0) return;
       const current = blocks.findIndex((block) => block.id === this.selectedBlockId);
       const next = current < 0
@@ -4020,7 +4134,8 @@ exportHistory(): string[] {
       }
     });
     this.bindKey(['C-k'], () => {
-      if (this.interactivePrompt?.kind === 'text') this.updateTextPrompt({ value: this.interactivePrompt.value.slice(0, this.interactivePrompt.cursor) });
+      if (this.watchedSubagentId !== null) this.stopSelectedSubagent();
+      else if (this.interactivePrompt?.kind === 'text') this.updateTextPrompt({ value: this.interactivePrompt.value.slice(0, this.interactivePrompt.cursor) });
       else if (this.routeWindowControl('C-k')) return;
       else if (this.interactivePrompt === null && this.focus === 'input') {
         this.editor.killToEnd();
@@ -4472,6 +4587,11 @@ exportHistory(): string[] {
       escape: () => {
         // One step back, not all the way out: panel → list → input.
         if (this.focus === 'tasks') this.backOutOfTaskView();
+        else if (this.watchedSubagentId !== null && this.editor.isEmpty) {
+          this.watchedSubagentId = null;
+          this.follow = true;
+          this.scrollTop = 0;
+        }
         else if (this.completion.isOpen) this.completion.close();
         else if (this.isBusyNow()) {
           // Esc means "stop"; with prose in the composer it means "stop, then
@@ -4943,21 +5063,48 @@ exportHistory(): string[] {
       this.scheduler.requestImmediate();
       return;
     }
-    // A subagent opens IN PLACE: its subject is a live status, and a modal that
-    // froze it at the moment of the keypress would be the one thing an agent
-    // list must never be. A bash task opens the modal, because its subject is a
-    // document — a scrollable output tail — that the live area cannot hold.
-    if (row.task.kind === 'subagent') {
-      this.watchedSubagentId = this.watchedSubagentId === row.task.id ? null : row.task.id;
-      this.scheduler.requestImmediate();
-      return;
-    }
+    // A child agent takes over the transcript viewport; bash keeps its output
+    // detail window because it has no conversation timeline.
     this.openTaskDetail(row.task);
   }
 
   /** Render the detail window; output is read on demand (Phase 8). */
   private openTaskDetail(task: BackgroundTaskView): void {
+    if (task.kind === 'subagent') {
+      this.watchedSubagentId = this.watchedSubagentId === task.id ? null : task.id;
+      const child = this.subagentTranscripts.get(task.id);
+      if (this.watchedSubagentId !== null && child === undefined) {
+        this.subagentTranscripts.set(task.id, { model: new TranscriptModel(), toolIds: [], revision: 0, loadGeneration: 0 });
+      }
+      if (this.watchedSubagentId !== null && task.status !== 'running') {
+        const state = this.subagentTranscripts.get(task.id);
+        if (state) void this.loadSubagentTranscript(task, state);
+      }
+      const workspace = this.subagentTranscripts.get(task.id);
+      if (this.watchedSubagentId === task.id && workspace?.model.blocks.length === 0) {
+        workspace.model.addNotice(`Subagent · ${task.title}`);
+        workspace.revision += 1;
+      }
+      this.follow = true;
+      this.scrollTop = 0;
+      this.scheduler.requestImmediate();
+      return;
+    }
     this.options.onBackgroundTaskOpen?.(task);
+  }
+
+  private stopSelectedSubagent(): void {
+    const id = this.watchedSubagentId ?? this.selectedTaskId;
+    if (id === null || this.options.onSubagentStop === undefined) return;
+    const task = this.backgroundTasks.tasks().find((entry) => entry.id === id && entry.kind === 'subagent');
+    if (task === undefined || task.status !== 'running') return;
+    void this.options.onSubagentStop(task).then((stopped) => {
+      if (!stopped) this.printNotice(`Subagent ${task.title} is no longer running.`);
+      else this.printNotice(`Stopping subagent ${task.title}…`);
+      this.options.onBackgroundTasksRefresh?.();
+    }).catch((error: unknown) => {
+      this.printError(`Could not stop subagent: ${error instanceof Error ? error.message : String(error)}`);
+    });
   }
 
   // ── Full-screen transcript search (Ctrl+F) ──────────────────────────────
@@ -5335,7 +5482,8 @@ exportHistory(): string[] {
   }
 
   private toggleTranscriptBlock(id: string): void {
-    const block = this.model.blocks.find(item => item.id === id);
+    const activeModel = this.activeTranscriptModel();
+    const block = activeModel.blocks.find(item => item.id === id);
     if (!block || !['tool', 'thinking'].includes(block.kind))
       return;
     this.selectedBlockId = id;
@@ -5349,7 +5497,11 @@ exportHistory(): string[] {
     }
     else
       this.expandedBlockIds.add(id);
-    this.noteTranscriptMutation();
+    if (activeModel === this.model) this.noteTranscriptMutation();
+    else {
+      const child = this.activeSubagentTranscript();
+      if (child) child.revision += 1;
+    }
     this.scheduler.requestImmediate();
   }
 
