@@ -78,8 +78,9 @@ async function settleRendered(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, MIN_RENDER_INTERVAL_MS + 40));
 }
 
-function makeApp(submitted: string[] = []) {
+function makeApp(submitted: string[] = [], columns?: number) {
   const out = sink();
+  if (columns !== undefined) Object.assign(out.stream, { columns, rows: 40 });
   const app = new TUIApp({
     output: out.stream,
     input: input(),
@@ -469,10 +470,9 @@ describe('TUIApp integration', () => {
   });
 
   it('shows the active task state and tool progress in the Workbench', async () => {
-    const { app, out } = makeApp();
     // Activity and its spinner live in the Workbench sidebar, which is only
     // mounted once the terminal is wide enough to show the second pane.
-    Object.assign(out.stream, { columns: 140, rows: 40 });
+    const { app, out } = makeApp([], 140);
     app.start();
     app.setBusy(true);
     app.push({ type: 'thinking_delta', data: { content: 'planning' } });

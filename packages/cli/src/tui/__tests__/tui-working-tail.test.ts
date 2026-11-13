@@ -31,8 +31,9 @@ function sink(): { stream: Writable; text: () => string } {
   return { stream, text: () => Buffer.concat(chunks).toString('utf8') };
 }
 
-function makeApp(overrides: { inline?: boolean; busy?: boolean; unicodeBox?: boolean } = {}) {
+function makeApp(overrides: { inline?: boolean; busy?: boolean; unicodeBox?: boolean; columns?: number } = {}) {
   const out = sink();
+  if (overrides.columns !== undefined) Object.assign(out.stream, { columns: overrides.columns, rows: 40 });
   const busy = { value: overrides.busy ?? false };
   const app = new TUIApp({
     output: out.stream,
@@ -120,9 +121,8 @@ describe('the working tail', () => {
   });
 
   it('appears in the full-screen Workbench while a turn runs', async () => {
-    const { app, out } = makeApp({ busy: true });
+    const { app, out } = makeApp({ busy: true, columns: 140 });
     // The full-screen activity spinner is rendered in the Workbench sidebar.
-    Object.assign(out.stream, { columns: 140, rows: 40 });
     app.start();
     await settleRendered();
     app.stop();
