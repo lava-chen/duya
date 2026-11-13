@@ -98,6 +98,43 @@ PR B 开工时要接住的三件事：`/provider` 编辑表单的"测连"只能�
 - 保存后探测失败的处理分两种：新建时删掉刚建的行；编辑时把上一行原样写回（对着失败写入产生的新 revision）。这是"测连只能对已保存的 provider 发起"逼出来的顺序，代价是网络抖动时一次回滚。
 - 编辑完模型列表后 `defaultModel` 若已不在新列表里就顺延到第一个，否则会留下一个指向不存在模型的默认值。
 
+## 单 provider 默认选择与无模型提示（2026-11-12）
+
+负责人：Codex 当前任务；worktree：`/home/lavachen/.codex/worktrees/duya-cli-trial/duya`；分支：`codex/cli-provider-default-selection`；base：`2af62ce3c81b059e3e82c5b41e9f5299bdfd61fc`。
+
+### 目标与验收
+
+- 当没有显式默认 provider 且配置里只有一个可用 provider 时，新会话自动采用该 provider 的默认模型；旧的 `env` 占位 session 在恢复时也补齐。
+- 多个 provider 且未设置默认项时不任意挑选；TUI 显示可理解的选择指引，不显示 `env · default`。
+- provider 无法解析时，在 worker 启动失败处给出 `/provider` 与 `/model` 的可执行指引。
+- 对照 Pi：默认先用已保存选择，否则挑可用的已认证模型；找不到时仍进入 TUI，显示登录/选择模型指引，发送时给用户可执行错误。
+
+### 进度
+
+- [x] 核对本机配置：`minimax-cn`、默认模型 `MiniMax-M3` 与 API key 均存在；缺少 `[model].provider`。
+- [x] 核对 Pi：`findInitialModel` 尝试设置默认及已认证可用模型；无模型时显示登录与 `/model` 选择指引。
+- [x] 修正 Host 的单 provider 回退与旧 placeholder session 恢复。
+- [x] 将 TUI 占位状态和 provider 启动错误改为面向用户的提示。
+- [x] 运行 Host/CLI 相关验证、全仓类型与架构门禁，更新临时试用包并验证。
+
+### 验证与当前状态（2026-11-12）
+
+检出 `/home/lavachen/.codex/worktrees/duya-cli-trial/duya`；分支 `codex/cli-provider-default-selection`；base `2af62ce3c81b059e3e82c5b41e9f5299bdfd61fc`；实现提交 `64ec5d1cb1f1bbb24afbec0c3732a59f943babaa`；当前环境 Linux x64 / Node v26.13.0；源码工作树干净。
+
+| 命令 | 退出码 | 结果 |
+| --- | --- | --- |
+| `npx vitest run packages/host/tests/worker-config/file-config.test.ts packages/host/tests/worker-config/self-init.test.ts packages/host/tests/session-default-model-provider.test.ts packages/cli/src/tui/__tests__/model-status.test.ts` | 0 | 4 files / 49 tests 全绿；首次运行暴露一条旧断言仍要求单 provider 失败，已改为验证多个 provider 且未设默认时不猜测 |
+| `npm run typecheck:all` | 0 | workspace build 与全量类型检查通过；electron gate 无新增类型错误（164 条既有错误） |
+| `npm run architecture:check` | 0 | 无新增边界违规 |
+| `npm run build:cli-dev` | 0 | 重建 CLI 与 Host worker bundle |
+| `DUYA_CLI_VERSION=0.8.1 node scripts/package-cli-release.mjs --output /home/lavachen/.local/share/duya-cli-trial/package-next` | 0 | 生成 Linux x64 临时包 |
+| `package-next/bin/duya --version`、`--help` | 0 | 输出版本 0.8.1，帮助可正常显示；随后切换全局 shim 所指目录，`~/.local/bin/duya --version` 输出 0.8.1 |
+
+已保留原临时包于 `/home/lavachen/.local/share/duya-cli-trial/package-prev` 以便回滚。没有向模型 provider 发送请求，故真实模型回合未做端到端验证；用户可在 TUI 中重试，不会产生意外 API 费用。未单独记录改动前的测试基线。
+
+### 接续
+
+下一步：提交本任务变更并建立 draft PR；待用户在 TUI 中试用后再根据反馈调整。未获集成授权，不合并。
 ## 2026-11-11 · 添加向导 Provider 选择与静态模型探测
 
 ### 发现与决策

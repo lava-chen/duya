@@ -89,7 +89,20 @@ describe('createWorkerSelfInitMessage', () => {
     });
   });
 
-  it('returns the specific provider-resolution failure for the worker to report', () => {
+  it('treats a legacy env provider id as a placeholder and uses the configured default', () => {
+    const configRoot = createConfigRoot();
+    const result = createWorkerSelfInitMessage({
+      sessionId: 'session-env-placeholder',
+      manifest: { agent: { providerId: 'env', model: '' } },
+    }, { configRoot });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.message);
+    expect(result.message.providerConfig.model).toBe('model-from-config');
+    expect(result.message.providerConfig.provider).toBe('anthropic');
+  });
+
+  it('returns an actionable provider setup hint when configuration is missing', () => {
     const result = createWorkerSelfInitMessage({ sessionId: 'session-3' }, {
       configRoot: path.join(tmpdir(), 'missing-duya-worker-config'),
       workingDirectoryFallback: 'worker-cwd',
@@ -97,7 +110,7 @@ describe('createWorkerSelfInitMessage', () => {
 
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error('expected provider resolution to fail');
-    expect(result.message).toContain('worker self-init could not resolve a provider:');
-    expect(result.message).toContain('No provider configuration found');
+    expect(result.message).toContain('还没有配置模型服务');
+    expect(result.message).toContain('/provider add');
   });
 });
