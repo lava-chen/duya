@@ -131,13 +131,9 @@ describe('/display', () => {
   it('lists the profiles and then the transcript switches', async () => {
     const harness = await run({});
     expect(harness.rows.map((row) => row.id)).toEqual([
-      'detailed',
+      'minimal',
       'standard',
-      'focus',
-      'folded',
-      'compact',
-      'running',
-      'hidden',
+      'detailed',
       'show-thinking',
       'expand-blocks',
       'tool-results',
@@ -161,7 +157,7 @@ describe('/display', () => {
   });
 
   it('applies a profile as all four keys and one live patch', async () => {
-    const harness = await run({ activations: ['compact'] });
+    const harness = await run({ activations: ['minimal'] });
     expect(Object.fromEntries(harness.saved)).toEqual({
       'cli.tui.showThinking': 'false',
       'cli.tui.expandBlocks': 'false',
@@ -175,7 +171,7 @@ describe('/display', () => {
       toolGroupMode: 'names',
     });
     // And the list now reports itself: the row the user just chose is current.
-    expect(harness.rows.filter((row) => row.valueLabel === 'Current').map((row) => row.id)).toEqual(['compact']);
+    expect(harness.rows.filter((row) => row.valueLabel === 'Current').map((row) => row.id)).toEqual(['minimal']);
   });
 
   it('cycles a switch row through one key without touching the others', async () => {
@@ -193,7 +189,7 @@ describe('/display', () => {
       'cli.tui.showToolResults',
       'cli.tui.toolGroupMode',
     ]);
-    expect(harness.notices.join('\n')).toContain('Live only');
+    expect(harness.notices.join('\n')).toContain('Minimal');
   });
 
   it('rejects an unknown profile and writes nothing', async () => {
@@ -213,6 +209,6 @@ describe('/display', () => {
     const state = new SettingsState(parseTuiPreferences({}), liveVector(), 'm-1');
     const ids = displayRows(state).map((row) => row.id);
     // The four switch rows must be the settings menu's own, in its order.
-    expect(ids.slice(7)).toEqual(['show-thinking', 'expand-blocks', 'tool-results', 'tool-groups']);
+    expect(ids.slice(3)).toEqual(['show-thinking', 'expand-blocks', 'tool-results', 'tool-groups']);
   });
 });

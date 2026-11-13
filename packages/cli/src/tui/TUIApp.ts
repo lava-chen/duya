@@ -32,13 +32,10 @@
  */
 
 import {
-  cursorTo,
   disableBracketedPaste,
   disableMouseReporting,
   enableBracketedPaste,
   enableMouseReporting,
-  hideCursor,
-  showCursor,
 } from './terminal/ansi.js';
 import {
   createScreenSurface,
@@ -52,6 +49,7 @@ import { ActivityTracker } from './components/activity.js';
 import { TranscriptPane } from './components/transcript-pane.js';
 import { WorkbenchSidebar } from './components/workbench-sidebar.js';
 import { HStack } from './core/containers.js';
+import type { StyledSpan } from './core/span.js';
 import { resolveDisplayProfile } from './display-profiles.js';
 import { StatusBar } from './components/status-bar.js';
 import { renderTree, type UIComponent } from './core/component.js';
@@ -121,7 +119,6 @@ import {
   effortBorderColor,
   effortBorderTag,
   normalizeEffort,
-  resolveComposerBackground,
   resolveThemeName,
   taggedWith,
   themeFor,
@@ -129,6 +126,15 @@ import {
   type ThemeName,
 } from './theme.js';
 import { compactActivity } from './text.js';
+import {
+  centeredTranscriptButton,
+  paintTranscriptSelection,
+  selectedTranscriptText,
+  transcriptSelection as buildTranscriptSelection,
+  transcriptSelectionColumns,
+  type TranscriptPoint,
+  type TranscriptSelection,
+} from './transcript-selection.js';
 import { capacityBar } from './capacity-bar.js';
 import { formatTokensPerSecond, readGitBranch } from './footer.js';
 import type { PrBadge } from './pr-badge.js';
@@ -180,17 +186,16 @@ const SYNC_END = '\x1b[?2026l';
 /** Lines the input box may grow to before it scrolls internally. */
 const MAX_INPUT_ROWS = 8;
 
-/** Height of the full-screen status bar, in rows. */
-const STATUS_ROWS = 1;
+/** Full-screen footer rows: workspace location, then live activity. */
+const STATUS_ROWS = 2;
 
 /**
  * Footer rows in inline mode.
  *
  * Two, like pi: the path row and the stats/model row. Inline mode is the
  * default and the pi-aligned presentation, so it gets the footer that carries
- * the same information in the same two places. Full-screen mode keeps its
- * single status row — it is a fixed window with a bordered transcript, and
- * spending another row on chrome there costs the conversation directly.
+ * the same information in the same two places. Full-screen uses the same
+ * location-then-status order beneath the composer.
  */
 const INLINE_FOOTER_ROWS = 2;
 
@@ -830,6 +835,14 @@ export class TUIApp {
   private scrollbarLayout: { column: number; height: number } | null = null;
   /** Rows between the drag's press point and the thumb's top, held while dragging. */
   private scrollbarDragOffset: number | null = null;
+  /** Normal-mouse drag selection over the currently visible transcript rows. */
+  private transcriptSelectionGesture: {
+    readonly anchor: TranscriptPoint;
+    focus: TranscriptPoint;
+    dragging: boolean;
+    moved: boolean;
+  } | null = null;
+  private lastTranscriptRows: readonly (readonly StyledSpan[])[] = [];
   /**
    * The fullscreen regions as ONE layout tree (P0 step 3): computed once per
    * frame in `paintInput` — composer height is known there — and projected by
@@ -2170,6 +2183,7 @@ export class TUIApp {
       // either if the transcript arrives pre-sliced: "which rows scrolled off" is
       // exactly the information that slicing destroys.
       this.inlineTranscriptLines = [...pane.lines(width)];
+      this.lastTranscriptRows = [];
       return;
     }
     this.sidebarLayout = null;
@@ -2194,19 +2208,13 @@ export class TUIApp {
     if (sidebarWidth > 0) {
       const model = this.options.modelLabel?.();
       const tools = this.model.blocks.filter((block) => block.kind === 'tool');
-      const cwd = this.options.workspaceDirectory?.() ?? process.cwd();
-      const branch = this.gitBranch(cwd);
       const props = {
         styles: stylesOf({ theme: this.theme.tags, renderer: 'own' }),
-        sessionId: this.options.workbenchSessionId?.() ?? '',
         sessionTitle: this.options.sessionTitle?.() ?? 'Current session',
-        sessions: (this.options.completionSources?.slashOptions?.('/resume') ?? []).map((item) => ({ id: item.value, label: item.label })),
         model: model?.model ?? 'unknown', provider: model?.provider ?? 'unknown',
-        effort: this.effortLevel() ?? 'auto', cwd: branch ? `${cwd} (${branch})` : cwd,
-        inputTokens: this.lastUsage?.input ?? null, outputTokens: this.lastUsage?.output ?? null,
-        sessionTokens: this.sessionTokens, contextTokens: this.contextTokens(),
+        effort: this.effortLevel() ?? 'auto',
+        contextTokens: this.contextTokens(),
         contextBudget: this.options.contextBudgetTokens?.() ?? null,
-        tokensPerSecond: this.lastUsage?.tokensPerSecond ?? null,
         profile: resolveDisplayProfile({ showThinking: this.showThinking, expandBlocks: this.expanded, showToolResults: this.showToolResults, toolGroupMode: this.toolGroupMode }),
         tools: { total: tools.length, running: tools.filter((tool) => tool.status === 'running').length, errors: tools.filter((tool) => tool.status === 'error').length },
       };
@@ -2217,6 +2225,18 @@ export class TUIApp {
       if (slot) this.sidebarLayout = { column: slot.viewport.column, width: slot.viewport.width, height: slot.viewport.height };
       content = split;
     }
+    const renderedRows = renderTree(content, totalWidth, this.visibleTranscriptRows()).rows;
+    this.lastTranscriptRows = renderedRows;
+    const styles = stylesOf({ theme: this.theme.tags, renderer: 'own' });
+    const tagView = tagViewOf(styles);
+    const selection = this.currentTranscriptSelection();
+    const indicatorRow = renderedRows.length - 1;
+    const indicatorSelection = selection === undefined || indicatorRow < 0
+      ? undefined
+      : transcriptSelectionColumns(renderedRows[indicatorRow] ?? [], indicatorRow, selection, this.lastPaneWidth);
+    const followButton = !this.follow && indicatorRow >= 0
+      ? centeredTranscriptButton(renderedRows[indicatorRow] ?? [], totalWidth, this.followTailButtonLabel(), tagView, indicatorSelection)
+      : undefined;
     this.fullScreen.update('transcript', {
       // The border is the focus tell in full-screen mode: the task list owns
       // the arrows while the transcript does not respond to them at all.
@@ -2224,9 +2244,15 @@ export class TUIApp {
       // Route the established pane through the retained component renderer.
       // ScreenSurface still owns borders and layout; the tree owns the pane's
       // viewport and clipping, so this is a safe first integration step.
-      lines: renderTree(content, totalWidth, this.visibleTranscriptRows()).rows.map((row) =>
-        spansToTags(row, tagViewOf(stylesOf({ theme: this.theme.tags, renderer: 'own' }))),
-      ),
+      lines: renderedRows.map((row, index) => {
+        if (index === indicatorRow && followButton !== undefined) return followButton.line;
+        const columns = selection === undefined
+          ? undefined
+          : transcriptSelectionColumns(row, index, selection, this.lastPaneWidth);
+        return columns === undefined
+          ? spansToTags(row, tagView)
+          : paintTranscriptSelection(row, columns.start, columns.end, tagView);
+      }),
     });
   }
 
@@ -2377,9 +2403,8 @@ export class TUIApp {
         // The composer's frame is the effort indicator: the two rules the user
         // types between carry the level the next message will run at.
         borderColor: effortBorderColor(this.effortLevel()),
-        // The band: the whole input rectangle is filled, the rules included,
-        // so the box the user types into reads as one solid surface.
-        background: resolveComposerBackground(this.theme.tags) ?? null,
+        // Clear any previous fill; the terminal's own background shows through.
+        background: null,
         height,
         bottom: size.rows - boxes.composer.top - height,
         lines: searchRow === null ? colored : [searchRow.line, ...colored],
@@ -2394,9 +2419,7 @@ export class TUIApp {
         layout.hasPlaceholder ? (borderRows > 0 ? 1 : 0) : -1,
         { row: borderRows > 0 ? 1 : 0, glyph: shellGlyph },
       );
-      // The inline screen model has no region to fill — the rows ARE the
-      // composer — so the band travels with the text.
-      this.inlineInputLines = this.bandComposerRows(painted, layout.lines, size.columns);
+      this.inlineInputLines = painted;
     }
     this.inputRows = layout.bodyRows;
     this.inputCursor = {
@@ -2520,33 +2543,6 @@ export class TUIApp {
   }
 
   /**
-   * Put the composer's rows on the theme's band.
-   *
-   * The full-screen surface can fill a region, but the inline one cannot: its
-   * rows ARE the composer. So the band travels with the text — each row is
-   * padded to the terminal width and wrapped in the background tag, which is
-   * what makes the inline composer a solid block instead of a highlighted
-   * line.
-   *
-   * The padding is measured on the RAW row, because the painted row carries
-   * tags and its tag characters are not cells.
-   */
-  private bandComposerRows(
-    painted: readonly string[],
-    raw: readonly string[],
-    columns: number,
-  ): string[] {
-    const tag = resolveComposerBackground(this.theme.tags);
-    if (tag === undefined) return [...painted];
-    const width = Math.max(1, columns);
-    return painted.map((line, index) => {
-      const used = visibleWidth(raw[index] ?? '');
-      const pad = ' '.repeat(Math.max(0, width - used));
-      return `{${tag}}${line}${pad}{/${tag}}`;
-    });
-  }
-
-  /**
    * Paint the composer's body rows, dimming the placeholder row.
    *
    * The placeholder is the next prompt the worker predicted for the last turn.
@@ -2596,22 +2592,24 @@ export class TUIApp {
 
   private placeCursor(): void {
     if (this.focus !== 'input' || this.dockPanelActive()) {
-      this.output.write(hideCursor());
+      this.fullScreen.setCaret(null);
       return;
     }
-    // Inline mode places its own caret, in absolute rows and columns, as part of
-    // the frame. Full-screen mode asks the surface where the composer landed.
+    // Inline mode places its caret in the synchronous frame. Full-screen mode
+    // queues a diff, so the surface must place the caret after that diff writes.
     const input = this.fullScreen.measure('input');
-    if (input === null || !input.laidOut) return;
+    if (input === null) {
+      this.fullScreen.setCaret(null);
+      return;
+    }
     // Clamp into the visible window: the editor's logical row may be below
     // the fold once the region has hit MAX_INPUT_ROWS.
     const row = Math.min(this.inputCursor.cursorRow, this.inputRows) - 1;
     const col = input.left + input.innerLeft + this.inputCursor.cursorCol;
     const y = input.top + input.innerTop + row;
-    // `cursorTo` is 1-based; the region metrics are 0-based, so the conversion
-    // lives here and nowhere else.
-    this.output.write(cursorTo(Math.max(0, y) + 1, Math.max(0, col) + 1));
-    this.output.write(showCursor());
+    // Keep the coordinates zero-based until the surface writes the frame and
+    // converts them to terminal cursor coordinates.
+    this.fullScreen.setCaret({ row: Math.max(0, y), column: Math.max(0, col) });
   }
 
   /**
@@ -2792,17 +2790,28 @@ export class TUIApp {
     const badgePlain = badge === null ? '' : `${badge.plain}${badge.hint}`;
     const badgeWidth = badgePlain === '' ? 0 : visibleWidth(badgePlain) + 1;
     const showBadge = badge !== null && badgeWidth < width;
-    const jump = this.follow ? '' : '[↓ Latest] ';
     const activity = '{gray-fg}' + escapeTags(compactActivity(
       fixed,
-      Math.max(1, width - (showBadge ? badgeWidth : 0) - visibleWidth(jump)),
+      Math.max(1, width - (showBadge ? badgeWidth : 0)),
     )) + '{/gray-fg}';
     const badgeTagged = badge === null || !showBadge
       ? ''
       : ' ' + taggedWith(this.theme.tags, badge.token, escapeTags(badgePlain));
+    const cwd = this.options.workspaceDirectory?.() ?? process.cwd();
+    const branch = this.gitBranch(cwd);
+    const location = branch ? `${cwd} · ${branch}` : cwd;
     this.fullScreen.update('status', {
-      lines: [(jump ? taggedWith(this.theme.tags, 'accent', escapeTags(jump)) : '') + activity + badgeTagged],
+      height: STATUS_ROWS,
+      lines: [
+        `{gray-fg}${escapeTags(truncateToWidth(location, width))}{/gray-fg}`,
+        activity + badgeTagged,
+      ],
     });
+  }
+
+  private followTailButtonLabel(): string {
+    const shortcuts = this.actionDefs.find((action) => action.id === 'follow-tail')?.keys.join(' / ');
+    return `↓ Jump to latest message${shortcuts ? ` · ${shortcuts}` : ''}`;
   }
 
   /**
@@ -4076,12 +4085,6 @@ exportHistory(): string[] {
     this.bindAction('help', () => { this.toggleWindow('help'); });
     this.bindAction('history', () => { this.toggleWindow('history'); });
     this.bindAction('usage', () => { this.toggleWindow('usage'); });
-    this.bindAction('sidebar-next-tab', () => {
-      if (this.dockPanelActive() || this.overlay.isActive || !this.sidebarLayout || !this.sidebar) return;
-      const tabs = ['sessions', 'context', 'view'] as const;
-      this.sidebar.selectTab(tabs[(tabs.indexOf(this.sidebar.tab) + 1) % tabs.length]!);
-      this.scheduler.requestImmediate();
-    });
     this.bindAction('sidebar-toggle', () => {
       if (this.dockPanelActive() || this.overlay.isActive) return;
       this.pointer.cancel();
@@ -4110,8 +4113,8 @@ exportHistory(): string[] {
     // reporting ENABLED the terminal ships the wheel as SGR sequences instead
     // of scrolling its own scrollback — and instead of a terminal like Warp
     // translating it into ↑/↓, which would recall input history. Only the
-    // wheel and component clicks are consumed. Native selection uses the
-    // terminal's override modifier (usually Shift); DUYA_TUI_MOUSE=off opts out.
+    // wheel, component clicks and transcript drag selection are consumed.
+    // Shift-drag remains available to the terminal; DUYA_TUI_MOUSE=off opts out.
     //
     // Inline mode deliberately does the opposite. There the terminal owns the
     // scrollback (that is the point of the mode), and the live area is only one
@@ -4144,7 +4147,11 @@ exportHistory(): string[] {
           this.scrollByLines(event.action === 'wheelup' ? -WHEEL_STEP_LINES : WHEEL_STEP_LINES);
           return;
         }
-        if (this.mouseMode === 'all') this.pointer.handle(event);
+        if (this.mouseMode === 'all') {
+          const pointerHit = event.action === 'mousedown' && this.pointer.hasHit(event.x, event.y);
+          this.pointer.handle(event);
+          this.handleTranscriptSelectionMouseEvent(event, pointerHit);
+        }
       });
     }
     this.bindKey(['left'], () => {
@@ -5198,6 +5205,7 @@ exportHistory(): string[] {
 
   private scrollBy(pages: number): void {
     this.pointer.cancel();
+    this.clearTranscriptSelection();
     const rows = this.visibleTranscriptRows();
     const total = this.transcript.totalLines(this.model, this.renderOptions());
     const maxTop = Math.max(0, total - rows);
@@ -5220,6 +5228,7 @@ exportHistory(): string[] {
    */
   private scrollByLines(lines: number): void {
     this.pointer.cancel();
+    this.clearTranscriptSelection();
     const total = this.transcript.totalLines(this.model, this.renderOptions());
     const maxTop = Math.max(0, total - this.visibleTranscriptRows());
     // Negative lines scroll UP: `scrollTop` counts from the top of the
@@ -5228,6 +5237,89 @@ exportHistory(): string[] {
     const next = Math.max(0, Math.min(maxTop, current + lines));
     this.scrollTop = next;
     this.follow = next >= maxTop;
+    this.scheduler.requestImmediate();
+  }
+
+  private currentTranscriptSelection(): TranscriptSelection | undefined {
+    const gesture = this.transcriptSelectionGesture;
+    if (gesture === null || !gesture.moved) return undefined;
+    return buildTranscriptSelection(gesture.anchor, gesture.focus);
+  }
+
+  private clearTranscriptSelection(): void {
+    this.transcriptSelectionGesture = null;
+  }
+
+  private transcriptPoint(event: InputMouseEvent): TranscriptPoint | undefined {
+    if (this.inlineSurface !== null || this.overlay.isActive || this.dockPanelActive()) return undefined;
+    const region = this.fullScreen.measure('transcript');
+    if (region === null || !region.laidOut || this.lastPaneWidth <= 0) return undefined;
+    const row = event.y - region.top - region.innerTop;
+    const column = event.x - region.left - region.innerLeft;
+    if (row < 0 || row >= this.lastTranscriptRows.length || column < 0 || column >= this.lastPaneWidth) {
+      return undefined;
+    }
+    return { row, column };
+  }
+
+  private transcriptDragPoint(event: InputMouseEvent): TranscriptPoint | undefined {
+    if (this.inlineSurface !== null || this.overlay.isActive || this.dockPanelActive()) return undefined;
+    const region = this.fullScreen.measure('transcript');
+    if (region === null || !region.laidOut || this.lastTranscriptRows.length === 0 || this.lastPaneWidth <= 0) {
+      return undefined;
+    }
+    return {
+      row: Math.max(0, Math.min(this.lastTranscriptRows.length - 1, event.y - region.top - region.innerTop)),
+      column: Math.max(0, Math.min(this.lastPaneWidth - 1, event.x - region.left - region.innerLeft)),
+    };
+  }
+
+  private handleTranscriptSelectionMouseEvent(event: InputMouseEvent, pointerHit: boolean): void {
+    if (event.shift || event.ctrl || event.meta) {
+      this.clearTranscriptSelection();
+      return;
+    }
+    if (event.action === 'mousedown') {
+      if (event.button !== 0 || pointerHit) {
+        if (pointerHit) this.clearTranscriptSelection();
+        return;
+      }
+      const point = this.transcriptPoint(event);
+      this.transcriptSelectionGesture = point === undefined
+        ? null
+        : { anchor: point, focus: point, dragging: true, moved: false };
+      return;
+    }
+
+    const gesture = this.transcriptSelectionGesture;
+    if (gesture === null || !gesture.dragging) return;
+    if (event.action === 'mousemove') {
+      const point = this.transcriptDragPoint(event);
+      if (point === undefined) return;
+      if (point.row === gesture.focus.row && point.column === gesture.focus.column) return;
+      gesture.focus = point;
+      gesture.moved = true;
+      this.scheduler.requestImmediate();
+      return;
+    }
+    if (event.action !== 'mouseup') return;
+
+    const point = this.transcriptDragPoint(event);
+    if (point !== undefined && (point.row !== gesture.focus.row || point.column !== gesture.focus.column)) {
+      gesture.focus = point;
+      gesture.moved = true;
+    }
+    gesture.dragging = false;
+    if (!gesture.moved) {
+      this.clearTranscriptSelection();
+      this.scheduler.requestImmediate();
+      return;
+    }
+    const selection = this.currentTranscriptSelection();
+    const text = selection === undefined
+      ? undefined
+      : selectedTranscriptText(this.lastTranscriptRows, selection, this.lastPaneWidth);
+    if (text !== undefined) this.terminalIntegration.copy(text);
     this.scheduler.requestImmediate();
   }
 
@@ -5392,15 +5484,10 @@ exportHistory(): string[] {
       for (const target of this.sidebar.pointerTargets()) {
         add(`sidebar:${target.id}`, geometry, target.row, layout.column + target.column, target.width, () => {
           if ((this.options.workbenchSessionId?.() ?? '') !== sessionId) return;
-          if ('tab' in target.action) {
-            this.sidebar?.selectTab(target.action.tab);
-            this.scheduler.requestImmediate();
-          } else {
-            const command = target.action.command;
-            void Promise.resolve().then(() => this.options.onWorkbenchCommand?.(command)).catch((error: unknown) => {
-              this.printError(error instanceof Error ? error.message : String(error));
-            });
-          }
+          const command = target.action.command;
+          void Promise.resolve().then(() => this.options.onWorkbenchCommand?.(command)).catch((error: unknown) => {
+            this.printError(error instanceof Error ? error.message : String(error));
+          });
         }, sessionId);
       }
     }
@@ -5416,8 +5503,15 @@ exportHistory(): string[] {
         drag: (phase, point) => this.scrollbarDrag(phase, point.y),
       });
     }
-    if (!this.follow)
-      add('follow-tail', this.fullScreen.measure('status'), 0, 0, visibleWidth('[↓ Latest]'), () => this.actionHandlers.get('follow-tail')?.());
+    if (!this.follow) {
+      const transcript = this.fullScreen.measure('transcript');
+      const indicatorWidth = Math.min(visibleWidth(` ${this.followTailButtonLabel()} `), this.terminalSize().columns);
+      const indicatorColumn = Math.floor((this.terminalSize().columns - indicatorWidth) / 2);
+      add(
+        'follow-tail', transcript, this.visibleTranscriptRows() - 1, indicatorColumn, indicatorWidth,
+        () => this.actionHandlers.get('follow-tail')?.(),
+      );
+    }
     this.pointer.commit(hits);
   }
 

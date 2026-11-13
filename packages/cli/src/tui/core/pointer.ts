@@ -50,6 +50,10 @@ export class PointerDispatcher {
     return undefined;
   }
 
+  hasHit(x: number, y: number): boolean {
+    return this.hit(x, y) !== undefined;
+  }
+
   handle(event: InputMouseEvent): void {
     if (event.shift || event.ctrl || event.meta
       || event.action === 'wheelup' || event.action === 'wheeldown') {

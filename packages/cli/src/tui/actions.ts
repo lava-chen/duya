@@ -32,7 +32,6 @@ export interface ActionDef {
 
 export const ACTION_DEFS: readonly ActionDef[] = [
   { id: 'help', keys: ['F1'], label: 'Open this help window', context: 'global' },
-  { id: 'sidebar-next-tab', keys: ['F7'], label: 'Switch workbench sidebar tab (fullscreen)', context: 'global' },
   { id: 'sidebar-toggle', keys: ['F8'], label: 'Show / hide workbench sidebar (fullscreen)', context: 'global' },
   { id: 'history', keys: ['Ctrl+R'], label: 'Search and recall input history', context: 'global' },
   { id: 'usage', keys: ['Ctrl+P'], label: 'Token usage and context window', context: 'global' },

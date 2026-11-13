@@ -78,8 +78,16 @@ function applyProfile(ctx: TuiSlashContext, state: SettingsState, id: DisplayPro
 /** `/display compact` — the same change the list makes, without opening it. */
 function profileFromArgs(args: string): DisplayProfileId | null {
   const input = args.trim().toLowerCase();
-  const wanted = input === 'normal' ? 'detailed' : input;
-  if (wanted === '') return null;
+  const aliases: Readonly<Record<string, DisplayProfileId>> = {
+    compact: 'minimal',
+    hidden: 'minimal',
+    running: 'minimal',
+    focus: 'standard',
+    folded: 'standard',
+    normal: 'detailed',
+  };
+  if (input === '') return null;
+  const wanted: string = aliases[input] ?? input;
   const match = DISPLAY_PROFILES.find(
     (profile) => profile.id === wanted || profile.label.toLowerCase() === wanted.replace(/\s+/gu, ' '),
   );

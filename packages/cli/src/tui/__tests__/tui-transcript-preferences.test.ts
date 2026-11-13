@@ -102,8 +102,8 @@ describe('toolGroupMode', () => {
     const rendered = strip(renderTranscript(batchModel('none'), { ...PLAIN, toolGroupMode: 'names' }));
     for (const path of ['a.txt', 'b.txt', 'c.txt']) expect(rendered).toContain(path);
     expect(rendered).not.toContain('body of a.txt');
-    // The `[+ N lines]` hint would advertise a body the mode refuses to draw.
-    expect(rendered).not.toContain('[+ ');
+    // A details affordance remains so the per-call override can open this view.
+    expect(rendered).toContain('[+');
   });
 
   it('lets an explicit expansion win over names', () => {

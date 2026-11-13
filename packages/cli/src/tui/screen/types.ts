@@ -31,8 +31,8 @@
  * The five regions a full-screen frame is composed of.
  *
  * Fixed and few, which is what makes the geometry a table rather than a layout
- * engine: the transcript fills the top, the input sits above the status row,
- * the status row is pinned to the bottom, the `/` popup floats above the input,
+ * engine: the transcript fills the top, the input sits above the footer,
+ * the footer is pinned to the bottom, the `/` popup floats above the input,
  * and the overlay is the one centred modal.
  */
 
@@ -162,6 +162,8 @@ export interface ScreenSurface {
   update(region: SurfaceRegion, patch: RegionPatch): void;
   /** What the renderer laid out for a region, or null if it has none. */
   measure(region: SurfaceRegion): RegionMetrics | null;
+  /** Place the hardware cursor after the next completed frame; null hides it. */
+  setCaret(position: { readonly row: number; readonly column: number } | null): void;
   /**
    * The body lines the caller last handed to a region.
    *

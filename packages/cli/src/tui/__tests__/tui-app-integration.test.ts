@@ -3,6 +3,7 @@ import { Writable, PassThrough } from 'stream';
 import { readFileSync } from 'fs';
 import { TUIApp } from '../TUIApp.js';
 import { MIN_RENDER_INTERVAL_MS } from '../render-scheduler.js';
+import { TerminalIntegration } from '../terminal-integration.js';
 import { renderTranscript, escapeTags } from '../transcript-view.js';
 import { TranscriptModel } from '../blocks.js';
 import { detectTerminalEnvironment } from '../terminal-env.js';
@@ -579,6 +580,167 @@ describe('TUIApp integration', () => {
 
     app.stop();
   });
+
+  it('selects transcript text with an ordinary mouse drag and sends it to the terminal clipboard', async () => {
+    const out = sink();
+    const stdin = input();
+    const terminalOutput = out.stream as Writable & { columns: number; rows: number; isTTY: boolean };
+    terminalOutput.columns = 80;
+    terminalOutput.rows = 24;
+    terminalOutput.isTTY = true;
+    const app = new TUIApp({
+      output: out.stream,
+      input: stdin,
+      onSubmit: () => {},
+      keyOverrides: {},
+      terminalEnv: detectTerminalEnvironment({ TERM: 'xterm-256color', TERM_PROGRAM: 'WezTerm' }),
+      terminalIntegration: new TerminalIntegration({
+        writer: terminalOutput,
+        enabled: true,
+        env: {},
+        flags: { clipboard: true },
+      }),
+    });
+    app.start();
+    app.printNotice('ordinary-drag-select');
+    await settleRendered();
+
+    const internals = app as unknown as {
+      fullScreen: { measure(region: 'transcript'): { top: number; innerTop: number; left: number; innerLeft: number } | null };
+      lastTranscriptRows: readonly (readonly { text: string }[])[];
+    };
+    const screen = internals.fullScreen.measure('transcript');
+    const markerRow = internals.lastTranscriptRows.findIndex((row) => row.map((span) => span.text).join('').includes('ordinary-drag-select'));
+    const rowText = internals.lastTranscriptRows[markerRow]?.map((span) => span.text).join('') ?? '';
+    const markerColumn = rowText.indexOf('ordinary-drag-select');
+    expect(screen).not.toBeNull();
+    expect(markerRow).toBeGreaterThanOrEqual(0);
+    expect(markerColumn).toBeGreaterThanOrEqual(0);
+
+    const screenX = screen!.left + screen!.innerLeft + markerColumn;
+    const screenY = screen!.top + screen!.innerTop + markerRow;
+    const endX = screenX + 'ordinary-drag-select'.length - 1;
+    stdin.write(`\x1b[<0;${screenX + 1};${screenY + 1}M\x1b[<32;${endX + 1};${screenY + 1}M\x1b[<0;${endX + 1};${screenY + 1}m`);
+    await settleRendered();
+
+    expect(out.text()).toContain('\x1b[7;90m');
+    expect(out.text()).toContain(Buffer.from('ordinary-drag-select').toString('base64'));
+    app.stop();
+  });
+
+  it('centers the return-to-latest button above the composer and keeps it clickable', async () => {
+    const out = sink();
+    const stdin = input();
+    const terminalOutput = out.stream as Writable & { columns: number; rows: number; isTTY: boolean };
+    terminalOutput.columns = 80;
+    terminalOutput.rows = 24;
+    terminalOutput.isTTY = true;
+    const app = new TUIApp({
+      output: out.stream,
+      input: stdin,
+      onSubmit: () => {},
+      keyOverrides: {},
+      terminalEnv: detectTerminalEnvironment({ TERM: 'xterm-256color', TERM_PROGRAM: 'WezTerm' }),
+    });
+    app.start();
+    for (let index = 0; index < 48; index += 1) app.printNotice(`history-row-${index}`);
+    await settleRendered();
+    stdin.write('\x1b[5~');
+    await settleRendered();
+
+    const internals = app as unknown as {
+      follow: boolean;
+      lastTranscriptRows: readonly unknown[];
+      fullScreen: {
+        measure(region: 'transcript'): { top: number; innerTop: number; height: number } | null;
+        content(region: 'transcript'): readonly unknown[];
+      };
+    };
+    const transcript = internals.fullScreen.measure('transcript');
+    expect(internals.follow).toBe(false);
+    expect(transcript).not.toBeNull();
+    expect(JSON.stringify(internals.fullScreen.content('transcript'))).toContain('Jump to latest message');
+
+    const labelWidth = ' ↓ Jump to latest message · Ctrl+End '.length;
+    const buttonColumn = Math.floor((80 - labelWidth) / 2);
+    const buttonRow = transcript!.top + transcript!.innerTop + internals.lastTranscriptRows.length - 1;
+    const buttonX = buttonColumn + Math.floor(labelWidth / 2);
+    stdin.write(`\x1b[<0;${buttonX + 1};${buttonRow + 1}M\x1b[<0;${buttonX + 1};${buttonRow + 1}m`);
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    await settleRendered();
+
+    expect(internals.follow).toBe(true);
+    app.stop();
+  });
+
+  it.each(['full', 'names', 'focus', 'running'] as const)(
+    'lets a click on a tool row reveal complete arguments and output in %s view',
+    async (toolGroupMode) => {
+      const out = sink();
+      const stdin = input();
+      const terminalOutput = out.stream as Writable & { columns: number; rows: number; isTTY: boolean };
+      terminalOutput.columns = 80;
+      terminalOutput.rows = 24;
+      terminalOutput.isTTY = true;
+      const app = new TUIApp({
+        output: out.stream,
+        input: stdin,
+        onSubmit: () => {},
+        keyOverrides: {},
+        toolGroupMode,
+        showToolResults: false,
+        terminalEnv: detectTerminalEnvironment({ TERM: 'xterm-256color', TERM_PROGRAM: 'WezTerm' }),
+      });
+      app.start();
+      app.push({ type: 'tool_use', data: { id: 'call-details', name: 'bash', input: { command: 'printf full-command' } } });
+      const output = Array.from({ length: 6 }, (_, i) => `output-${i}`).join('\n');
+      if (toolGroupMode === 'running') {
+        app.push({ type: 'tool_output', data: { toolUseId: 'call-details', data: output } });
+      } else {
+        app.push({ type: 'tool_result', data: { id: 'call-details', result: output } });
+      }
+      await settleRendered();
+
+      const internals = app as unknown as {
+        lastTranscriptRows: readonly (readonly { text: string }[])[];
+        fullScreen: { measure(region: 'transcript'): { top: number; innerTop: number; left: number; innerLeft: number } | null };
+      };
+      const rowIndex = internals.lastTranscriptRows.findIndex((row) => row.map((span) => span.text).join('').includes('bash'));
+      const rowText = internals.lastTranscriptRows[rowIndex]?.map((span) => span.text).join('') ?? '';
+      const transcript = internals.fullScreen.measure('transcript');
+      expect(rowIndex).toBeGreaterThanOrEqual(0);
+      expect(rowText).toContain('[+');
+      expect(transcript).not.toBeNull();
+
+      const column = transcript!.left + transcript!.innerLeft + Math.max(0, rowText.indexOf('bash'));
+      const screenRow = transcript!.top + transcript!.innerTop + rowIndex;
+      const clickAt = (x: number, y: number): void => {
+        stdin.write(`\x1b[<0;${x + 1};${y + 1}M\x1b[<0;${x + 1};${y + 1}m`);
+      };
+      clickAt(column, screenRow);
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      await settleRendered();
+
+      const written = plainText(out.text());
+      expect(written).toContain('command: printf full-command');
+      expect(written).toContain('output-0');
+      expect(written).toContain('output-5');
+
+      const expandedRow = internals.lastTranscriptRows.findIndex((row) => row.map((span) => span.text).join('').includes('bash'));
+      const expandedText = internals.lastTranscriptRows[expandedRow]?.map((span) => span.text).join('') ?? '';
+      const updatedTranscript = internals.fullScreen.measure('transcript');
+      expect(expandedRow).toBeGreaterThanOrEqual(0);
+      const expandedColumn = updatedTranscript!.left + updatedTranscript!.innerLeft + Math.max(0, expandedText.indexOf('bash'));
+      const expandedScreenRow = updatedTranscript!.top + updatedTranscript!.innerTop + expandedRow;
+      clickAt(expandedColumn, expandedScreenRow);
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      await settleRendered();
+      const collapsedRows = internals.lastTranscriptRows.map((row) => row.map((span) => span.text).join('')).join('\n');
+      expect(collapsedRows).not.toContain('Arguments:');
+      if (toolGroupMode !== 'running') expect(collapsedRows).not.toContain('output-5');
+      app.stop();
+    },
+  );
 });
 
 /**

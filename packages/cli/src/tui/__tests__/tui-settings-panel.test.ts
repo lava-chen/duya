@@ -418,7 +418,7 @@ describe('/display in the TUI', () => {
   it('names the profiles and shows the switches they are made of', async () => {
     const open = await openDisplay();
     const panel = open.panel();
-    for (const label of ['Detailed', 'Standard', 'Compact', 'Live only']) expect(panel).toContain(label);
+    for (const label of ['Minimal', 'Default', 'Detailed']) expect(panel).toContain(label);
     // The switches are the settings menu's own rows, not a second description.
     expect(panel).toContain('Tool groups');
     expect(panel).toContain('All calls');
@@ -443,31 +443,28 @@ describe('/display in the TUI', () => {
 
   it('applies a profile as four keys and moves the live renderer', async () => {
     const open = await openDisplay();
-    // 'Live only' is the sixth row since the focus/folded/hidden profiles
-    // joined the list — the down-count tracks the list; the pinned four-key
-    // vector below is the point of the test.
-    for (let step = 0; step < 5; step += 1) press(open.input, 'down');
+    // Detailed is the third preset; moving down twice selects it.
+    for (let step = 0; step < 2; step += 1) press(open.input, 'down');
     await settle();
     press(open.input, 'return');
     await settle();
 
     expect(Object.fromEntries(open.fake.calls)).toEqual({
-      'cli.tui.showThinking': 'false',
-      'cli.tui.expandBlocks': 'false',
-      'cli.tui.showToolResults': 'false',
-      'cli.tui.toolGroupMode': 'running',
+      'cli.tui.showThinking': 'true',
+      'cli.tui.expandBlocks': 'true',
+      'cli.tui.showToolResults': 'true',
+      'cli.tui.toolGroupMode': 'full',
     });
     // Reached the app, not only the row: this is what `renderOptions` reads.
-    expect(open.app.liveTuiPreferences().toolGroupMode).toBe('running');
-    expect(open.panel()).toContain('Live only');
+    expect(open.app.liveTuiPreferences().toolGroupMode).toBe('full');
+    expect(open.panel()).toContain('Detailed');
     await open.close();
   });
 
   it('cycles one switch from the same list', async () => {
     const open = await openDisplay();
-    // The toolGroupMode switch sits three rows lower now that the profile
-    // list grew by three.
-    for (let step = 0; step < 10; step += 1) press(open.input, 'down');
+    // The four switch rows follow the three presets.
+    for (let step = 0; step < 6; step += 1) press(open.input, 'down');
     await settle();
     press(open.input, 'return');
     await settle();

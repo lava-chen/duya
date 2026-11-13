@@ -71,7 +71,7 @@ npm run dev:tui
 
 `duya tui` 默认启动一个临时的本地 Host，也可以按开发配置连接已有 Host。这是仓库内的开发使用路径，不代表 CLI 已作为独立公共软件包发布。
 
-输入框默认使用主题底色；设置 `DUYA_TUI_COMPOSER_BG=transparent` 可让终端自身背景透出。
+TUI 输入框使用透明背景，显示终端自身的背景色。
 
 插件命令会连接当前数据目录的 Host；没有运行中的 Host 时自动启动，无需先打开 Desktop。Desktop、CLI 与 TUI 使用同一份插件配置和管理服务：
 

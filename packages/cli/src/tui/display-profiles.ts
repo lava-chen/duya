@@ -29,7 +29,7 @@ import {
   TUI_TOOL_GROUP_MODE_SETTING,
 } from './preferences.js';
 
-export type DisplayProfileId = 'detailed' | 'standard' | 'focus' | 'folded' | 'compact' | 'running' | 'hidden';
+export type DisplayProfileId = 'minimal' | 'standard' | 'detailed';
 
 /** A named point in the four-switch space, plus the words the menu shows for it. */
 export interface DisplayProfile {
@@ -44,12 +44,31 @@ export interface DisplayProfile {
 }
 
 /**
- * Listed in the order the menu shows them: most content first, least last.
+ * Three choices from least to most detail. The underlying settings remain the
+ * shared source of truth used by Desktop and TUI.
  *
  * `standard` is the same vector as `DEFAULT_TUI_PREFERENCES`, so a fresh
  * install is on a named profile rather than on an unnamed `Custom`.
  */
 export const DISPLAY_PROFILES: readonly DisplayProfile[] = [
+  {
+    id: 'minimal',
+    label: 'Minimal',
+    detail: 'Hide thinking and show compact tool call rows.',
+    showThinking: false,
+    expandBlocks: false,
+    showToolResults: false,
+    toolGroupMode: 'names',
+  },
+  {
+    id: 'standard',
+    label: 'Default',
+    detail: 'A compact transcript with rows you can open when needed.',
+    showThinking: true,
+    expandBlocks: false,
+    showToolResults: false,
+    toolGroupMode: 'full',
+  },
   {
     id: 'detailed',
     label: 'Detailed',
@@ -58,60 +77,6 @@ export const DISPLAY_PROFILES: readonly DisplayProfile[] = [
     expandBlocks: true,
     showToolResults: true,
     toolGroupMode: 'full',
-  },
-  {
-    id: 'standard',
-    label: 'Standard',
-    detail: 'Reasoning and results one line each, opened by key or by [+].',
-    showThinking: true,
-    expandBlocks: false,
-    showToolResults: false,
-    toolGroupMode: 'full',
-  },
-  {
-    id: 'focus',
-    label: 'Focus',
-    detail: 'Reasoning open; tool calls stay compact until individually opened.',
-    showThinking: true,
-    expandBlocks: false,
-    showToolResults: false,
-    toolGroupMode: 'focus',
-  },
-  {
-    id: 'folded',
-    label: 'Compact thoughts',
-    detail: 'Tool summaries and thinking titles; click a title to open its body.',
-    showThinking: true,
-    expandBlocks: false,
-    showToolResults: false,
-    toolGroupMode: 'names',
-  },
-  {
-    id: 'compact',
-    label: 'Compact',
-    detail: 'No reasoning; every call keeps its line, nothing under it.',
-    showThinking: false,
-    expandBlocks: false,
-    showToolResults: false,
-    toolGroupMode: 'names',
-  },
-  {
-    id: 'running',
-    label: 'Live only',
-    detail: 'One line per turn: the call in flight, with settled batches folded to their header.',
-    showThinking: false,
-    expandBlocks: false,
-    showToolResults: false,
-    toolGroupMode: 'running',
-  },
-  {
-    id: 'hidden',
-    label: 'Hidden',
-    detail: 'Hide tool calls and reasoning bodies; keep read-only thinking status.',
-    showThinking: true,
-    expandBlocks: false,
-    showToolResults: false,
-    toolGroupMode: 'hidden',
   },
 ];
 

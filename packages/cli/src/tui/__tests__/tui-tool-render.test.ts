@@ -26,6 +26,7 @@ import {
   toolGroupKey,
 } from '../tool-render.js';
 import { DEFAULT_RENDER_OPTIONS, renderTranscript } from '../transcript-view.js';
+import { DARK_THEME_TAGS, LIGHT_THEME_TAGS } from '../theme.js';
 
 /** Strip blessed tags, leaving the text a reader sees. */
 function strip(text: string): string {
@@ -61,6 +62,74 @@ describe('toolGroupKey', () => {
     // commands" must mean two commands the AGENT ran.
     expect(toolGroupKey('local_shell')).toBe('user-shell');
     expect(toolGroupKey('bash')).toBe('shell');
+  });
+});
+
+describe('tool disclosure details', () => {
+  it.each(['full', 'names', 'focus'] as const)(
+    'reveals the complete invocation and result in the %s view',
+    (toolGroupMode) => {
+      const model = new TranscriptModel();
+      model.apply({
+        type: 'tool_use',
+        data: { id: 'bash-1', name: 'bash', input: { command: 'printf full-command' } },
+      });
+      model.apply({
+        type: 'tool_result',
+        data: { id: 'bash-1', result: Array.from({ length: 24 }, (_, i) => `output ${i}`).join('\n') },
+      });
+      const block = model.blocks.find((candidate) => candidate.kind === 'tool');
+      expect(block?.kind).toBe('tool');
+      if (block?.kind !== 'tool') return;
+
+      const folded = renderTranscript(model, {
+        expanded: false,
+        showToolResults: false,
+        toolResultLines: 2,
+        toolGroupMode,
+      });
+      expect(folded).toContain('[+');
+      expect(folded).not.toContain('output 23');
+
+      const expanded = renderTranscript(model, {
+        expanded: false,
+        showToolResults: false,
+        toolResultLines: 2,
+        toolGroupMode,
+        expandedBlockIds: new Set([block.id]),
+      });
+      expect(strip(expanded)).toContain('Arguments:');
+      expect(strip(expanded)).toContain('command: printf full-command');
+      expect(strip(expanded)).toContain('output 0');
+      expect(strip(expanded)).toContain('output 23');
+      expect(expanded).not.toContain('[+');
+
+      const collapsed = renderTranscript(model, {
+        expanded: false,
+        showToolResults: false,
+        toolResultLines: 2,
+        toolGroupMode,
+        collapsedBlockIds: new Set([block.id]),
+      });
+      expect(collapsed).not.toContain('Arguments:');
+      expect(collapsed).not.toContain('output 23');
+      expect(collapsed).toContain('[+');
+    },
+  );
+
+  it('paints failed call rows and details with the dark/light error background token', () => {
+    const model = new TranscriptModel();
+    model.apply({ type: 'tool_use', data: { id: 'failed', name: 'bash', input: { command: 'false' } } });
+    model.apply({ type: 'tool_result', data: { id: 'failed', result: '[Exit code: 1]\nfailed output', error: true } });
+
+    const dark = renderTranscript(model, { ...DEFAULT_RENDER_OPTIONS, width: 64, theme: DARK_THEME_TAGS });
+    expect(dark).toContain('{52-bg}');
+    expect(dark).toContain('{/52-bg}');
+    expect(strip(dark).split('\n').filter((line) => line.includes('bash') || line.includes('failed output'))
+      .every((line) => line.length === 64)).toBe(true);
+
+    const light = renderTranscript(model, { ...DEFAULT_RENDER_OPTIONS, theme: LIGHT_THEME_TAGS });
+    expect(light).toContain('{224-bg}');
   });
 });
 
@@ -274,9 +343,9 @@ describe('rendered transcript', () => {
     // own label while a head's body was indented.
     expect(lines).toEqual([
       '└ ✔ Read 2 files',
-      '  ├ a.ts [-]',
+      '  ├ a.ts [+ details · Ctrl+T]',
       '  │   A',
-      '  └ b.ts [-]',
+      '  └ b.ts [+ details · Ctrl+T]',
       '      B',
     ]);
   });
@@ -337,7 +406,7 @@ describe('rendered transcript', () => {
     expect(folded).toContain('nothing to commit, working tree clean');
     // One output line behind a one-line budget: nothing is hidden, so the
     // marker that used to count the envelope away is gone too.
-    expect(folded).not.toContain('[+ ');
+    expect(folded).toContain('[+ details · Ctrl+T]');
     expect(folded).toContain('· 0.2s');
 
     const expanded = strip(renderTranscript(model, DEFAULT_RENDER_OPTIONS));

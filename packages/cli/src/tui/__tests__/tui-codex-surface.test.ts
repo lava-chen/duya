@@ -1,12 +1,11 @@
 /**
- * The two codex surfaces: a filled composer and a filled submitted prompt.
+ * The submitted prompt band inspired by codex.
  *
  * ## What is being learned
  *
- * codex paints the input box as a solid block (`chat_composer.rs` fills the
- * whole composer rectangle with `user_message_style()`) and paints a prompt
- * the user already sent as a band across the pane with a dim `› ` in front of
- * the text (`history_cell/messages.rs`, `UserHistoryCell`).
+ * Codex paints a prompt the user already sent as a band across the pane with
+ * a dim `› ` in front of the text (`history_cell/messages.rs`,
+ * `UserHistoryCell`). The live composer remains transparent to the terminal.
  *
  * duya had neither, because its tag vocabulary only ever described a
  * FOREGROUND: `colorFromTagBody` knew `-fg` and nothing else, so there was no
@@ -23,24 +22,18 @@
  * and the same bytes are what codex asks for.
  */
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { PassThrough, Writable } from 'stream';
 
 import { renderMarkup } from '../screen/own/markup.js';
 import { tagsToSpans } from '../core/tags.js';
-import { OwnScreenSurface } from '../screen/own/surface.js';
 import { TranscriptModel } from '../blocks.js';
 import { renderTranscript } from '../transcript-view.js';
 import { TUIApp } from '../TUIApp.js';
 import { MIN_RENDER_INTERVAL_MS } from '../render-scheduler.js';
 import { visibleWidth } from '../width.js';
-import { DARK_THEME_TAGS, LIGHT_THEME_TAGS, resolveComposerBackground } from '../theme.js';
 
 const OPTIONS = { expanded: false, showToolResults: true, toolResultLines: 5 };
-
-afterEach(() => {
-  vi.unstubAllEnvs();
-});
 
 /** Drop the tags so a layout assertion reads the text a user sees. */
 function strip(text: string): string {
@@ -77,90 +70,7 @@ describe('the background slot', () => {
   });
 });
 
-describe('the composer background choice', () => {
-  it('keeps the themed fill by default', () => {
-    expect(resolveComposerBackground(DARK_THEME_TAGS, {})).toBe('236-bg');
-    expect(resolveComposerBackground(LIGHT_THEME_TAGS, {})).toBe('255-bg');
-  });
-
-  it('leaves the terminal background untouched in transparent mode', () => {
-    const env = { DUYA_TUI_COMPOSER_BG: 'transparent' };
-    expect(resolveComposerBackground(DARK_THEME_TAGS, env)).toBeUndefined();
-    expect(resolveComposerBackground(LIGHT_THEME_TAGS, env)).toBeUndefined();
-  });
-});
-
-describe('the composer band', () => {
-  function makeSurface() {
-    let outputText = '';
-    const output = new Writable({
-      write(chunk, _encoding, callback) {
-        outputText += Buffer.from(chunk).toString('utf8');
-        callback();
-      },
-    });
-    const surface = new OwnScreenSurface({
-      output,
-      getSize: () => ({ columns: 40, rows: 10 }),
-      statusRows: 1,
-      overlayWidth: '70%',
-      unicodeBox: true,
-    });
-    return { surface, outputText: () => outputText };
-  }
-
-  const flushed = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
-
-  it('fills the whole input region in the full-screen surface', async () => {
-    const { surface, outputText } = makeSurface();
-    surface.attachAll();
-    surface.update('input', { lines: ['hello'], height: 3, background: '236-bg' });
-    surface.render();
-    await flushed();
-
-    // The band's own parameter reaches the terminal, and it reaches the row
-    // past the text: the fill covers the region, not just the characters.
-    expect(outputText()).toContain('\x1b[48;5;236m');
-    surface.destroy();
-  });
-
-  it('paints the rules on the band as well', async () => {
-    const { surface, outputText } = makeSurface();
-    surface.attachAll();
-    surface.update('input', { lines: ['hello'], height: 3, background: '236-bg', borderColor: 'gray' });
-    surface.render();
-    await flushed();
-
-    // The rule carries the fill too, or the band would be cut in half by the
-    // composer's own frame.
-    expect(outputText()).toContain('\x1b[90;48;5;236m');
-    surface.destroy();
-  });
-
-  it('leaves a region without a background untouched', async () => {
-    const { surface, outputText } = makeSurface();
-    surface.attachAll();
-    surface.update('input', { lines: ['hello'], height: 3 });
-    surface.render();
-    await flushed();
-
-    expect(outputText()).not.toContain('48;5;');
-    surface.destroy();
-  });
-
-  it('accepts an explicit transparent background', async () => {
-    const { surface, outputText } = makeSurface();
-    surface.attachAll();
-    surface.update('input', { lines: ['hello'], height: 3, background: null });
-    surface.render();
-    await flushed();
-
-    expect(outputText()).not.toContain('48;5;');
-    surface.destroy();
-  });
-});
-
-describe('the composer band in the inline screen model', () => {
+describe('the live composer background', () => {
   function sink(): { stream: Writable; text: () => string } {
     const chunks: Buffer[] = [];
     const stream = new Writable({
@@ -178,27 +88,7 @@ describe('the composer band in the inline screen model', () => {
     await new Promise((resolve) => setTimeout(resolve, MIN_RENDER_INTERVAL_MS + 40));
   }
 
-  it('carries the band on the composer rows', async () => {
-    const out = sink();
-    const app = new TUIApp({
-      output: out.stream,
-      input: new PassThrough(),
-      inline: true,
-      onSubmit: () => undefined,
-    });
-    app.start();
-    await settleRendered();
-    const rows = (app as unknown as { inlineInputLines: string[] }).inlineInputLines;
-    app.stop();
-
-    // The inline model has no region to fill, so the band travels with the
-    // text: every composer row is wrapped in it.
-    expect(rows.length).toBeGreaterThan(0);
-    for (const row of rows) expect(row.startsWith('{236-bg}')).toBe(true);
-  });
-
-  it('omits the band when transparent mode is requested', async () => {
-    vi.stubEnv('DUYA_TUI_COMPOSER_BG', 'transparent');
+  it('leaves the terminal background visible in inline mode', async () => {
     const out = sink();
     const app = new TUIApp({
       output: out.stream,
@@ -215,8 +105,7 @@ describe('the composer band in the inline screen model', () => {
     for (const row of rows) expect(row).not.toContain('-bg}');
   });
 
-  it('omits the full-screen fill when transparent mode is requested', async () => {
-    vi.stubEnv('DUYA_TUI_COMPOSER_BG', 'transparent');
+  it('leaves the terminal background visible in fullscreen mode', async () => {
     const out = sink();
     const app = new TUIApp({
       output: out.stream,
@@ -225,9 +114,13 @@ describe('the composer band in the inline screen model', () => {
     });
     app.start();
     await settleRendered();
+    const fullScreen = (app as unknown as { fullScreen: { content(region: 'input'): readonly string[] } }).fullScreen;
+    const rows = fullScreen.content('input').map(String);
     app.stop();
 
-    expect(out.text()).not.toContain('48;5;');
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.join('')).not.toContain('-bg}');
+    expect(out.text()).not.toContain('48;5;236m');
   });
 });
 

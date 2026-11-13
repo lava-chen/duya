@@ -212,8 +212,9 @@ export interface ToolBlock {
    * The model streams a tool call's arguments (`tool.arguments_delta`), so for
    * a file write the text of the file exists in this buffer before the call
    * completes. It is not parsed into fields here: the preview reads what it
-   * needs leniently at render time, and the authoritative arguments replace it
-   * when the call starts.
+   * needs leniently at render time, the authoritative arguments replace it
+   * when the call starts, and an expanded tool row uses it to show the full
+   * invocation. This is separate from `command`, the unclipped shell command.
    */
   argumentText?: string;
   /**
@@ -747,6 +748,8 @@ export class TranscriptModel {
     const existing = this.toolsByCallId.get(callId);
     if (existing !== undefined) {
       if (name !== '') existing.name = name;
+      const argumentText = serializeToolArguments(input);
+      if (argumentText !== undefined) existing.argumentText = argumentText;
       const preview = buildToolPreview(existing.name, input);
       if (preview !== '') existing.preview = preview;
       const command = shellCommandOf(input);
@@ -767,6 +770,7 @@ export class TranscriptModel {
     this.closeOpenContent();
     const command = shellCommandOf(input);
     const spec = readSubagentSpec(name, input);
+    const argumentText = serializeToolArguments(input);
     const block: ToolBlock = {
       kind: 'tool',
       id: nextId('tool'),
@@ -775,6 +779,7 @@ export class TranscriptModel {
       preview: buildToolPreview(name, input),
       status: 'running',
       ...(command === undefined ? {} : { command }),
+      ...(argumentText === undefined ? {} : { argumentText }),
       ...(spec === null ? {} : { subagent: { spec, startedAtMs: at } }),
     };
     this.toolsByCallId.set(callId, block);
@@ -1271,5 +1276,19 @@ export class TranscriptModel {
     for (const block of userBlocks) this.items.push(block);
     this.contextCharCount = keptChars;
     for (const frame of frames) this.apply(frame);
+  }
+}
+
+/** Keep the complete invocation available to the disclosure renderer. */
+function serializeToolArguments(input: unknown): string | undefined {
+  if (input === undefined) return undefined;
+  try {
+    const serialized = JSON.stringify(input, null, 2);
+    // A streaming call is announced with an empty object before its argument
+    // deltas arrive. Keeping that placeholder would prefix the raw JSON
+    // fragments and make the live invocation impossible to parse.
+    return serialized === '{}' ? undefined : serialized;
+  } catch {
+    return undefined;
   }
 }

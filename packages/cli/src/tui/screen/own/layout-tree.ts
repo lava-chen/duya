@@ -26,7 +26,7 @@
  * ## Docked order is pi's, and it is load-bearing
  *
  * Top to bottom: transcript (flex), composer, completion popup, status. The
- * popup hangs BETWEEN the composer and the status row (its patch pins
+ * popup hangs BETWEEN the composer and the footer (its patch pins
  * `bottom: STATUS_ROWS`, the composer's `composerBottom` = status + popup) —
  * so opening the popup lifts the composer by exactly the popup's height, and
  * every docked box finds its top by docking upward from the bottom edge.
@@ -37,7 +37,7 @@ import { distributeLayout } from '../../core/layout.js';
 export interface RegionLayoutInput {
   readonly rows: number;
   readonly columns: number;
-  /** The status region's height (1 in the fullscreen TUI). */
+  /** The status region's height, including the location and activity rows. */
   readonly statusRows: number;
   /** The composer's box height, borders included, as the input patch paints it. */
   readonly composerHeight: number;
