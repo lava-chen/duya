@@ -1,8 +1,8 @@
 # CLI TUI 输入、选择、工具详情与消息色彩
 
 状态：active。负责人：本会话。更新：2026-11-13。
-分支：`codex/tui-color-rendering`；当前实现提交：`ce51a12a877b3ae4589441002029cc8847d7e63a`。worktree：`/home/lavachen/.codex/worktrees/tui-cursor-selection/duya`。
-base：`6d6ea333fbbb3567e55dec5ca80ec010a77ba6ef`。独占路径：`packages/cli/src/chat.ts`、`packages/cli/src/tui/**` 与本文档。
+分支：`codex/tui-color-rendering`；实现提交：`2587b062b948f9a15ec765511f67726e88d4cb66`。worktree：`/home/lavachen/.codex/worktrees/tui-cursor-selection/duya`。
+base：`6d6ea333fbbb3567e55dec5ca80ec010a77ba6ef`。独占路径：`packages/agent-protocol/src/background-tasks.ts`、`packages/cli/src/chat.ts`、`packages/cli/src/tui/**`、`packages/host/src/{background-task-index.ts,background-task-routes.ts,http-client.ts,local-host.ts,run-execution.ts}` 与本文档。
 
 ## 目标与边界
 
@@ -13,7 +13,7 @@ base：`6d6ea333fbbb3567e55dec5ca80ec010a77ba6ef`。独占路径：`packages/cli
 - 为消息渲染定义基于语义角色与 256 色号的色彩体系；本轮记录方案，后续按该体系逐步迁移渲染器。
 - 精简工作台侧栏为单面板与两个会话入口；显示模式菜单只保留极简、默认、详细；路径和活动状态置于输入框下方的两行 footer。
 - 对照 Pi 扩展 API 记录 Duya 插件 UI 扩展的可行接口边界；本轮先形成合同建议，不新增通用插件 UI API。
-- 本轮仅改 CLI TUI，不改 Host、协议或 Desktop UI。
+- 子代理入口扩展到 Host 本地 background-task API 与协议：点击后使用标准 transcript block 渲染运行期进度；完成后读取独立 child session 的持久化 transcript；Ctrl+K 通过 parent worker 的 `subagent:kill` 停止当前查看的 running child。暂不实现向 child 发送消息或 child 独立输入框。
 
 关联：[Pi / Duya TUI 对照](../../references/pi-tui-workbench.md)、[TUI 全屏框架](2026-11-11-tui-fullscreen-framework.md)。
 
@@ -26,6 +26,8 @@ base：`6d6ea333fbbb3567e55dec5ca80ec010a77ba6ef`。独占路径：`packages/cli
 - 颜色角色不依赖终端自定义 ANSI 色；正文、弱化文本、Markdown、工具输出和状态色均有明确语义 token 与 dark/light 映射。
 - 运行受影响的 CLI TUI 检查及仓库要求的类型/架构门禁；记录 SHA、dirty 范围、环境、命令和结果。
 - 光标闪烁策略、文本选择按键/鼠标语义以用户回复为准。
+- 活动 subagent 使用与主 transcript 相同的工具展开、滚动、搜索与显示样式；滚动上移暂停跟随，Ctrl+End 恢复；Ctrl+K 仅在查看 subagent 时发送停止命令。
+- Host 只接受属于指定 parent session 且仍为 running 的 subagent task stop 请求；其他 task、未知 task 与终态 task 不执行停止。
 
 ## 进度
 
@@ -43,6 +45,7 @@ base：`6d6ea333fbbb3567e55dec5ca80ec010a77ba6ef`。独占路径：`packages/cli
 - [x] 将语义 `text` 色号应用到 assistant 普通正文、代码块、diff 上下文与表格。
 - [x] 将活动模型的 context window 通过模型目录回退值接入工作台侧栏，显示 `/` 后的预算总量。
 - [x] 将工具详情的点击区域扩至整块可见内容；鼠标悬停时按主题绘制临时灰底，拖选仍可用。
+- [x] 将 subagent 进度投影到同一 transcript renderer；结束时回读 child session transcript；加入经 Host task 索引校验的 Ctrl+K stop API。
 - [x] 展开时避免标题摘要、Bash 命令、Todo JSON 和文件 diff 输入重复呈现。
 
 ## 发现与决策
@@ -112,7 +115,9 @@ base：`6d6ea333fbbb3567e55dec5ca80ec010a77ba6ef`。独占路径：`packages/cli
 | `ce51a12a877b3ae4589441002029cc8847d7e63a` | Linux x64 / Node 26.13.0 | 5 个 TUI 测试文件；全量 `packages/cli/src/tui/__tests__`；`npm run -w @duya/cli typecheck`; `npm run typecheck:all`; `npm run architecture:check`; `npm run build:cli-dev`; `git diff --check` | 5 files / 113 tests passed；全 TUI 93 files / 1209 passed、1 expected fail；CLI typecheck、typecheck:all、architecture、CLI/worker build、diff check 均 exit 0；Host 生成 bundle 副作用已还原 | 原有 expected case 是 `tui-file-diff-stream.test.ts` 预览用例；工具 hover、跨块点击收起、去重均有测试覆盖；已提交，待推送 |
 | PR #634 head `ae47783e8de57049e63345cfc683969658efb227` | GitHub Actions run `43364011839` | `gh pr view 634 --json headRefOid,statusCheckRollup` | PR open/draft；test scope PASS；architecture、test、typecheck 当时 IN_PROGRESS | 此 head 含已推送的工具交互提交 `ce51a12a` 与计划记录 |
 | Follow-up dirty slice on `codex/tui-color-rendering` | Linux x64 / Node 26.13.0 | `npm run -w @duya/cli typecheck`; `npm run architecture:check`; `npm run build:cli-dev`; final `npm run build:cli-bundle`; `git diff --check` | CLI typecheck exit 0; architecture exit 0 (no new violations); both builds exit 0; diff check clean; generated Host worker bundle restored; no tests run | Full-screen activity and all background tasks moved to sidebar; task clicks open task output or subagent progress panel |
+| `9fc6e46d7f8a8748d1d969e19f1dc97fa133c919` + dirty subagent workspace slice | Linux x64 / Node 26.13.0 | `npm run build:packages`; `npm run typecheck:all`; `npm run architecture:check`; `npm run build:cli-dev`; `git diff --check` | package build, full typecheck, architecture (no new violations), CLI/worker bundle and CLI bundle exit 0; diff check clean. `typecheck:all` also runs its built-in 4-case eval recorder check; no standalone test suite or PTY/UI interaction run. Generated tracked Host worker bundle changes restored. | Protocol/Host/CLI implementation compiles; PR #634 remains draft; worktree dirty paths listed above plus this plan |
+| `2587b062b948f9a15ec765511f67726e88d4cb66` | Linux x64 / Node 26.13.0 | `npm run -w @duya/cli typecheck`; `npm run -w @duya/host typecheck`; `git diff --check` | CLI and Host typecheck exit 0; diff check clean; no standalone tests or live TUI run | Source changes committed; documentation update remains dirty; not yet pushed |
 
 ## 接续 / 结果
 
-输入、选择、回底按钮、工具行详情、单面板工作台、三档显示和输入框下方的两行 footer 已实现。Pi 插件 UI 槽位与 Duya 合同建议已写入参考文档；通用插件 UI API 仍未实施。PR #631 已按用户要求合并到 master，临时全局 CLI 已构建。颜色、Context 分母、工具 hover/disclosure 以及本次侧栏活动/任务入口和 subagent 进度面板均在 `codex/tui-color-rendering`，待提交并推送至 draft PR #634。侧栏不再显示模型、provider、effort；全屏底栏使用直接 model label，避免固定 28 字符截断。CLI typecheck、architecture check、CLI/worker build、CLI bundle 和 diff check 已通过；本次未运行测试，PR 未经用户授权不合并。
+输入、选择、回底按钮、工具行详情、单面板工作台、三档显示、两行 footer 与 subagent transcript workspace 已实现。子任务实时文本、thinking、tool use/result 映射到通用转录 block；完成后加载 child session 持久化记录。滚动控制沿用主 transcript，Ctrl+End 恢复跟随；Ctrl+K 只对正在运行且属于当前 parent session 的 subagent 请求停止。Pi 插件 UI 槽位与 Duya 合同建议已写入参考文档；通用插件 UI API 仍未实施。PR #631 已按用户要求合并到 master，临时全局 CLI 已构建。代码提交 `2587b062` 已创建，计划记录待提交；随后推送到 draft PR #634。未获授权不合并。全仓类型检查、架构检查、CLI/worker 构建、CLI bundle 与 diff check 通过；未运行独立 TUI 测试、PTY 或真实 UI 验收。
