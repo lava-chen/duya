@@ -119,8 +119,10 @@ describe('the working tail', () => {
     expect([...out.text()].some((ch) => SPINNER_UNICODE.includes(ch))).toBe(true);
   });
 
-  it('appears in the full-screen status line while a turn runs', async () => {
+  it('appears in the full-screen Workbench while a turn runs', async () => {
     const { app, out } = makeApp({ busy: true });
+    // The full-screen activity spinner is rendered in the Workbench sidebar.
+    Object.assign(out.stream, { columns: 140, rows: 40 });
     app.start();
     await settleRendered();
     app.stop();

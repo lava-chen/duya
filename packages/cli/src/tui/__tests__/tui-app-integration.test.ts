@@ -468,8 +468,11 @@ describe('TUIApp integration', () => {
     app.stop();
   });
 
-  it('shows the active task state and tool progress in the status bar', async () => {
+  it('shows the active task state and tool progress in the Workbench', async () => {
     const { app, out } = makeApp();
+    // Activity and its spinner live in the Workbench sidebar, which is only
+    // mounted once the terminal is wide enough to show the second pane.
+    Object.assign(out.stream, { columns: 140, rows: 40 });
     app.start();
     app.setBusy(true);
     app.push({ type: 'thinking_delta', data: { content: 'planning' } });
