@@ -1,7 +1,7 @@
 # CLI TUI 输入、选择、工具详情与消息色彩
 
 状态：active。负责人：本会话。更新：2026-11-13。
-分支：`codex/tui-color-rendering`；当前 head：`1f794c09331f19cad97e48a3513ee9d1daf7f45b`。worktree：`/home/lavachen/.codex/worktrees/tui-cursor-selection/duya`。
+分支：`codex/tui-color-rendering`；当前实现提交：`ce51a12a877b3ae4589441002029cc8847d7e63a`。worktree：`/home/lavachen/.codex/worktrees/tui-cursor-selection/duya`。
 base：`6d6ea333fbbb3567e55dec5ca80ec010a77ba6ef`。独占路径：`packages/cli/src/chat.ts`、`packages/cli/src/tui/**` 与本文档。
 
 ## 目标与边界
@@ -107,8 +107,8 @@ base：`6d6ea333fbbb3567e55dec5ca80ec010a77ba6ef`。独占路径：`packages/cli
 | PR #631 head `cb15fe5493b7b67cda18515c1e0d0db44dbcc933` | GitHub Actions run `43210652815` | `gh pr checks 631`; `gh run view 43210652815 --job 131157218167 --log-failed` | architecture / test scope / typecheck / build 均 PASS；test FAIL，仍是 `tui-file-diff-stream.test.ts` 同 6 项、同一错误签名 | PR 仍为 OPEN / DRAFT；未合并 |
 | PR #631 head `9a381c5e2c5b96e35681aba9f3afd68d04efbfef` | GitHub Actions run `43211687631` | `gh pr checks 631` | architecture / test scope / typecheck / build 均 PASS；test FAIL，仍是 `tui-file-diff-stream.test.ts` 同 6 项 | 这是仅含验证记录的文档提交；运行时代码仍是 `cb15fe549` |
 | `1f794c09331f19cad97e48a3513ee9d1daf7f45b` | Linux x64 / Node 26.13.0；GitHub Actions run `43361602905` | 4 个 TUI 测试文件；`npm run typecheck:all`; `npm run architecture:check`; `npm run build:cli-dev`; `python3 scripts/smoke-tui-pty.py functional ...`；`git diff --check`; `gh pr view 634 --json headRefOid,statusCheckRollup` | 92 tests passed；typecheck exit 0；architecture exit 0（无新增违规）；CLI/worker bundle exit 0；diff check clean；PTY 9/10 检查通过，其中路径检查因脚本硬编码旧分支名 `codex/tui-cursor-selection` 而失败，实际输出为当前工作区路径与分支；PR architecture / test scope PASS，typecheck / test / build 当时 IN_PROGRESS | draft PR [#634](https://github.com/lava-chen/duya/pull/634)，当前 head 与此 SHA 一致；不合并 |
-| `7083a0f1` + 当前工具交互改动 | Linux x64 / Node 26.13.0 | 5 个 TUI 测试文件；全量 `packages/cli/src/tui/__tests__`；`npm run -w @duya/cli typecheck`; `npm run typecheck:all`; `npm run architecture:check`; `npm run build:cli-dev`; `git diff --check` | 5 files / 113 tests passed；全 TUI 93 files / 1209 passed、1 expected fail；CLI typecheck、typecheck:all、architecture、CLI/worker build、diff check 均 exit 0；Host 生成 bundle 副作用已还原 | 失败的 expected case 是原有 `tui-file-diff-stream.test.ts` 预览用例；工具 hover、跨块点击收起、去重已由交互与渲染测试覆盖；源代码仍未提交 |
+| `ce51a12a877b3ae4589441002029cc8847d7e63a` | Linux x64 / Node 26.13.0 | 5 个 TUI 测试文件；全量 `packages/cli/src/tui/__tests__`；`npm run -w @duya/cli typecheck`; `npm run typecheck:all`; `npm run architecture:check`; `npm run build:cli-dev`; `git diff --check` | 5 files / 113 tests passed；全 TUI 93 files / 1209 passed、1 expected fail；CLI typecheck、typecheck:all、architecture、CLI/worker build、diff check 均 exit 0；Host 生成 bundle 副作用已还原 | 原有 expected case 是 `tui-file-diff-stream.test.ts` 预览用例；工具 hover、跨块点击收起、去重均有测试覆盖；已提交，待推送 |
 
 ## 接续 / 结果
 
-输入、选择、回底按钮、工具行详情、单面板工作台、三档显示和输入框下方的两行 footer 已实现。Pi 插件 UI 槽位与 Duya 合同建议已写入参考文档；通用插件 UI API 仍未实施。PR #631 已按用户要求合并到 master，临时全局 CLI 已构建。颜色和 Context 分母改动在 draft PR #634；本轮工具详情修复待提交后推送到同一 PR。工作区当前基于 PR #634 的 `7083a0f1`，待提交路径见 `git status`；最近全 TUI 93 文件中 1209 项通过、1 项 expected fail。typecheck、架构门禁和 CLI/worker 构建通过；PTY 的路径断言因脚本硬编码旧分支名而失败，实际输出路径正确。PR 未经用户授权不合并。
+输入、选择、回底按钮、工具行详情、单面板工作台、三档显示和输入框下方的两行 footer 已实现。Pi 插件 UI 槽位与 Duya 合同建议已写入参考文档；通用插件 UI API 仍未实施。PR #631 已按用户要求合并到 master，临时全局 CLI 已构建。颜色、Context 分母和工具 hover/disclosure 改动已提交到 `codex/tui-color-rendering`；源码提交 `ce51a12a` 待推送到 draft PR #634。工作区无未提交代码；typecheck、架构门禁和 CLI/worker 构建通过。PTY 的路径断言因脚本硬编码旧分支名而失败，实际输出路径正确。PR 未经用户授权不合并。
