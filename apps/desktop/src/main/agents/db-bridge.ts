@@ -471,7 +471,7 @@ export async function dispatchDbAction(
         return writeRunReceiptOnWire({ state: 'unavailable', runId, reason: RUN_UNAVAILABLE_REASON });
       }
       const releaseCheckoutAdmission = action === 'run:create'
-        ? getDesktopCheckoutService().reserveRun(String(p.sessionId ?? ''),
+        ? await getDesktopCheckoutService().reserveRun(String(p.sessionId ?? ''),
           p.manifest && typeof p.manifest === 'object' && 'cwd' in p.manifest ? String(p.manifest.cwd) : undefined) : () => {};
       const receipt = await (async () => { try { return await controlPlane.serve(
         { schema: COMMAND_SCHEMA_VERSION, action, payload: p },
