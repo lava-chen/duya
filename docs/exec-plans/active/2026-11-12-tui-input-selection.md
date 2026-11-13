@@ -90,6 +90,7 @@ base：`6d6ea333fbbb3567e55dec5ca80ec010a77ba6ef`。独占路径：`packages/cli
 - 展开详情时标题改为工具名或保留带语法色的 Bash 命令，已可在标题读取的命令/路径不再打印第二次；Todo 使用 checklist 作为输入投影，文件 diff 使用结构化 diff，因此不重复原始列表或变更内容。
 - 2026-11-13 跟进：全屏模式的活动状态与运行中的 subagent 列表移到 Workbench 侧栏顶部；点击 subagent 项目读取 Host 已有的进度日志，并打开可滚动的消息/工具事件面板。侧栏移除模型、provider、effort，只保留 Context 数值。底部状态行直接使用 model label，不再先把状态文本固定截成 28 字符；行宽仍不足时才显示截断省略号。此消息面板展示最近进度日志快照，不是独立子 session 的可交互输入界面。
 - `workspace_get_context` 工具当前不可用，按版本化计划和 Git 状态对账；共享检出干净，HEAD 与 `origin/master` 一致。
+- 2026-11-13 接续记录：代码与计划提交 `cec2137a34fa1362259c9b8e7909056e4c4d129c` 已推送；分支 `codex/tui-color-rendering`，base `master` / `6d6ea333fbbb3567e55dec5ca80ec010a77ba6ef`，worktree 当前干净。PR #634 仍 OPEN / DRAFT，推送后 GitHub 尚未返回检查项。CLI typecheck、architecture check、CLI/worker build、CLI bundle、diff check 均 exit 0；没有运行测试；没有合并或安装全局 CLI。下一步查看 PR 必需检查并由用户在终端评估侧栏消息面板；未获授权前不合并。
 
 ## 验证记录
 
