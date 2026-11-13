@@ -28,6 +28,38 @@ function fixture() {
 }
 
 describe('durable session checkout controls', () => {
+  it('recovers a pending enter journal before admitting a run', async () => {
+    const f = fixture();
+    const initial = f.service.read('session');
+    const pending = { id: 'enter-admission-recovery', command: { action: 'enter' as const, name: 'admission-recovery' }, sourceCwd: f.repo, target: null };
+    expect(f.sessions.compareAndSetExecutionLocation('session', 0, f.repo, { ...initial, revision: 1, pending })).toBe(true);
+    const provider = createCheckoutProvider();
+    const created = await provider.create({ sourceCwd: f.repo, ownerSessionId: 'session', label: 'admission-recovery', operationId: pending.id });
+    const journaled = f.service.read('session');
+    const target = { root: created.root, cwd: created.cwd, baseSha: created.baseSha, returnCwd: f.repo };
+    expect(f.sessions.compareAndSetExecutionLocation('session', journaled.revision, journaled.cwd,
+      { ...journaled, revision: journaled.revision + 1, pending: { ...pending, target } })).toBe(true);
+
+    const release = await f.service.reserveRun('session');
+    const recovered = f.service.read('session');
+    expect(recovered.pending).toBeNull();
+    expect(recovered.cwd).toBe(created.cwd);
+    expect(recovered.checkout).toMatchObject(target);
+    await expect(f.service.control('session', { action: 'exit' })).rejects.toMatchObject({ code: 'checkout_session_busy' });
+    release();
+  });
+
+  it('keeps a pending transition untouched when background work makes recovery unsafe', async () => {
+    const f = fixture();
+    const initial = f.service.read('session');
+    const pending = { id: 'enter-busy-recovery', command: { action: 'enter' as const, name: 'busy-recovery' }, sourceCwd: f.repo, target: null };
+    expect(f.sessions.compareAndSetExecutionLocation('session', 0, f.repo, { ...initial, revision: 1, pending })).toBe(true);
+    f.block(true);
+
+    await expect(f.service.reserveRun('session')).rejects.toMatchObject({ code: 'checkout_background_busy' });
+    expect(f.service.read('session').pending).toMatchObject({ id: pending.id });
+  });
+
   it('recovers a created checkout before its target was journaled without creating another', async () => {
     const f = fixture();
     const state = f.service.read('session');
@@ -87,14 +119,14 @@ describe('durable session checkout controls', () => {
     f.live.add('session');
     await expect(f.service.control('session', { action: 'enter', name: 'blocked' })).rejects.toMatchObject({ code: 'checkout_session_busy' });
     f.live.clear();
-    const release = f.service.reserveRun('session');
+    const release = await f.service.reserveRun('session');
     await expect(f.service.control('session', { action: 'enter', name: 'blocked' })).rejects.toMatchObject({ code: 'checkout_session_busy' });
     release();
     f.block(true);
     await expect(f.service.control('session', { action: 'enter', name: 'blocked' })).rejects.toMatchObject({ code: 'checkout_background_busy' });
     f.block(false);
     const pending = f.service.control('session', { action: 'enter', name: 'allowed' });
-    expect(() => f.service.reserveRun('session')).toThrow();
+    await expect(f.service.reserveRun('session')).rejects.toMatchObject({ code: 'checkout_transition_pending' });
     await pending;
   });
 
@@ -102,8 +134,8 @@ describe('durable session checkout controls', () => {
     const f = fixture();
     const entered = await f.service.control('session', { action: 'enter', name: 'clean' });
     const root = entered.state.cwd;
-    expect(() => f.service.reserveRun('session', f.repo)).toThrow(expect.objectContaining({ code: 'checkout_context_stale' }));
-    f.service.reserveRun('session', root)();
+    await expect(f.service.reserveRun('session', f.repo)).rejects.toMatchObject({ code: 'checkout_context_stale' });
+    (await f.service.reserveRun('session', root))();
     await f.service.control('session', { action: 'exit' });
     const again = await f.service.control('session', { action: 'enter', path: root });
     expect(again.state.cwd).toBe(root);
@@ -120,7 +152,7 @@ describe('durable session checkout controls', () => {
     expect(f.service.read('session').pending).toBeNull();
     await expect(f.service.control('session', { action: 'enter', name: 'bad', base: 'missing-ref' })).rejects.toMatchObject({ code: 'checkout_base_invalid' });
     expect(f.service.read('session').pending).toBeNull();
-    expect(() => f.service.reserveRun('session')()).not.toThrow();
+    (await f.service.reserveRun('session'))();
   });
 
   it('recovers an interrupted exit after its cursor was durably returned', async () => {

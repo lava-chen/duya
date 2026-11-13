@@ -31815,7 +31815,7 @@
       "format": "esm"
     },
     "packages/host/src/workspace/session-checkout-service.ts": {
-      "bytes": 23581,
+      "bytes": 24475,
       "imports": [
         {
           "path": "node:crypto",
@@ -33490,7 +33490,7 @@
       "format": "esm"
     },
     "packages/host/src/run-execution.ts": {
-      "bytes": 51565,
+      "bytes": 51577,
       "imports": [
         {
           "path": "packages/agent-protocol/src/index.ts",
@@ -43755,7 +43755,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/doctor.ts": {
-          "bytesInOutput": 97
+          "bytesInOutput": 84
         },
         "packages/agent-protocol/src/checkout-api.ts": {
           "bytesInOutput": 30
@@ -45492,7 +45492,7 @@
           "bytesInOutput": 889
         },
         "packages/memory/src/wakeup.ts": {
-          "bytesInOutput": 425
+          "bytesInOutput": 413
         },
         "packages/host/src/skills/paths.ts": {
           "bytesInOutput": 697
@@ -47397,7 +47397,7 @@
           "bytesInOutput": 3018
         },
         "packages/host/src/worker-agents-md/nested-loader.ts": {
-          "bytesInOutput": 1874
+          "bytesInOutput": 1880
         },
         "packages/host/src/worker-prompts/modules/mappers/project.ts": {
           "bytesInOutput": 684
@@ -47439,7 +47439,7 @@
           "bytesInOutput": 708
         },
         "packages/memory/src/memory_paths.ts": {
-          "bytesInOutput": 616
+          "bytesInOutput": 610
         },
         "packages/host/src/worker-prompts/dynamic/environmentPreBuildHook.ts": {
           "bytesInOutput": 611
@@ -48399,7 +48399,7 @@
           "bytesInOutput": 7356
         },
         "packages/host/src/host-runtime.ts": {
-          "bytesInOutput": 951
+          "bytesInOutput": 947
         },
         "packages/cli/src/api/plugin-client.ts": {
           "bytesInOutput": 1286
@@ -48567,7 +48567,7 @@
           "bytesInOutput": 1975
         },
         "packages/host/src/workspace/session-checkout-service.ts": {
-          "bytesInOutput": 14130
+          "bytesInOutput": 14474
         },
         "packages/host/src/skills/skill-inventory-api.ts": {
           "bytesInOutput": 1852
@@ -48819,7 +48819,7 @@
           "bytesInOutput": 1130
         },
         "packages/host/src/run-execution.ts": {
-          "bytesInOutput": 14986
+          "bytesInOutput": 14998
         },
         "packages/host/src/session-admission.ts": {
           "bytesInOutput": 1324
@@ -49602,7 +49602,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 5775672
+      "bytes": 5775999
     }
   }
 }

@@ -685,3 +685,24 @@ duya 落地边界（复用本 PR 的 Host 能力，缺的只有分支列表与 U
 E2E 既有问题的证据：同一分支两轮失败点不同（run1 点击主题切换成功后 repaint 断言超时；run2 onboarding 遮罩 `div.fixed.inset-0.z-50` 卡 15s 挡住点击）；失败用例漂移（computer-use-permissions / session-archive / plugin-ui 仅个别平台个别轮次）；邻接用例全过；master 的 build job 为 skipped——该套件在 master 上根本不跑，无近期绿基线。CI 环境 GPU 合成为 software（日志可证）。判定：Electron E2E 环境敏感 flake，与本 PR diff（不碰主题/shell/onboarding）无关，不在本 PR 修复。
 
 第三轮 CI（run 40162948714，head `b0e5b4f6`，含 180s 预算）：architecture / test scope / typecheck×3 / **test windows / test ubuntu 全绿**。macos 的 `run-turn-provider` 真 worker 用例在 180s 预算下仍超时（三连败：60s×2、180s×1）——**判定为 macos CI 确定性挂死，非预算问题**。该用例为本 PR 新增（base 分支无此文件，macos 在 base 上的绿不含它），ubuntu / windows CI 与本机 Windows 均过。挂点证据：`drainRun` 的 SSE 在 run 到达终态前不结束，即 worker 执行 enter/write/exit 轮次期间挂住；测试无 stdout 输出可供定位。本轮处置：保留 180s（消除慢机歧义）+ 清理编辑残留的尾随超时参数；**macos 挂死列为已知缺陷交下一切片调查**（入口：`drainRun`/`watchAgentRunEvents` 的终止条件与 worker 端 worktree 工具在 macos 的子进程/路径行为；/var symlink 与 realpath 一致性是候选方向）。不跳过用例、不放宽断言。build×3 的 Electron E2E 失败维持既有环境问题的结论（base 同败）。
+
+### Run admission 自动恢复中断的 checkout journal（2026-11-11）
+
+现象：主会话 `enter_worktree` 中断后，sessions 行持有 `executionLocation.pending`，下一轮在 `SessionCheckoutService.reserveRun()` 被拒绝；worker 的 `restoreExecutionLocation()` 位于 run dispatch 之后，无法修复这条 admission 前置拒绝。
+
+实现：Host admission 在同一 `changing` 互斥下调用既有幂等 `finish()` 恢复 pending journal，恢复成功后在释放切换锁前占住 run reservation。TUI/Host、Bot admission 和 Desktop `run:create` 共用该服务；背景进程、活跃 run、状态校验仍可拒绝恢复，失败时保留 journal 与 `/worktree recover` 手动入口。
+
+交付记录：owner `/root`；worktree `/home/lavachen/.codex/worktrees/checkout-auto-recovery/duya`；分支 `codex/checkout-auto-recovery`；base `2af62ce3c81b059e3e82c5b41e9f5299bdfd61fc`（master / PR #628 merge 后）；source commit `acb8aef3a`；bundle commit `51ad84296`；draft PR [#629](https://github.com/lava-chen/duya/pull/629)，CI/review 待完成，未合并。`workspace_get_context` 工具不可用；共享状态由 Git、PR #627 与 managed-worktree 清单对账。
+
+验证（Linux x64，Node v26.13.0；源改动 SHA `acb8aef3a`，构建/最终 SHA `51ad84296`）：
+
+| 命令 | 结果 |
+| --- | --- |
+| 基线 `npx vitest run packages/host/tests/workspace/session-checkout-service.test.ts` | exit 0；10 passed |
+| `npx vitest run packages/host/tests/workspace/session-checkout-service.test.ts packages/host/tests/run-execution.test.ts packages/host/tests/run-execution-turn-contract.test.ts apps/desktop/src/main/__tests__/run-create-ack-real-bridge.test.ts apps/desktop/src/main/__tests__/desktop-native-run-closed-loop.test.ts` | exit 0；44 passed |
+| `npm run typecheck:all` | exit 0；Electron gate 无新增错误，164 个既有基线错误 |
+| `npm run architecture:check` | exit 0；无新增边界违规 |
+| `npm run electron:build` | exit 0；worker、CLI、Gateway 与 Electron main 构建完成 |
+| `npm run bundle:verify` | exit 0；FRESH，0/1121 bundle inputs changed |
+
+实现与验证完成；工作树提交后干净，忽略的本地依赖/构建产物未提交。独立依赖安装首次因 Puppeteer Chrome 缓存目录不完整失败；设置 `PUPPETEER_SKIP_DOWNLOAD=true` 重试后成功，未修改依赖清单。下一步：等待 #629 最新 head 的必需 CI 和 review；未经授权不合并。

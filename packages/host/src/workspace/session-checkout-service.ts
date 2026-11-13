@@ -69,11 +69,32 @@ export class SessionCheckoutService {
   reclaim(root: string) { return this.provider.reclaim(root); }
   private backgroundBusy(cwd: string): Promise<boolean> { return Promise.resolve((this.options.backgroundBusy ?? hasBackgroundCheckoutLease)(cwd)); }
 
-  /** Held throughout asynchronous run admission, so a switch cannot race a new run. */
-  reserveRun(id: string, expectedCwd?: string): () => void {
+  /** Recover a durable switch before admission, then hold the reservation through run creation. */
+  async reserveRun(id: string, expectedCwd?: string): Promise<() => void> {
     if (!this.options.sessions.get(id)) return () => {};
-    if (this.changing.has(id) || this.read(id).pending) throw new SessionCheckoutError('checkout_transition_pending', 'Recover or finish the checkout transition before starting a run.');
-    const cursor = this.read(id);
+    if (this.changing.has(id)) throw new SessionCheckoutError('checkout_transition_pending', 'A checkout operation is still in progress.');
+
+    let cursor = this.read(id);
+    if (cursor.pending) {
+      // A journal survives worker or Host interruption. Keep the same lock that
+      // serializes explicit checkout controls while replaying its idempotent
+      // recovery path, so another switch or run cannot race the repair.
+      this.changing.add(id);
+      try {
+        await this.assertActor(id);
+        cursor = this.read(id);
+        if (cursor.pending) await this.finish(id, cursor);
+        cursor = this.read(id);
+        if (cursor.pending) throw new SessionCheckoutError('checkout_transition_pending', 'Recover or finish the checkout transition before starting a run.');
+        return this.reserveRunCursor(id, cursor, expectedCwd);
+      } finally {
+        this.changing.delete(id);
+      }
+    }
+    return this.reserveRunCursor(id, cursor, expectedCwd);
+  }
+
+  private reserveRunCursor(id: string, cursor: SessionCheckoutState, expectedCwd?: string): () => void {
     if (expectedCwd !== undefined && cursor.revision > 0 && !samePath(expectedCwd, cursor.cwd)) throw new SessionCheckoutError('checkout_context_stale', 'The run was assembled before the execution directory changed. Start a new turn.');
     this.starting.set(id, (this.starting.get(id) ?? 0) + 1);
     let released = false;
