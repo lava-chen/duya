@@ -553,7 +553,7 @@ describe('provider probe', () => {
     expect(JSON.stringify(result)).not.toContain(OPENAI_KEY);
   });
 
-  it('uses the anthropic headers for that family and its own list path', async () => {
+  it('does not use a missing model-list endpoint to test a static Anthropic provider', async () => {
     const root = tmpRoot();
     seed(
       root,
@@ -562,7 +562,7 @@ describe('provider probe', () => {
         'id = "minimax-cn"',
         'name = "MiniMax CN"',
         'providerType = "anthropic"',
-        'baseUrl = "https://api.minimaxi.com/anthropic"',
+        'baseUrl = "https://api.minimax.cn/anthropic"',
         '',
       ].join('\n'),
       { 'providers.minimax-cn.apiKey': 'anthropic-style-key-1234' },
@@ -575,8 +575,41 @@ describe('provider probe', () => {
 
     const result = await api.testProvider('minimax-cn');
 
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'not_testable',
+      message: expect.stringContaining('no model-list endpoint'),
+      modelIds: ['MiniMax-M3', 'MiniMax-M3.1-Flash', 'MiniMax-M2.7', 'MiniMax-M2.5', 'MiniMax-M2.1', 'MiniMax-M2'],
+    });
+    expect(seen).toEqual([]);
+  });
+
+  it('uses Anthropic auth headers for a custom provider that exposes model listing', async () => {
+    const root = tmpRoot();
+    seed(
+      root,
+      [
+        '[providers.custom-anthropic]',
+        'id = "custom-anthropic"',
+        'name = "Custom Anthropic"',
+        'providerType = "anthropic"',
+        'baseUrl = "https://provider.example.test"',
+        '',
+      ].join('\n'),
+      { 'providers.custom-anthropic.apiKey': 'anthropic-style-key-1234' },
+    );
+    const seen: { url: string; headers: Record<string, string> }[] = [];
+    const api = createHostLocalProviderManagementApi({
+      root,
+      fetchImpl: fakeFetch(() => ({ status: 200, body: { data: [{ id: 'custom-model' }] } }), seen),
+    });
+
+    const result = await api.testProvider('custom-anthropic');
+
     expect(result.ok).toBe(true);
+    expect(seen[0]!.url).toBe('https://provider.example.test/v1/models');
     expect(seen[0]!.headers['x-api-key']).toBe('anthropic-style-key-1234');
+    expect(seen[0]!.headers['anthropic-version']).toBe('2023-06-01');
     expect(seen[0]!.headers.Authorization).toBeUndefined();
   });
 
