@@ -182,6 +182,13 @@ function occurrences(pattern: RegExp, text: string = code()): number {
  * to turn 2, which is the specific way the seam could have broken it (see
  * `refreshTurnSystemPrompt`'s doc comment on why the recomputed prefix REPLACES
  * rather than appends).
+ *
+ * The tool list below carries ONE edit from the recorded observation: it was
+ * recorded with a fourth name, `progress_update` — the private control tool
+ * the Host appended to the turn's surface. That tool was removed on
+ * 2026-11-13, and removing it is what makes the edit necessary: the recorded
+ * cycle advertised a tool the product no longer has. Every other name is
+ * still exactly what the pre-refactor cycle advertised.
  */
 const PRE_REFACTOR_TOOL_NAMES = ['probe_ok', 'tool_catalog', 'tool_invoke'];
 const PRE_REFACTOR_TURN1_ROLES = ['user'];
@@ -582,7 +589,7 @@ describe('the seam did not change what the cycle sends the model', () => {
     expect(run.seen[0].roles).not.toEqual(PRE_REFACTOR_TURN1_ROLES);
   });
 
-  it('reproduces the legacy tool list EXACTLY, on the surface AND on the guard', async () => {
+  it('reproduces the legacy tool list (minus the removed tool) on the surface AND on the guard', async () => {
     // Plan 610 D1 CLOSED the gap this file used to pin: the legacy advertised
     // `['probe_ok', 'progress_update', 'tool_catalog', 'tool_invoke']` and the
     // engine advertised the same list MINUS `progress_update`, because

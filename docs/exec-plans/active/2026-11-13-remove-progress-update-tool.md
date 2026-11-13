@@ -78,7 +78,7 @@
 | `6d6ea333` + 本次改动 | 同上 | `npx vitest run packages/host/tests/run-turn-provider-integration.test.ts` | 0 | 1 file / 8 tests passed（真 worker + 真 provider；含「模型工具面无 `progress_update`」负向断言） |
 | `6d6ea333` + 本次改动 | 同上 | `npx vitest run packages/agent-protocol/test` | 0 | 29 files / 465 tests passed |
 | `6d6ea333` + 本次改动 | 同上 | `npx vitest run packages/ui/src/components/chat/ToolActionsGroup.test.tsx packages/ui/src/components/chat/tools/__tests__/buildGroupDisplayTitle.test.ts packages/ui/src/lib/stream-session-manager.test.ts` | 0 | 3 files / 56 passed / 2 skipped |
-| `6d6ea333` + 本次改动 | 同上 | `npm run bundle:worker` | 0 | `worker-entry.js` 5.51 MB；bundle 内 `progress_update` 出现次数 **0**；metafile diff 只显示 `tool-group-progress.ts` 模块移除与 4 个改动模块的字节数变化（无工具链churn） |
+| `6d6ea333` + 本次改动 | 同上 | `npm run bundle:worker` | 0 | `worker-entry.js` 5.51 MB；bundle 内 `progress_update` 出现次数 **0**；metafile 模块数 1765 → 1764（恰好少一个模块），字节数变化的只有 3 个改动模块（`worker-run-composition.ts` / `worker-engine-driver.ts` / `worker-session-runtime.ts`；第 4 个改动文件 `worker-run-session-port.ts` 是纯类型文件，不进 bundle，metafile 无条目）→ 无工具链 churn |
 | `6d6ea333` + 本次改动 | 同上 | `grep -rn "progress_update\|PROGRESS_UPDATE\|progressToolName" packages/ apps/ --include=*.ts --include=*.tsx` | 0 | 仅命中测试中的历史注释与**负向断言**；生产代码 0 命中 |
 
 ## 接续 / 结果

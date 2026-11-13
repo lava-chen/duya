@@ -230,9 +230,15 @@ export const MESSAGE_CONTENT_UNION_IS_COMPLETE: MessageContentUnionIsComplete = 
 /**
  * Where a tool group progress title came from.
  *
- * Three sources, one per producer: the provider narrating its own tool
- * progress, a model-invoked progress tool, and the deterministic fallback
- * used when neither fires. Closed because the renderer switches on it.
+ * Two sources, one per producer: the provider narrating its own tool
+ * progress, and the deterministic fallback used when the provider does not.
+ * Closed because the renderer switches on it.
+ *
+ * A third producer existed until 2026-11-13 — a private model-invoked
+ * control tool that set a group's title — and its source was removed with
+ * the tool itself. A transcript persisted while it existed carries that
+ * value; it degrades to `tool_fallback` at the renderer, which switches on
+ * `provider_commentary` and treats every other value as the fallback.
  *
  * Declared here rather than in `./tool-result.ts` because `ToolUseContent`
  * above already uses it, and `tool-result.ts` imports from this file — the

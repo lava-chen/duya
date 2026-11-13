@@ -135,7 +135,7 @@ export function composeLegacyRunSources(agent: EngineProductSession, host: Legac
     const runFork = host.runFork;
     const shellOutputStops = host.shellOutputStops;
     /** Stop watching one call's output. Idempotent, and safe for a call that
-     *  never subscribed (the progress tool, and every host that passes no map). */
+     *  never subscribed (every host that passes no map). */
     const stopShellOutput = (callId: string): void => {
         if (shellOutputStops === undefined) return;
         const stop = shellOutputStops.get(callId);
