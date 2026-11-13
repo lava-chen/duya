@@ -14,6 +14,7 @@ base：`6d6ea333fbbb3567e55dec5ca80ec010a77ba6ef`。独占路径：`packages/age
 - 精简工作台侧栏为单面板与两个会话入口；显示模式菜单只保留极简、默认、详细；路径和活动状态置于输入框下方的两行 footer。
 - 对照 Pi 扩展 API 记录 Duya 插件 UI 扩展的可行接口边界；本轮先形成合同建议，不新增通用插件 UI API。
 - 子代理入口扩展到 Host 本地 background-task API 与协议：点击后使用标准 transcript block 渲染运行期进度；完成后读取独立 child session 的持久化 transcript；Ctrl+K 通过 parent worker 的 `subagent:kill` 停止当前查看的 running child。暂不实现向 child 发送消息或 child 独立输入框。
+- Workbench 侧栏展示当前 checkout 的 worktree/分支、未提交变更摘要，以及已有 PR 的状态；复用本地 Git 状态与既有 PR 投影，不启动额外远程查询。
 
 关联：[Pi / Duya TUI 对照](../../references/pi-tui-workbench.md)、[TUI 全屏框架](2026-11-11-tui-fullscreen-framework.md)。
 
@@ -28,6 +29,7 @@ base：`6d6ea333fbbb3567e55dec5ca80ec010a77ba6ef`。独占路径：`packages/age
 - 光标闪烁策略、文本选择按键/鼠标语义以用户回复为准。
 - 活动 subagent 使用与主 transcript 相同的工具展开、滚动、搜索与显示样式；滚动上移暂停跟随，Ctrl+End 恢复；Ctrl+K 仅在查看 subagent 时发送停止命令。
 - Host 只接受属于指定 parent session 且仍为 running 的 subagent task stop 请求；其他 task、未知 task 与终态 task 不执行停止。
+- Workbench 显示当前 session 执行目录的仓库根、分支、linked-worktree 类型与变更文件数/摘要；有 PR 投影时显示编号与状态。Git 状态不可用时明确显示 unavailable。
 
 ## 进度
 
@@ -47,6 +49,7 @@ base：`6d6ea333fbbb3567e55dec5ca80ec010a77ba6ef`。独占路径：`packages/age
 - [x] 将工具详情的点击区域扩至整块可见内容；鼠标悬停时按主题绘制临时灰底，拖选仍可用。
 - [x] 将 subagent 进度投影到同一 transcript renderer；结束时回读 child session transcript；加入经 Host task 索引校验的 Ctrl+K stop API。
 - [x] 展开时避免标题摘要、Bash 命令、Todo JSON 和文件 diff 输入重复呈现。
+- [x] 在 Workbench 加入 worktree/分支、变更摘要和 PR 状态；后台每 5 秒刷新 Git 状态并防止 session/cwd 切换后的旧结果覆盖。
 
 ## 发现与决策
 
@@ -121,4 +124,6 @@ base：`6d6ea333fbbb3567e55dec5ca80ec010a77ba6ef`。独占路径：`packages/age
 
 ## 接续 / 结果
 
-输入、选择、回底按钮、工具行详情、单面板工作台、三档显示、两行 footer 与 subagent transcript workspace 已实现。子任务实时文本、thinking、tool use/result 映射到通用转录 block；完成后加载 child session 持久化记录。滚动控制沿用主 transcript，Ctrl+End 恢复跟随；Ctrl+K 只对正在运行且属于当前 parent session 的 subagent 请求停止。Pi 插件 UI 槽位与 Duya 合同建议已写入参考文档；通用插件 UI API 仍未实施。PR #631 已按用户要求合并到 master，临时全局 CLI 已构建。代码和计划已提交并推送到 draft PR #634；GitHub 查询时 checks 列表尚为空，未合并。全仓类型检查、架构检查、CLI/worker 构建、CLI bundle 与 diff check 通过；未运行独立 TUI 测试、PTY 或真实 UI 验收。
+输入、选择、回底按钮、工具行详情、单面板工作台、三档显示、两行 footer、subagent transcript workspace 与 worktree/变更/PR 侧栏已实现。子任务实时文本、thinking、tool use/result 映射到通用转录 block；完成后加载 child session 持久化记录。滚动控制沿用主 transcript，Ctrl+End 恢复跟随；Ctrl+K 只对正在运行且属于当前 parent session 的 subagent 请求停止。Pi 插件 UI 槽位与 Duya 合同建议已写入参考文档；通用插件 UI API 仍未实施。PR #631 已按用户要求合并到 master，临时全局 CLI 已构建。
+
+PR #634 当前 head `0ddf4cf4ff5916810b4274b196252f48ae2b7f6e` 的 CI：test scope/typecheck PASS，architecture 因 Host worker bundle 未更新而 FAIL，test 因 subagent 旧行为断言与一次 spinner 断言而 FAIL。当前 dirty slice 加入 worktree/变更/PR 侧栏、刷新读取、两项过期行为断言更新，并重新生成 `packages/host/bundle/worker-entry.js` 与 `worker-metafile.json`。本地 `build:cli-dev` 和 architecture check 已通过；全仓 typecheck 仍在运行。下一步完成类型检查、提交并推送该切片，等待最新 head 全部必需 CI 与 review；通过后按用户授权合并，再从 master 构建临时全局 CLI 并切换 installer shim，保留旧 package/shim 以便回滚。真实 TUI 验收由用户在切换后的全局 CLI 上进行。

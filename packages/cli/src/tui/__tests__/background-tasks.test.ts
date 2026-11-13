@@ -379,7 +379,7 @@ describe('task presentation helpers', () => {
     expect(lines).toContain('Output is no longer available');
   });
 
-  it('does not promise a subagent transcript that the view cannot show', () => {
+  it('shows a clear empty state when no subagent messages are available', () => {
     const lines = backgroundTaskDetailLines(
       {
         id: 'sub-1',
@@ -394,7 +394,7 @@ describe('task presentation helpers', () => {
     ).join('\n');
     expect(lines).toContain('agent');
     expect(lines).toContain('Scout');
-    expect(lines).toContain('transcript is not shown here');
+    expect(lines).toContain('No subagent messages are available yet.');
   });
 });
 

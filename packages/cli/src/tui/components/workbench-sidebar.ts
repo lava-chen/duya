@@ -3,6 +3,8 @@ import { truncateToWidth } from '../width.js';
 import { escapeTags, type Styles } from '../transcript-view.js';
 import { DISPLAY_PROFILES, type DisplayProfileId } from '../display-profiles.js';
 import { formatTaskDuration, taskStatusGlyph, type BackgroundTaskView } from '../background-tasks.js';
+import { prStateLabel, prTone, type PrBadge } from '../pr-badge.js';
+import type { WorkbenchWorkspaceSummary } from '../workbench-workspace.js';
 
 export interface SidebarTarget {
   readonly id: string;
@@ -17,6 +19,8 @@ export interface WorkbenchSidebarProps {
   readonly activity: string;
   readonly activityActive: boolean;
   readonly tasks: readonly BackgroundTaskView[];
+  readonly workspace: WorkbenchWorkspaceSummary;
+  readonly pullRequest: PrBadge | null;
   readonly contextTokens: number | null;
   readonly contextBudget: number | null;
   readonly profile: DisplayProfileId | 'custom';
@@ -63,9 +67,30 @@ export class WorkbenchSidebar implements UIComponent<WorkbenchSidebarProps> {
       lines.push({ text: tone(clipped), task });
     };
     const number = (value: number | null): string => value === null ? '—' : value.toLocaleString('en-US');
+    const workspace = this.props.workspace;
     text(this.props.sessionTitle);
     action('New session', '/new');
     action('All sessions', '/sessions');
+    text('');
+    text('WORKTREE');
+    text(`${workspace.branch ?? 'detached'} · ${workspace.linkedWorktree ? 'linked worktree' : 'repository'}`);
+    text(workspace.root);
+    if (!workspace.observed) {
+      text('Git status unavailable');
+    } else if (workspace.changedFiles === 0) {
+      text('Working tree clean');
+    } else {
+      action(`${number(workspace.changedFiles)} changed files`, '/diff');
+      for (const change of workspace.changes) text(`${change.status} ${change.path}`);
+      const remaining = (workspace.changedFiles ?? 0) - workspace.changes.length;
+      if (remaining > 0) text(`+ ${remaining} more · /diff`);
+    }
+    if (this.props.pullRequest !== null) {
+      const badge = this.props.pullRequest;
+      const label = `${badge.label} · ${prStateLabel(badge.state)}`;
+      const clipped = escapeTags(truncateToWidth(`› ${label}`, width));
+      lines.push({ text: styles[prTone(badge.state)](clipped), command: '/pr' });
+    }
     text('');
     text('ACTIVITY');
     const activity = escapeTags(truncateToWidth(this.props.activity.replace(/[\r\n\t]/gu, ' '), width));

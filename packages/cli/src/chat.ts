@@ -61,6 +61,7 @@ import { OwnedSessions } from './owned-sessions.js';
 import { normalizeEffort } from './tui/theme.js';
 import { readPrBadge } from './tui/pr-refresh.js';
 import type { PrBadge } from './tui/pr-badge.js';
+import { readWorkbenchWorkspace, type WorkbenchWorkspaceSummary } from './tui/workbench-workspace.js';
 import { shellDraftOf } from './tui/shell-command.js';
 import {
   DEFAULT_TUI_PREFERENCES,
@@ -764,6 +765,15 @@ export async function chatTui(
    * so it is attempted once per session and never repeated.
    */
   let pullRequestBadge: PrBadge | null = null;
+  let workbenchWorkspace: WorkbenchWorkspaceSummary = {
+    root: executionCwd(),
+    branch: null,
+    linkedWorktree: false,
+    observed: false,
+    changedFiles: null,
+    changes: [],
+  };
+  let workspaceStatusTimer: ReturnType<typeof setInterval> | null = null;
   let prSyncedSessionId: string | null = null;
   let cancellationRequested = false;
   /**
@@ -1305,6 +1315,7 @@ export async function chatTui(
     // The pull request the Host last observed for this session, for the
     // footer's badge. The loop owns the reading; the footer only draws it.
     pullRequestBadge: () => pullRequestBadge,
+    workbenchWorkspace: () => workbenchWorkspace,
     modelLabel: () => {
       const modelStatus = describeTuiModelStatus(activeSession.providerId, activeSession.model, options.model);
       return {
@@ -1421,6 +1432,15 @@ export async function chatTui(
     if (!finished) tui.refresh();
   }
 
+  async function refreshWorkbenchWorkspace(): Promise<void> {
+    const sessionId = activeSession.id;
+    const cwd = executionCwd();
+    const workspace = await readWorkbenchWorkspace(cwd);
+    if (finished || activeSession.id !== sessionId || executionCwd() !== cwd) return;
+    workbenchWorkspace = workspace;
+    tui.refresh();
+  }
+
   backgroundPoller.start();
 
   /** Enter on a task row: show its output or the subagent's latest activity. */
@@ -1504,6 +1524,7 @@ export async function chatTui(
     if (finished) return;
     finished = true;
     if (remoteWatchTimer !== null) clearInterval(remoteWatchTimer);
+    if (workspaceStatusTimer !== null) clearInterval(workspaceStatusTimer);
     backgroundPoller.stop();
     remoteWatch.stop();
     queue.close();
@@ -2088,6 +2109,9 @@ export async function chatTui(
   }
   if (options.diagnosticsLogPath !== undefined) tui.printNotice('Logs: ' + options.diagnosticsLogPath);
   tui.start();
+  void refreshWorkbenchWorkspace();
+  workspaceStatusTimer = setInterval(() => { void refreshWorkbenchWorkspace(); }, 5_000);
+  workspaceStatusTimer.unref?.();
   // The badge is worth reading once at startup: the projection read is free,
   // and a session that already has a pull request should show it before the
   // first turn ends.

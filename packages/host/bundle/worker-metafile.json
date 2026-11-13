@@ -267,7 +267,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/background-tasks.ts": {
-      "bytes": 3902,
+      "bytes": 4047,
       "imports": [],
       "format": "esm"
     },
@@ -30738,7 +30738,7 @@
       "format": "esm"
     },
     "packages/host/src/http-client.ts": {
-      "bytes": 113637,
+      "bytes": 113976,
       "imports": [],
       "format": "esm"
     },
@@ -32074,7 +32074,7 @@
       "format": "esm"
     },
     "packages/host/src/background-task-routes.ts": {
-      "bytes": 3281,
+      "bytes": 3906,
       "imports": [],
       "format": "esm"
     },
@@ -33479,7 +33479,7 @@
       "format": "esm"
     },
     "packages/host/src/background-task-index.ts": {
-      "bytes": 8434,
+      "bytes": 8734,
       "imports": [
         {
           "path": "packages/host/src/managed-shell/task-registry.ts",
@@ -33490,7 +33490,7 @@
       "format": "esm"
     },
     "packages/host/src/run-execution.ts": {
-      "bytes": 51577,
+      "bytes": 51963,
       "imports": [
         {
           "path": "packages/agent-protocol/src/index.ts",
@@ -33924,7 +33924,7 @@
       "format": "esm"
     },
     "packages/host/src/local-host.ts": {
-      "bytes": 56399,
+      "bytes": 56710,
       "imports": [
         {
           "path": "packages/host/src/plugins/audit.ts",
@@ -43572,7 +43572,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/rollout-events.ts": {
-          "bytesInOutput": 604
+          "bytesInOutput": 591
         },
         "packages/agent-protocol/src/workflow-runs.ts": {
           "bytesInOutput": 30
@@ -43755,7 +43755,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/doctor.ts": {
-          "bytesInOutput": 97
+          "bytesInOutput": 84
         },
         "packages/agent-protocol/src/checkout-api.ts": {
           "bytesInOutput": 30
@@ -45492,7 +45492,7 @@
           "bytesInOutput": 889
         },
         "packages/memory/src/wakeup.ts": {
-          "bytesInOutput": 413
+          "bytesInOutput": 425
         },
         "packages/host/src/skills/paths.ts": {
           "bytesInOutput": 697
@@ -45711,7 +45711,7 @@
           "bytesInOutput": 1627
         },
         "packages/host/src/worker-context/background-notification.ts": {
-          "bytesInOutput": 409
+          "bytesInOutput": 422
         },
         "packages/capabilities/src/SubagentTool/constants.ts": {
           "bytesInOutput": 45
@@ -47094,7 +47094,7 @@
           "bytesInOutput": 3130
         },
         "packages/host/src/worker-tool-bindings/app-connection-tools.ts": {
-          "bytesInOutput": 989
+          "bytesInOutput": 1002
         },
         "packages/capabilities/src/shell/prepare-sandbox.ts": {
           "bytesInOutput": 117
@@ -47439,7 +47439,7 @@
           "bytesInOutput": 708
         },
         "packages/memory/src/memory_paths.ts": {
-          "bytesInOutput": 610
+          "bytesInOutput": 616
         },
         "packages/host/src/worker-prompts/dynamic/environmentPreBuildHook.ts": {
           "bytesInOutput": 611
@@ -47628,7 +47628,7 @@
           "bytesInOutput": 1611
         },
         "packages/host/src/worker-transport.ts": {
-          "bytesInOutput": 1454
+          "bytesInOutput": 1452
         },
         "packages/host/src/worker-modes/research-mode/research-events.ts": {
           "bytesInOutput": 330
@@ -48405,7 +48405,7 @@
           "bytesInOutput": 1286
         },
         "packages/host/src/http-client.ts": {
-          "bytesInOutput": 42599
+          "bytesInOutput": 42786
         },
         "packages/cli/src/tui/background-host.ts": {
           "bytesInOutput": 1665
@@ -48531,7 +48531,7 @@
           "bytesInOutput": 0
         },
         "packages/host/src/local-host.ts": {
-          "bytesInOutput": 15961
+          "bytesInOutput": 16163
         },
         "packages/host/src/session-api.ts": {
           "bytesInOutput": 13623
@@ -48600,7 +48600,7 @@
           "bytesInOutput": 2068
         },
         "packages/host/src/background-task-routes.ts": {
-          "bytesInOutput": 1292
+          "bytesInOutput": 1778
         },
         "packages/host/src/local-plugin-app-invocation-api.ts": {
           "bytesInOutput": 5034
@@ -48819,7 +48819,7 @@
           "bytesInOutput": 1130
         },
         "packages/host/src/run-execution.ts": {
-          "bytesInOutput": 14998
+          "bytesInOutput": 15166
         },
         "packages/host/src/session-admission.ts": {
           "bytesInOutput": 1324
@@ -48861,7 +48861,7 @@
           "bytesInOutput": 1157
         },
         "packages/host/src/background-task-index.ts": {
-          "bytesInOutput": 2438
+          "bytesInOutput": 2544
         },
         "packages/host/src/idle-shutdown.ts": {
           "bytesInOutput": 1099
@@ -49602,7 +49602,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 5777604
+      "bytes": 5778769
     }
   }
 }

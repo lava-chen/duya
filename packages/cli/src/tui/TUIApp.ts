@@ -138,6 +138,7 @@ import {
 import { capacityBar } from './capacity-bar.js';
 import { formatTokensPerSecond, readGitBranch } from './footer.js';
 import type { PrBadge } from './pr-badge.js';
+import type { WorkbenchWorkspaceSummary } from './workbench-workspace.js';
 import type { StatuslineProfile } from './preferences.js';
 import {
   nextPermissionMode,
@@ -516,6 +517,8 @@ export interface TUIAppOptions {
    * out of band, and the footer must never wait for one to ask.
    */
   readonly pullRequestBadge?: () => PrBadge | null;
+  /** Cached local Git status for the directory this session executes in. */
+  readonly workbenchWorkspace?: () => WorkbenchWorkspaceSummary;
   /**
    * Reasoning effort for the NEXT turn, as a string (`'low'`, `'high'`, …).
    *
@@ -2233,6 +2236,15 @@ export class TUIApp {
           ? working
           : this.backgroundTasks.tasks().some((task) => task.id === this.watchedSubagentId && task.status === 'running'),
         tasks: this.backgroundTasks.tasks(),
+        workspace: this.options.workbenchWorkspace?.() ?? {
+          root: this.options.workspaceDirectory?.() ?? process.cwd(),
+          branch: null,
+          linkedWorktree: false,
+          observed: false,
+          changedFiles: null,
+          changes: [],
+        },
+        pullRequest: this.options.pullRequestBadge?.() ?? null,
         contextTokens: this.watchedSubagentId === null ? this.contextTokens() : null,
         contextBudget: this.watchedSubagentId === null ? this.options.contextBudgetTokens?.() ?? null : null,
         profile: resolveDisplayProfile({ showThinking: this.showThinking, expandBlocks: this.expanded, showToolResults: this.showToolResults, toolGroupMode: this.toolGroupMode }),

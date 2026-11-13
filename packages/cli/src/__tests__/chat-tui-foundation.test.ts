@@ -713,8 +713,15 @@ describe('chatTui production callback wiring', () => {
     await expect(running).resolves.toBe(0);
   });
 
-  it('describes a subagent without reading bash output', async () => {
-    const client = makeClient();
+  it('opens the persisted subagent activity snapshot', async () => {
+    const client = makeClient({
+      readBackgroundTaskOutput: vi.fn(async () => ({
+        taskId: 'agent-1',
+        text: 'persisted child transcript',
+        totalBytes: 25,
+        truncated: false,
+      })),
+    });
     const { running, app } = await startChat(client);
     const now = Date.now();
 
@@ -730,11 +737,11 @@ describe('chatTui production callback wiring', () => {
     });
 
     await waitUntil(() => app.panels.length === 1);
-    expect(client.readBackgroundTaskOutput).not.toHaveBeenCalled();
-    expect(app.panels[0]?.title).toBe('Subagent');
+    expect(client.readBackgroundTaskOutput).toHaveBeenCalledWith('session-1', 'agent-1');
+    expect(app.panels[0]?.title).toBe('Subagent activity');
     const body = app.panels[0]?.lines.join('\n') ?? '';
     expect(body).toContain('found the answer');
-    expect(body).toContain('transcript is not shown here');
+    expect(body).toContain('persisted child transcript');
 
     app.options.onExit();
     await expect(running).resolves.toBe(0);

@@ -165,7 +165,7 @@ describe('the task list', () => {
     app.stop();
 
     const text = out.text();
-    expect(text).toContain('Tasks · ↑↓ select · ←→ fold · Enter open/watch · Esc back');
+    expect(text).toContain('Tasks · ↑↓ select · Enter open · Ctrl+K stop · Ctrl+End follow · Esc back');
     expect(text).toContain('▾ Background bash (2) · 1 running');
     expect(text).toContain('▾ Subagents (1) · 1 running');
     // Subagents above bash: the half the user ACTS on sits where the cursor
