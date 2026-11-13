@@ -424,7 +424,7 @@ export class HostRunExecutionController {
   async startAgentRun(input: StartAgentRunInput, caller?: SessionServiceCaller): Promise<StartAgentRunResult> {
     let release: (() => void) | undefined;
     try {
-      release = this.#options.checkoutService?.reserveRun(input.sessionId);
+      release = await this.#options.checkoutService?.reserveRun(input.sessionId);
       return await this.#startAgentRunReserved(input, caller);
     } catch (error) {
       if (error && typeof error === 'object' && 'code' in error && String(error.code).startsWith('checkout_')) {
@@ -436,7 +436,7 @@ export class HostRunExecutionController {
 
   /** Internal Bot admission uses the same policy, supervisor and Run owner. */
   async startBotRun(input: StartAgentRunInput, admission: RunDispatchAdmission): Promise<StartAgentRunResult> {
-    const release = this.#options.checkoutService?.reserveRun(input.sessionId);
+    const release = await this.#options.checkoutService?.reserveRun(input.sessionId);
     try { return await this.#startAgentRunReserved(input, undefined, admission); }
     finally {
       release?.();
