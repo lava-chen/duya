@@ -6,8 +6,8 @@ import { anthropicStreams } from './adapters.js';
 export const minimaxCn = createProvider({
   id: 'minimax-cn',
   name: 'MiniMax CN',
-  baseUrl: 'https://api.minimaxi.com/anthropic',
+  baseUrl: 'https://api.minimax.cn/anthropic',
   auth: envApiKeyAuth('MINIMAX_CN_API_KEY', ['MINIMAX_CN_API_KEY']),
   models: minimaxCnModels,
-  api: anthropicStreams({ apiKey: '', baseURL: 'https://api.minimaxi.com/anthropic', model: '', apiFormat: 'anthropic', providerId: 'minimax-cn' }),
+  api: anthropicStreams({ apiKey: '', baseURL: 'https://api.minimax.cn/anthropic', model: '', apiFormat: 'anthropic', providerId: 'minimax-cn' }),
 });

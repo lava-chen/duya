@@ -126,6 +126,7 @@ export function createHostLocalProviderManagementApi(
         // a different provider resolves inconsistently depending on which
         // reader trusts which.
         next.id = id;
+        let probeMessage: string | undefined;
         if (input.validateConnection !== undefined && typeof input.validateConnection !== 'boolean') {
           throw new HostProviderApiError(400, 'invalid_provider', 'validateConnection must be a boolean');
         }
@@ -137,6 +138,7 @@ export function createHostLocalProviderManagementApi(
             apiKey: secretsKey(secrets, id) ?? '',
           }, options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl });
           if (!outcome.ok) throw new HostProviderApiError(400, 'provider_probe_failed', outcome.message ?? `Connection test failed (${outcome.code})`);
+          probeMessage = outcome.message;
           // An external writer may have changed the files while the probe ran.
           await openForWrite(files, snapshot.revision);
         }
@@ -152,7 +154,11 @@ export function createHostLocalProviderManagementApi(
             `provider "${id}" was written but is not in the file`,
           );
         }
-        return { provider, revision: after.revision };
+        return {
+          provider,
+          revision: after.revision,
+          ...(probeMessage === undefined ? {} : { probeMessage }),
+        };
       });
     },
 

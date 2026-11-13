@@ -280,6 +280,7 @@ export function isMiniMaxEndpoint(baseURL?: string): boolean {
   const normalized = baseURL.replace(/\/$/, '').toLowerCase();
   return (
     normalized.startsWith('https://api.minimax.io/anthropic') ||
+    normalized.startsWith('https://api.minimax.cn/anthropic') ||
     normalized.startsWith('https://api.minimaxi.com/anthropic')
   );
 }

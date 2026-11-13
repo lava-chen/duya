@@ -336,7 +336,7 @@ export const BUILTIN_CATALOG_ENTRIES: ProviderCatalogEntry[] = [
     descriptionZh: 'MiniMax 编程套餐 — 中国区',
     protocol: 'anthropic',
     authTypes: ['auth_token'],
-    baseUrl: 'https://api.minimaxi.com/anthropic',
+    baseUrl: 'https://api.minimax.cn/anthropic',
     envOverrides: {
       API_TIMEOUT_MS: '3000000',
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',

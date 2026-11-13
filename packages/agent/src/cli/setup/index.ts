@@ -111,7 +111,7 @@ const PROVIDER_PRESETS: ProviderPreset[] = [
     name: 'MiniMax (CN)',
     description: 'MiniMax Code Plan - China region',
     providerType: 'anthropic',
-    baseUrl: 'https://api.minimaxi.com/anthropic',
+    baseUrl: 'https://api.minimax.cn/anthropic',
     envVar: 'ANTHROPIC_API_KEY',
     models: ['MiniMax-M3', 'MiniMax-M2.7'],
     defaultModel: 'MiniMax-M3',
