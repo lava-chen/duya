@@ -55,7 +55,7 @@ export function resolveGroupDisplayTitle(
   if (explicitTitle?.title) {
     return {
       title: explicitTitle.title,
-      source: explicitTitle.source === 'provider_commentary' || explicitTitle.source === 'model_progress_tool'
+      source: explicitTitle.source === 'provider_commentary'
         ? explicitTitle.source
         : 'tool_fallback',
     };

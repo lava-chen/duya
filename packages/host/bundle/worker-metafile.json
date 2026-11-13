@@ -2116,7 +2116,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/transcript/content.ts": {
-      "bytes": 19059,
+      "bytes": 19383,
       "imports": [],
       "format": "esm"
     },
@@ -17310,11 +17310,6 @@
       ],
       "format": "esm"
     },
-    "packages/agent-runtime/src/turns/tool-group-progress.ts": {
-      "bytes": 4129,
-      "imports": [],
-      "format": "esm"
-    },
     "packages/host/src/worker-session/transcript-commands.ts": {
       "bytes": 4558,
       "imports": [
@@ -17458,7 +17453,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-run-composition.ts": {
-      "bytes": 29773,
+      "bytes": 28582,
       "imports": [
         {
           "path": "packages/agent-protocol/src/index.ts",
@@ -17469,11 +17464,6 @@
           "path": "packages/host/src/run-engine-model.ts",
           "kind": "import-statement",
           "original": "@duya/host/run-engine-model"
-        },
-        {
-          "path": "packages/agent-runtime/src/turns/tool-group-progress.ts",
-          "kind": "import-statement",
-          "original": "@duya/agent-runtime/turns/tool-group-progress"
         },
         {
           "path": "packages/host/src/worker-command-port.ts",
@@ -17519,7 +17509,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-engine-driver.ts": {
-      "bytes": 16785,
+      "bytes": 16722,
       "imports": [
         {
           "path": "packages/agent-runtime/src/index.ts",
@@ -38655,7 +38645,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-session-runtime.ts": {
-      "bytes": 154702,
+      "bytes": 154016,
       "imports": [
         {
           "path": "packages/host/src/worker-context/project-context.ts",
@@ -39111,11 +39101,6 @@
           "path": "packages/host/src/worker-compaction/context-window.ts",
           "kind": "import-statement",
           "original": "@duya/host/worker-compaction/context-window"
-        },
-        {
-          "path": "packages/agent-runtime/src/turns/tool-group-progress.ts",
-          "kind": "import-statement",
-          "original": "@duya/agent-runtime/turns/tool-group-progress"
         },
         {
           "path": "packages/agent-core/src/message/index.ts",
@@ -43572,7 +43557,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/rollout-events.ts": {
-          "bytesInOutput": 604
+          "bytesInOutput": 591
         },
         "packages/agent-protocol/src/workflow-runs.ts": {
           "bytesInOutput": 30
@@ -43596,7 +43581,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/tool-file-diff.ts": {
-          "bytesInOutput": 42
+          "bytesInOutput": 29
         },
         "packages/agent-protocol/src/locks.ts": {
           "bytesInOutput": 30
@@ -43662,10 +43647,10 @@
           "bytesInOutput": 1864
         },
         "packages/agent-protocol/src/agent-dm.ts": {
-          "bytesInOutput": 700
+          "bytesInOutput": 687
         },
         "packages/agent-protocol/src/session-ids.ts": {
-          "bytesInOutput": 189
+          "bytesInOutput": 176
         },
         "packages/agent-protocol/src/wake.ts": {
           "bytesInOutput": 30
@@ -43686,7 +43671,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/channels.ts": {
-          "bytesInOutput": 2252
+          "bytesInOutput": 2239
         },
         "packages/agent-protocol/src/agent-profiles.ts": {
           "bytesInOutput": 30
@@ -43755,7 +43740,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/doctor.ts": {
-          "bytesInOutput": 97
+          "bytesInOutput": 84
         },
         "packages/agent-protocol/src/checkout-api.ts": {
           "bytesInOutput": 30
@@ -45165,7 +45150,7 @@
           "bytesInOutput": 348
         },
         "node_modules/handlebars/dist/cjs/handlebars/helpers/lookup.js": {
-          "bytesInOutput": 180
+          "bytesInOutput": 176
         },
         "node_modules/handlebars/dist/cjs/handlebars/helpers/with.js": {
           "bytesInOutput": 592
@@ -45663,7 +45648,7 @@
           "bytesInOutput": 243
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 30
+          "bytesInOutput": 18
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1916
@@ -47094,7 +47079,7 @@
           "bytesInOutput": 3130
         },
         "packages/host/src/worker-tool-bindings/app-connection-tools.ts": {
-          "bytesInOutput": 989
+          "bytesInOutput": 1002
         },
         "packages/capabilities/src/shell/prepare-sandbox.ts": {
           "bytesInOutput": 117
@@ -47397,7 +47382,7 @@
           "bytesInOutput": 3018
         },
         "packages/host/src/worker-agents-md/nested-loader.ts": {
-          "bytesInOutput": 1880
+          "bytesInOutput": 1874
         },
         "packages/host/src/worker-prompts/modules/mappers/project.ts": {
           "bytesInOutput": 684
@@ -47538,7 +47523,7 @@
           "bytesInOutput": 660
         },
         "packages/memory/src/forget_ledger.ts": {
-          "bytesInOutput": 1556
+          "bytesInOutput": 1552
         },
         "packages/bot/src/domain/bot-id.ts": {
           "bytesInOutput": 244
@@ -47565,7 +47550,7 @@
           "bytesInOutput": 3265
         },
         "packages/memory/src/canonical_file.ts": {
-          "bytesInOutput": 669
+          "bytesInOutput": 667
         },
         "packages/host/src/worker-prompts/bot/memory/access.ts": {
           "bytesInOutput": 279
@@ -47775,19 +47760,16 @@
           "bytesInOutput": 5191
         },
         "packages/host/src/worker-engine-driver.ts": {
-          "bytesInOutput": 4471
+          "bytesInOutput": 4431
         },
         "packages/agent-runtime/src/turns/TurnLoopTracker.ts": {
           "bytesInOutput": 209
         },
         "packages/host/src/worker-run-composition.ts": {
-          "bytesInOutput": 6899
+          "bytesInOutput": 6380
         },
         "packages/host/src/run-engine-model.ts": {
           "bytesInOutput": 3674
-        },
-        "packages/agent-runtime/src/turns/tool-group-progress.ts": {
-          "bytesInOutput": 559
         },
         "packages/host/src/worker-session/transcript-commands.ts": {
           "bytesInOutput": 1792
@@ -49062,7 +49044,7 @@
           "bytesInOutput": 971
         },
         "packages/host/src/worker-session-runtime.ts": {
-          "bytesInOutput": 58355
+          "bytesInOutput": 58069
         },
         "packages/host/src/worker-journal/child-journal.ts": {
           "bytesInOutput": 214
@@ -49602,7 +49584,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 5777604
+      "bytes": 5776107
     }
   }
 }

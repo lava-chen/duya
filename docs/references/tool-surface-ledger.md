@@ -71,7 +71,7 @@
 | 工具 | 注册 | worker/bot | 字节 | 裁定 | 备注 |
 | --- | --- | --- | --- | --- | --- |
 | `tool_catalog` / `tool_invoke` | eager | 双见 | 571 / 314 | 保留 | 通用 fallback；已知 ID 直接 invoke（F05/F06）；W3 减往返 |
-| `progress_update` | 不进 registry | 双见（装配注入） | — | 保留 | 私有控制工具：`tool-group-progress.ts` 定义，`worker-run-composition.ts:153` / `worker-session-runtime.ts:499` 注入；W9 诊断须能解释 registry 外注入 |
+| ~~`progress_update`~~ | — | — | — | **移除（2026-11-13）** | 私有控制工具已整链删除：不再注入回合工具面，模型无法调用。分组进度标题改由 provider commentary 通道与确定性兜底承担；见 [移除计划](../exec-plans/active/2026-11-13-remove-progress-update-tool.md) |
 
 ### 外部能力（类别登记）
 
@@ -87,4 +87,4 @@
 - 2026-10-31 二轮：待决 7 项（9 行）全部核对完毕回写裁定，仅 `AskUserQuestion` bot 可见性仍留 W4（死 bot 注册表曾拟 hidden）；490 计划记录漂移交其 owner 更正。
 - W4 决策输入：`AskUserQuestion` bot 可见性；worktree 三工具 bot 隐藏候选（`'*'` 通配来源已核）；`vision_analyze` 降 deferred 候选（按能力门控机制不存在）；bot `send_message` 修复已合并（#557，`b79e3521`）。
 - W6 决策输入：`duya_cli`/`SessionSearch`/`session` 只读面（`list`/`get`/`rename`）的 CLI 能力清单。
-- W9 决策输入：`progress_update` 注入的解释；`memory_write`/`write_stage1_policy` 写入路径与读取根未对齐两处坑。原 `todo`/`plan` description 分工澄清一项随 `plan` 工具移除而消解（2026-11-04）。
+- W9 决策输入：`memory_write`/`write_stage1_policy` 写入路径与读取根未对齐两处坑。原 `todo`/`plan` description 分工澄清一项随 `plan` 工具移除而消解（2026-11-04）。原「`progress_update` 注入的解释」一项随该工具整链移除而消解（2026-11-13）。

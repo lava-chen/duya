@@ -98,7 +98,7 @@ export interface AgentEvent {
   reason?: string;
   groupId?: string;
   progressTitle?: string;
-  progressSource?: 'provider_commentary' | 'model_progress_tool' | 'tool_fallback';
+  progressSource?: 'provider_commentary' | 'tool_fallback';
   /** Optional upstream identifier (provider request id, OpenAI x-request-id,
    *  Anthropic message id, etc.) surfaced with `chat:error` so the chat
    *  banner can show a trace id for support handoff. */

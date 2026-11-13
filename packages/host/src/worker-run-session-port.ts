@@ -119,7 +119,6 @@ export interface RunTurnAssembly {
     readonly turnContext: TurnContext;
     readonly tools: readonly Tool[];
     readonly canUseTool: CanUseToolFn;
-    readonly progressToolName: string;
     readonly systemPrompt: string;
     readonly projection: TurnModelProjection;
     projectTurnMessages(): Message[];

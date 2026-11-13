@@ -2700,7 +2700,7 @@ export class StreamSessionManager {
     input: unknown;
     groupId?: string;
     progressTitle?: string;
-    progressSource?: 'provider_commentary' | 'model_progress_tool' | 'tool_fallback';
+    progressSource?: 'provider_commentary' | 'tool_fallback';
   }): void {
     const s = this.sessions.get(sessionId);
     if (!s || !this.isCurrentStream(sessionId, streamId)) return;

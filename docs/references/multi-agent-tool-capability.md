@@ -159,7 +159,9 @@ toolRegistry: registry, // 完整注册表，未收窄
 
 ### 子代理可见工具列表（deny 大写探针）
 
-`read` / `bash` / `edit` / `write` / `apply_patch` / `glob` / `grep` / `todo` / `skill` / `askuserquestion` / `task` / `get_task_output` / `kill_task` / `plan` / `enter_worktree` / `exit_worktree` / `sync_worktree` / `tool_catalog` / `tool_invoke` / `progress_update` / `vision_analyze`
+`read` / `bash` / `edit` / `write` / `apply_patch` / `glob` / `grep` / `todo` / `skill` / `askuserquestion` / `task` / `get_task_output` / `kill_task` / `plan` / `enter_worktree` / `exit_worktree` / `sync_worktree` / `tool_catalog` / `tool_invoke` / `vision_analyze`
+
+> 2026-11-13：私有控制工具 `progress_update` 已整链移除，故不在此列表。`plan` 亦已按 2026-11-04 的移除计划下线，本行保留当时的探针记录原样。
 
 ### `bash` 被拒的逐字报错
 

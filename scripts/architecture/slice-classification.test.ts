@@ -297,6 +297,8 @@ const RETIRED_WITH_DUYA_APP_SESSION_MCP =
 
 const REMOVED_WITH_THE_PLAN_TOOL =
   'deleted with the plan tool, which the user removed on 2026-11-04 (exec-plans/active/2026-11-04-remove-plan-tool.md); the tool only read and archived plan files under ~/.duya/projects/<id>/plans/ and never created them, so no in-tree successor carries this path';
+const REMOVED_WITH_THE_PROGRESS_UPDATE_TOOL =
+  'deleted with the private progress_update control tool, which the user removed on 2026-11-13 (exec-plans/active/2026-11-13-remove-progress-update-tool.md); the tool only set a display title for a tool group and was never a capability of its own, so no in-tree successor carries this path';
 const RETIRED_WITH_THE_PROJECTION_COMPRESS_PASS =
   'deleted with the unwired projection-compress pass (plan 448 phase 4): the pass was never reachable from CompactionManager, so the legacy compact transforms and their mirrors under agent-runtime have no in-tree successor';
 const RECORDED_LOSSES: readonly RecordedLoss[] = [
@@ -1982,6 +1984,12 @@ const RECORDED_LOSSES: readonly RecordedLoss[] = [
   { path: 'packages/agent/src/compact/transforms/offloadCompress.ts', from: 'runtime-coordination', why: RETIRED_WITH_THE_PROJECTION_COMPRESS_PASS },
   { path: 'packages/agent/src/compact/transforms/reformatCompress.ts', from: 'runtime-coordination', why: RETIRED_WITH_THE_PROJECTION_COMPRESS_PASS },
   { path: 'packages/agent/src/compact/transforms/shared.ts', from: 'runtime-coordination', why: RETIRED_WITH_THE_PROJECTION_COMPRESS_PASS },
+  // And one more census-history entry: the progress_update control tool was
+  // removed on 2026-11-13, and its legacy `packages/agent` re-export shell
+  // went with it. Same bounded exemption as the entries above: the path has to
+  // be named for the census to accept the retirement, and the retirement gate
+  // scans literal `packages/agent/...` strings. Keep the markers tight.
+  { path: 'packages/agent/src/agent/tool-group-progress.ts', from: 'runtime-coordination', why: REMOVED_WITH_THE_PROGRESS_UPDATE_TOOL },
   // RETIREMENT_GATE_FIXTURE_CONTEXT_END
 ];
 

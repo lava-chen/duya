@@ -7,7 +7,6 @@ import type { Tool } from '@duya/host/worker-run-contracts';
 import type { RunHandle, RunTurnAssembly, TurnOutputSink, EngineProductSession } from '@duya/host/worker-run-session-port';
 import type { TurnPipelinePublisher } from '@duya/agent-runtime/tools/turn-pipeline-publisher';
 import { createClientModelPort } from '@duya/host/run-engine-model';
-import { readProgressUpdateCall, PROGRESS_UPDATE_TOOL } from '@duya/agent-runtime/turns/tool-group-progress';
 import { createLegacyCommandPort } from '@duya/host/worker-command-port';
 import { renderSystemReminder } from '@duya/agent-core/context/reminders';
 import { normalizeCanUseToolDecision } from '@duya/agent-runtime/authorization/tool-invoke-decision';
@@ -78,7 +77,6 @@ function restoreRunOwnRows(agent: EngineProductSession, marker: {
     return merged;
 }
 export interface LegacyRunHost {
-    readonly progressToolName?: () => string;
     readonly turnPipelines: TurnPipelinePublisher;
     readonly assembleTurn: (input: TurnAssemblyInput) => Promise<AssembledTurn>;
     readonly refreshDeclaredTools: () => Set<string>;
@@ -135,10 +133,9 @@ export interface LegacyRunHost {
 export function composeLegacyRunSources(agent: EngineProductSession, host: LegacyRunHost): LegacyEngineSources {
     const pipelines = host.turnPipelines;
     const runFork = host.runFork;
-    const controlResults: ToolOutcome[] = [];
     const shellOutputStops = host.shellOutputStops;
     /** Stop watching one call's output. Idempotent, and safe for a call that
-     *  never subscribed (the progress tool, and every host that passes no map). */
+     *  never subscribed (every host that passes no map). */
     const stopShellOutput = (callId: string): void => {
         if (shellOutputStops === undefined) return;
         const stop = shellOutputStops.get(callId);
@@ -155,28 +152,20 @@ export function composeLegacyRunSources(agent: EngineProductSession, host: Legac
             ...(host.effort === undefined ? {} : { effort: host.effort }),
         }).stream(request, signal),
         queueTool: (call: ToolCallRequest) => {
-            const name = host.progressToolName?.();
-            const progress = name === undefined ? null : readProgressUpdateCall(call.name, name, call.input);
-            if (progress === null) {
-                // Subscribe before queueing, because queueing is what leads to the
-                // spawn and the spawn is what asks whether anybody is watching.
-                // Every tool call gets a subscriber, not only shell calls: the key
-                // is the call id, and a tool that never publishes costs one entry
-                // in a map that the run closes. Naming the shell tools here instead
-                // would make this composition depend on a capability's tool names.
-                if (shellOutputStops !== undefined && !shellOutputStops.has(call.callId)) {
-                    shellOutputStops.set(call.callId, onShellOutput(call.callId, (slice) => {
-                        host.emitter.emit({ type: 'tool.output_delta', toolCallId: call.callId, delta: slice.delta });
-                    }));
-                }
-                pipelines.queue({ id: call.callId, name: call.name, input: call.input });
-                return;
+            // Subscribe before queueing, because queueing is what leads to the
+            // spawn and the spawn is what asks whether anybody is watching.
+            // Every tool call gets a subscriber, not only shell calls: the key
+            // is the call id, and a tool that never publishes costs one entry
+            // in a map that the run closes. Naming the shell tools here instead
+            // would make this composition depend on a capability's tool names.
+            if (shellOutputStops !== undefined && !shellOutputStops.has(call.callId)) {
+                shellOutputStops.set(call.callId, onShellOutput(call.callId, (slice) => {
+                    host.emitter.emit({ type: 'tool.output_delta', toolCallId: call.callId, delta: slice.delta });
+                }));
             }
-            if (progress.title !== undefined) host.emitter.emit({ type: 'tool.group_progress', title: progress.title, source: 'model_progress_tool' });
-            controlResults.push({ kind: 'tool_result', callId: call.callId, content: progress.title === undefined ? 'Invalid progress title' : 'Progress updated', isError: progress.title === undefined, durationMs: 0 });
+            pipelines.queue({ id: call.callId, name: call.name, input: call.input });
         },
         async *drainTools(): AsyncIterable<ToolDrainItem> {
-            yield* controlResults.splice(0);
             for await (const update of pipelines.drain()) {
                 const item = toDrainItem(update);
                 if (item !== null) {
@@ -187,12 +176,11 @@ export function composeLegacyRunSources(agent: EngineProductSession, host: Legac
                 }
             }
         },
-        discardTools: () => { controlResults.length = 0; if (shellOutputStops !== undefined) { for (const callId of [...shellOutputStops.keys()]) stopShellOutput(callId); } pipelines.discard(); },
+        discardTools: () => { if (shellOutputStops !== undefined) { for (const callId of [...shellOutputStops.keys()]) stopShellOutput(callId); } pipelines.discard(); },
         lookup: {
-            sideEffectOf: (name) => name === host.progressToolName?.() ? 'read_only' : null,
+            sideEffectOf: () => null,
             toolNames: () => agent.activeMCPRegistry.getAllTools().map((tool: Tool) => tool.name),
             describe: (toolName: string): ToolDescriptor | null => {
-                if (toolName === host.progressToolName?.()) return { name: toolName, description: PROGRESS_UPDATE_TOOL.description, inputSchema: PROGRESS_UPDATE_TOOL.input_schema };
                 const tool = agent.activeMCPRegistry.getTool(toolName);
                 if (tool === undefined)
                     return null;
