@@ -31,8 +31,9 @@ function sink(): { stream: Writable; text: () => string } {
   return { stream, text: () => Buffer.concat(chunks).toString('utf8') };
 }
 
-function makeApp(overrides: { inline?: boolean; busy?: boolean; unicodeBox?: boolean } = {}) {
+function makeApp(overrides: { inline?: boolean; busy?: boolean; unicodeBox?: boolean; columns?: number } = {}) {
   const out = sink();
+  if (overrides.columns !== undefined) Object.assign(out.stream, { columns: overrides.columns, rows: 40 });
   const busy = { value: overrides.busy ?? false };
   const app = new TUIApp({
     output: out.stream,
@@ -43,6 +44,7 @@ function makeApp(overrides: { inline?: boolean; busy?: boolean; unicodeBox?: boo
     // assertions about the ASCII fallback — a test that passes for the wrong
     // reason, which is the thing these assertions exist to prevent.
     terminalEnv: detectTerminalEnvironment({ TERM_PROGRAM: 'WezTerm' }),
+    ...(overrides.columns !== undefined ? { onWorkbenchCommand: () => {} } : {}),
     isBusy: () => busy.value,
     onSubmit: () => {},
   });
@@ -119,8 +121,9 @@ describe('the working tail', () => {
     expect([...out.text()].some((ch) => SPINNER_UNICODE.includes(ch))).toBe(true);
   });
 
-  it('appears in the full-screen status line while a turn runs', async () => {
-    const { app, out } = makeApp({ busy: true });
+  it('appears in the full-screen Workbench while a turn runs', async () => {
+    const { app, out } = makeApp({ busy: true, columns: 140 });
+    // The full-screen activity spinner is rendered in the Workbench sidebar.
     app.start();
     await settleRendered();
     app.stop();

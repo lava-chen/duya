@@ -278,6 +278,7 @@ export interface Styles {
    * string first. Carrying the tokens makes that a lookup.
    */
   readonly tags: ThemeTags;
+  text(s: string): string;
   bold(s: string): string;
   /** Emphasis. The own renderer emits `{italic}`; blessed folds to accent. */
   italic(s: string): string;
@@ -303,6 +304,7 @@ export function stylesOf(options: Pick<RenderOptions, 'theme' | 'renderer'>): St
   return {
     renderer: options.renderer ?? 'blessed',
     tags,
+    text: (s) => flat(tags.text, s),
     bold: (s) => `{bold}${escapeTags(s)}{/bold}`,
     italic: (s) => `{italic}${escapeTags(s)}{/italic}`,
     strike: (s) => `{strike}${escapeTags(s)}{/strike}`,
@@ -346,12 +348,19 @@ function renderInlineRows(
   text: string,
   styles: Styles,
   width: number | undefined,
-  envelope: SpanStyle = PLAIN_STYLE,
+  envelope?: SpanStyle,
 ): string[] {
   const view = tagViewOf(styles);
-  const spans = tokensToSpans(tokenizeInline(text), spanRolesOf(styles));
-  if (width === undefined) return [spansToTags(spans, view, envelope)];
-  return wrapSpans(spans, width).map((row) => spansToTags(row, view, envelope));
+  const base = envelope ?? textEnvelopeOf(styles);
+  const spans = tokensToSpans(tokenizeInline(text), spanRolesOf(styles), base);
+  if (width === undefined) return [spansToTags(spans, view)];
+  return wrapSpans(spans, width).map((row) => spansToTags(row, view));
+}
+
+/** The foreground for ordinary message content in the selected palette. */
+function textEnvelopeOf(styles: Pick<Styles, 'tags'>): SpanStyle {
+  const color = colorFromTagBody(styles.tags.text);
+  return color === undefined ? PLAIN_STYLE : { fg: color };
 }
 
 /**
@@ -374,7 +383,7 @@ function renderCodeBlock(language: string, lines: readonly string[], styles: Sty
   for (const [index, line] of lines.entries()) {
     const number = String(index + 1).padStart(numberWidth, ' ');
     const gutter = styles.muted(`  │ ${number} │`);
-    rendered.push(`${gutter} ${diff ? renderDiffLine(line, styles) : escapeTags(line)}`);
+    rendered.push(`${gutter} ${diff ? renderDiffLine(line, styles) : styles.text(line)}`);
   }
   rendered.push(styles.muted('  └─'));
   return rendered.join('\n');
@@ -398,7 +407,7 @@ function renderDiffLine(line: string, styles: Styles): string {
   if (/^@@/u.test(line)) return styles.accent(line);
   if (line.startsWith('+')) return styles.diffAdd(line);
   if (line.startsWith('-')) return styles.diffDel(line);
-  return escapeTags(line);
+  return styles.text(line);
 }
 
 /**
@@ -490,7 +499,11 @@ function renderTable(
   // Markdown, lowered to spans so the width measured is the width shown.
   const headerText = (column: number): string => cellSource(0, column);
   const bodySpans = (rowIndex: number, column: number): readonly StyledSpan[] =>
-    tokensToSpans(tokenizeInline(cellSource(rowIndex, column)), spanRolesOf(styles));
+    tokensToSpans(
+      tokenizeInline(cellSource(rowIndex, column)),
+      spanRolesOf(styles),
+      textEnvelopeOf(styles),
+    );
 
   // Column widths: the natural width is what the cell NEEDS, the minimum is
   // what it cannot go below without cutting a word in half.
@@ -1092,6 +1105,7 @@ function toolNodeRow(
   styles: Styles,
   connector: '├' | '└',
 ): string {
+  const argumentsShown = toolArgumentsShown(block, options) && !isShellTool(block.name);
   // A todo write is a LIST, not a call with an argument: `todo(todo-1,
   // todo-2)` says nothing a reader did not already know, while the head below
   // says how far the list got.
@@ -1109,7 +1123,7 @@ function toolNodeRow(
   // reader must never have to guess whose command produced the output. The
   // wording is codex's ("You ran"), the body is the ordinary shell body.
   if (isLocalShellTool(block.name)) {
-    const target = block.preview === '' ? '' : ` ${paintCommand(block.preview, styles)}`;
+    const target = block.preview === '' || argumentsShown ? '' : ` ${paintCommand(block.preview, styles)}`;
     const label = `${styles.bold('You ran')}${target}`;
     return `${connector} ${toolStatusMark(block.status, styles)} ${label}${toolDurationSuffix(block, styles)}${toolDisclosureOf(block, options, styles)}`;
   }
@@ -1117,10 +1131,12 @@ function toolNodeRow(
   // what the reader scans while the run streams, so the command it ran is the
   // part that has to be legible at a glance.
   if (isShellTool(block.name) && block.preview !== '') {
-    const label = `${styles.bold(block.name)}(${paintCommand(block.preview, styles)})`;
+    const label = argumentsShown
+      ? styles.bold(block.name)
+      : `${styles.bold(block.name)}(${paintCommand(block.preview, styles)})`;
     return `${connector} ${toolStatusMark(block.status, styles)} ${label}${toolDurationSuffix(block, styles)}${toolDisclosureOf(block, options, styles)}`;
   }
-  const label = block.preview === '' ? block.name : `${block.name}(${block.preview})`;
+  const label = block.preview === '' || argumentsShown ? block.name : `${block.name}(${block.preview})`;
   return `${connector} ${toolStatusMark(block.status, styles)} ${escapeTags(label)}${toolDurationSuffix(block, styles)}${toolDisclosureOf(block, options, styles)}`;
 }
 
@@ -1340,7 +1356,9 @@ function groupChildRow(
   options: RenderOptions,
   styles: Styles,
 ): string {
-  const target = block.preview === '' ? block.name : block.preview;
+  const target = block.preview === '' || (toolArgumentsShown(block, options) && !isShellTool(block.name))
+    ? block.name
+    : block.preview;
   // A shell command is the one target worth colouring: it is code the reader
   // scans for a program and a flag, not a path they read as a whole.
   const painted = isShellTool(block.name)
@@ -1490,7 +1508,15 @@ function toolArgumentBody(
   const entries: Array<[string, unknown]> = input !== null && typeof input === 'object' && !Array.isArray(input)
     ? Object.entries(input)
     : [['args', input]];
-  if (entries.length === 0) return [];
+  const represented = new Set<string>();
+  if (block.diff !== undefined && block.diff.length > 0) {
+    // A diff is the structured UI for the file body; printing the full write
+    // content beside it repeats every changed line.
+    for (const key of ['content', 'oldtext', 'newtext', 'patch', 'diff']) represented.add(key);
+  }
+  if (isShellTool(block.name)) represented.add('command');
+  const details = entries.filter(([key]) => !represented.has(key.toLowerCase()));
+  if (details.length === 0) return [];
 
   const rows: string[] = [];
   const firstPrefix = `${indent}  `;
@@ -1507,7 +1533,7 @@ function toolArgumentBody(
   };
 
   rows.push(`${indent}${styles.muted('Arguments:')}`);
-  for (const [key, value] of entries) {
+  for (const [key, value] of details) {
     const rendered = typeof value === 'string' ? value : JSON.stringify(value, null, 2) ?? String(value);
     const lines = rendered.replace(/\r/g, '').replace(/\t/g, '   ').split('\n');
     const first = lines.shift() ?? '';
@@ -1515,6 +1541,28 @@ function toolArgumentBody(
     for (const line of lines) rows.push(...wrap(line, continuationPrefix));
   }
   return rows;
+}
+
+/** Whether expanded arguments will already show the call's preview. */
+function toolArgumentsShown(
+  block: Extract<Block, { kind: 'tool' }>,
+  options: RenderOptions,
+): boolean {
+  if (!blockExpanded(block.id, options) || isTodoTool(block.name) || isShellTool(block.name)) return false;
+  const raw = block.argumentText?.trim();
+  if (raw === undefined || raw === '' || raw === '{}' || raw === 'null') return false;
+  if (block.diff !== undefined && block.diff.length > 0) {
+    try {
+      const input: unknown = JSON.parse(raw);
+      if (input !== null && typeof input === 'object' && !Array.isArray(input)) {
+        return Object.keys(input).some((key) => !['content', 'oldtext', 'newtext', 'patch', 'diff'].includes(key.toLowerCase()));
+      }
+    } catch {
+      return true;
+    }
+    return false;
+  }
+  return true;
 }
 
 /** Give every row of a failed call a palette-specific red background band. */
@@ -1776,7 +1824,7 @@ function nodeBody(
     return thinkingBody(block, thinkingExpanded(block.id, options), styles, plan.bodyIndent, options.width);
   }
   if (block.kind !== 'tool') return [];
-  const argumentsRows = blockExpanded(block.id, options)
+  const argumentsRows = blockExpanded(block.id, options) && !isTodoTool(block.name)
     ? toolArgumentBody(block, styles, plan.bodyIndent, options.width)
     : [];
   // A spawn draws its brief before any of the ordinary body rules apply: the

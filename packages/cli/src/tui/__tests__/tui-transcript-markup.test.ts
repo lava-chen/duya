@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { TranscriptModel } from '../blocks.js';
 import { renderTranscript, renderOneBlock, escapeTags } from '../transcript-view.js';
+import { DARK_THEME_TAGS, LIGHT_THEME_TAGS } from '../theme.js';
 
 /**
  * Rendered markup must not survive into the text.
@@ -54,6 +55,16 @@ describe('transcript-view markup', () => {
     expect(render()).toContain('你是谁');
   });
 
+  it('paints assistant prose with the selected palette foreground', () => {
+    const model = new TranscriptModel();
+    model.appendTextDelta('The answer stays readable.');
+
+    expect(renderTranscript(model, { ...OPTIONS, theme: DARK_THEME_TAGS }))
+      .toContain('{254-fg}The answer stays readable.{/254-fg}');
+    expect(renderTranscript(model, { ...OPTIONS, theme: LIGHT_THEME_TAGS }))
+      .toContain('{238-fg}The answer stays readable.{/238-fg}');
+  });
+
   it('brackets the user line in one balanced band', () => {
     const rendered = render();
     // The band is the outermost pair — a submitted prompt sits on a fill —
@@ -91,10 +102,10 @@ describe('transcript-view markup', () => {
     });
 
     // Level-1 heading: bold within the heading colour, `#` marker consumed.
-    expect(rendered).toContain('{cyan-fg}{bold}结果{/bold}{/cyan-fg}');
-    expect(rendered).toContain('{bold}完成{/bold}');
+    expect(rendered).toContain('{bold}{cyan-fg}结果{/cyan-fg}{/bold}');
+    expect(rendered).toContain('{bold}{254-fg}完成{/254-fg}{/bold}');
     expect(rendered).toContain('{gray-fg}snake_case{/gray-fg}');
-    expect(rendered).toContain('{gray-fg}│{/gray-fg} 你好，{cyan-fg}世界{/cyan-fg}');
+    expect(rendered).toContain('{gray-fg}│{/gray-fg} {254-fg}你好，{/254-fg}{cyan-fg}世界{/cyan-fg}');
   });
 
   it('renders task-list checkboxes with distinct checked and pending states', () => {
@@ -105,8 +116,8 @@ describe('transcript-view markup', () => {
       text: '- [x] 已完成\n- [ ] 待处理',
     });
 
-    expect(rendered).toContain('{bright-green-fg}☑{/bright-green-fg} 已完成');
-    expect(rendered).toContain('{gray-fg}☐{/gray-fg} 待处理');
+    expect(rendered).toContain('{bright-green-fg}☑{/bright-green-fg} {254-fg}已完成{/254-fg}');
+    expect(rendered).toContain('{gray-fg}☐{/gray-fg} {254-fg}待处理{/254-fg}');
   });
 
   it('renders fenced code as a labeled, escaped block', () => {
@@ -260,6 +271,7 @@ describe('themes', () => {
     const model = new TranscriptModel();
     model.addNotice('plain');
     const rendered = renderTranscript(model, { ...OPTIONS, theme: {
+      text: '238-fg',
       muted: '243-fg', accent: '30-fg', success: '28-fg', error: '160-fg', warning: '172-fg',
       user: '28-fg', thinking: '128-fg', diffAdd: '28-fg', diffDel: '160-fg', heading: '30-fg', link: '243-fg',
     } });

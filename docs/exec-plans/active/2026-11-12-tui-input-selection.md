@@ -1,8 +1,8 @@
 # CLI TUI 输入、选择、工具详情与消息色彩
 
-状态：active。负责人：本会话。更新：2026-11-12。
-分支：`codex/tui-cursor-selection`。worktree：`/home/lavachen/.codex/worktrees/tui-cursor-selection/duya`。
-base：`2af62ce3c81b059e3e82c5b41e9f5299bdfd61fc`。独占路径：`packages/cli/src/tui/**` 与本文档。
+状态：active。负责人：本会话。更新：2026-11-13。
+分支：`codex/tui-color-rendering`；实现提交：`2587b062b948f9a15ec765511f67726e88d4cb66`；计划更新提交：`7b132069985e35a5fdee8232ff5e0de053370f79`。worktree：`/home/lavachen/.codex/worktrees/tui-cursor-selection/duya`。
+base：`6d6ea333fbbb3567e55dec5ca80ec010a77ba6ef`。独占路径：`packages/agent-protocol/src/background-tasks.ts`、`packages/cli/src/chat.ts`、`packages/cli/src/tui/**`、`packages/host/src/{background-task-index.ts,background-task-routes.ts,http-client.ts,local-host.ts,run-execution.ts}` 与本文档。
 
 ## 目标与边界
 
@@ -13,7 +13,8 @@ base：`2af62ce3c81b059e3e82c5b41e9f5299bdfd61fc`。独占路径：`packages/cli
 - 为消息渲染定义基于语义角色与 256 色号的色彩体系；本轮记录方案，后续按该体系逐步迁移渲染器。
 - 精简工作台侧栏为单面板与两个会话入口；显示模式菜单只保留极简、默认、详细；路径和活动状态置于输入框下方的两行 footer。
 - 对照 Pi 扩展 API 记录 Duya 插件 UI 扩展的可行接口边界；本轮先形成合同建议，不新增通用插件 UI API。
-- 本轮仅改 CLI TUI，不改 Host、协议或 Desktop UI。
+- 子代理入口扩展到 Host 本地 background-task API 与协议：点击后使用标准 transcript block 渲染运行期进度；完成后读取独立 child session 的持久化 transcript；Ctrl+K 通过 parent worker 的 `subagent:kill` 停止当前查看的 running child。暂不实现向 child 发送消息或 child 独立输入框。
+- Workbench 侧栏展示当前 checkout 的 worktree/分支、未提交变更摘要，以及已有 PR 的状态；复用本地 Git 状态与既有 PR 投影，不启动额外远程查询。
 
 关联：[Pi / Duya TUI 对照](../../references/pi-tui-workbench.md)、[TUI 全屏框架](2026-11-11-tui-fullscreen-framework.md)。
 
@@ -26,6 +27,9 @@ base：`2af62ce3c81b059e3e82c5b41e9f5299bdfd61fc`。独占路径：`packages/cli
 - 颜色角色不依赖终端自定义 ANSI 色；正文、弱化文本、Markdown、工具输出和状态色均有明确语义 token 与 dark/light 映射。
 - 运行受影响的 CLI TUI 检查及仓库要求的类型/架构门禁；记录 SHA、dirty 范围、环境、命令和结果。
 - 光标闪烁策略、文本选择按键/鼠标语义以用户回复为准。
+- 活动 subagent 使用与主 transcript 相同的工具展开、滚动、搜索与显示样式；滚动上移暂停跟随，Ctrl+End 恢复；Ctrl+K 仅在查看 subagent 时发送停止命令。
+- Host 只接受属于指定 parent session 且仍为 running 的 subagent task stop 请求；其他 task、未知 task 与终态 task 不执行停止。
+- Workbench 显示当前 session 执行目录的仓库根、分支、linked-worktree 类型与变更文件数/摘要；有 PR 投影时显示编号与状态。Git 状态不可用时明确显示 unavailable。
 
 ## 进度
 
@@ -40,6 +44,12 @@ base：`2af62ce3c81b059e3e82c5b41e9f5299bdfd61fc`。独占路径：`packages/cli
 - [x] 将显示模式压缩为 Minimal / Default / Detailed，旧命令名做兼容映射。
 - [x] 将 fullscreen footer 调整为路径/分支在上、活动状态在下；验证 inline/footer 与提示弹层布局。
 - [x] 阅读 Pi 扩展的 widget、header/footer、custom UI、editor/theme、tool renderer 与 RPC 接口，并记录 Duya 合同建议。
+- [x] 将语义 `text` 色号应用到 assistant 普通正文、代码块、diff 上下文与表格。
+- [x] 将活动模型的 context window 通过模型目录回退值接入工作台侧栏，显示 `/` 后的预算总量。
+- [x] 将工具详情的点击区域扩至整块可见内容；鼠标悬停时按主题绘制临时灰底，拖选仍可用。
+- [x] 将 subagent 进度投影到同一 transcript renderer；结束时回读 child session transcript；加入经 Host task 索引校验的 Ctrl+K stop API。
+- [x] 展开时避免标题摘要、Bash 命令、Todo JSON 和文件 diff 输入重复呈现。
+- [x] 在 Workbench 加入 worktree/分支、变更摘要和 PR 状态；后台每 5 秒刷新 Git 状态并防止 session/cwd 切换后的旧结果覆盖。
 
 ## 发现与决策
 
@@ -80,7 +90,13 @@ base：`2af62ce3c81b059e3e82c5b41e9f5299bdfd61fc`。独占路径：`packages/cli
 
   背景 token 与前景色分开：保留 `promptBg`、`diff*Bg`、`search*Bg`，工具错误行使用 `toolErrorBg=52`（dark）/`224`（light）。所有正文渲染必须显式落到 `text` 或内容角色，避免透传终端默认前景色。色号表是首版建议，合入渲染器时需用 dark/light 真实 PTY 检查长文、选区、代码和链接的辨识度。
 - 分阶段实施：先扩展主题 token 并在 `transcript-view.ts` 为 assistant prose、thinking、tool title/output 和 Markdown 统一应用角色；随后迁移其他 TUI renderer 的硬编码颜色。兼容既有 `ThemeTags` 注入点，逐步迁移期间保留默认映射；色彩验证检查 token 覆盖、两套 palette 色号、CJK/代码/链接渲染，以及 dark/light PTY 截图。
+- 2026-11-13 跟进：普通 assistant 正文之前没有显式前景色，实际继承终端默认色；新增 `text` token（dark 254 / light 238）并接入正文、代码块、diff 上下文和表格。Context 侧栏只在 `TUIApp` 收到 `contextBudgetTokens` 时显示分母，而生产 `chatTui()` 未传该回调；现使用共享 `resolveContextWindow()` 按当前模型解析目录容量，未知模型沿用 200K 默认值。
+- 底部 `Σ` 与侧栏 `Context` 是不同指标：前者累计本次 CLI 进程收到的计费 token 帧，后者估算当前对话上下文（最近计费总量加计费后新增的转录内容）；生成中时侧栏估算可先增长。现有 `Σ` 缩写不够清楚，用户反馈已记录为后续文案改进，不混用两种数值。
+- 工具 disclosure 命中区域此前只有标题的一行；现按可见 viewport 为工具块建立多行命中区，整块可点击收起，工具文本区域仍允许鼠标拖选。`toolHoverBg` 只在鼠标位于工具块时由 TranscriptPane 叠加；错误块保留红色错误底色。
+- 展开详情时标题改为工具名或保留带语法色的 Bash 命令，已可在标题读取的命令/路径不再打印第二次；Todo 使用 checklist 作为输入投影，文件 diff 使用结构化 diff，因此不重复原始列表或变更内容。
+- 2026-11-13 跟进：全屏模式的活动状态与运行中的 subagent 列表移到 Workbench 侧栏顶部；点击 subagent 项目读取 Host 已有的进度日志，并打开可滚动的消息/工具事件面板。侧栏移除模型、provider、effort，只保留 Context 数值。底部状态行直接使用 model label，不再先把状态文本固定截成 28 字符；行宽仍不足时才显示截断省略号。此消息面板展示最近进度日志快照，不是独立子 session 的可交互输入界面。
 - `workspace_get_context` 工具当前不可用，按版本化计划和 Git 状态对账；共享检出干净，HEAD 与 `origin/master` 一致。
+- 2026-11-13 接续记录：代码与计划提交 `cec2137a34fa1362259c9b8e7909056e4c4d129c` 已推送；分支 `codex/tui-color-rendering`，base `master` / `6d6ea333fbbb3567e55dec5ca80ec010a77ba6ef`，worktree 当前干净。PR #634 仍 OPEN / DRAFT，推送后 GitHub 尚未返回检查项。CLI typecheck、architecture check、CLI/worker build、CLI bundle、diff check 均 exit 0；没有运行测试；没有合并或安装全局 CLI。下一步查看 PR 必需检查并由用户在终端评估侧栏消息面板；未获授权前不合并。
 
 ## 验证记录
 
@@ -98,9 +114,16 @@ base：`2af62ce3c81b059e3e82c5b41e9f5299bdfd61fc`。独占路径：`packages/cli
 | `bc0649969` + 当前工作区改动 | Linux x64 / Node 26.13.0 | 5 个相关 TUI 测试文件；`npm run typecheck:all`; `npm run architecture:check`; `npm run build:cli-dev`; fullscreen PTY `functional` | 相关用例 62/62；typecheck:all exit 0；architecture exit 0；CLI/worker build exit 0；PTY 10 项通过。全 TUI 共 123 文件：1613 passed、1 expected fail，另有 6 项 `tui-file-diff-stream.test.ts` 失败 | 失败签名也出现在 PR #631 旧 head 的必需 test CI；该文件及对应 transcript 渲染源码未改。生成的 Host worker bundle 变化已还原 |
 | PR #631 head `cb15fe5493b7b67cda18515c1e0d0db44dbcc933` | GitHub Actions run `43210652815` | `gh pr checks 631`; `gh run view 43210652815 --job 131157218167 --log-failed` | architecture / test scope / typecheck / build 均 PASS；test FAIL，仍是 `tui-file-diff-stream.test.ts` 同 6 项、同一错误签名 | PR 仍为 OPEN / DRAFT；未合并 |
 | PR #631 head `9a381c5e2c5b96e35681aba9f3afd68d04efbfef` | GitHub Actions run `43211687631` | `gh pr checks 631` | architecture / test scope / typecheck / build 均 PASS；test FAIL，仍是 `tui-file-diff-stream.test.ts` 同 6 项 | 这是仅含验证记录的文档提交；运行时代码仍是 `cb15fe549` |
+| `1f794c09331f19cad97e48a3513ee9d1daf7f45b` | Linux x64 / Node 26.13.0；GitHub Actions run `43361602905` | 4 个 TUI 测试文件；`npm run typecheck:all`; `npm run architecture:check`; `npm run build:cli-dev`; `python3 scripts/smoke-tui-pty.py functional ...`；`git diff --check`; `gh pr view 634 --json headRefOid,statusCheckRollup` | 92 tests passed；typecheck exit 0；architecture exit 0（无新增违规）；CLI/worker bundle exit 0；diff check clean；PTY 9/10 检查通过，其中路径检查因脚本硬编码旧分支名 `codex/tui-cursor-selection` 而失败，实际输出为当前工作区路径与分支；PR architecture / test scope PASS，typecheck / test / build 当时 IN_PROGRESS | draft PR [#634](https://github.com/lava-chen/duya/pull/634)，当前 head 与此 SHA 一致；不合并 |
+| `ce51a12a877b3ae4589441002029cc8847d7e63a` | Linux x64 / Node 26.13.0 | 5 个 TUI 测试文件；全量 `packages/cli/src/tui/__tests__`；`npm run -w @duya/cli typecheck`; `npm run typecheck:all`; `npm run architecture:check`; `npm run build:cli-dev`; `git diff --check` | 5 files / 113 tests passed；全 TUI 93 files / 1209 passed、1 expected fail；CLI typecheck、typecheck:all、architecture、CLI/worker build、diff check 均 exit 0；Host 生成 bundle 副作用已还原 | 原有 expected case 是 `tui-file-diff-stream.test.ts` 预览用例；工具 hover、跨块点击收起、去重均有测试覆盖；已提交，待推送 |
+| PR #634 head `ae47783e8de57049e63345cfc683969658efb227` | GitHub Actions run `43364011839` | `gh pr view 634 --json headRefOid,statusCheckRollup` | PR open/draft；test scope PASS；architecture、test、typecheck 当时 IN_PROGRESS | 此 head 含已推送的工具交互提交 `ce51a12a` 与计划记录 |
+| Follow-up dirty slice on `codex/tui-color-rendering` | Linux x64 / Node 26.13.0 | `npm run -w @duya/cli typecheck`; `npm run architecture:check`; `npm run build:cli-dev`; final `npm run build:cli-bundle`; `git diff --check` | CLI typecheck exit 0; architecture exit 0 (no new violations); both builds exit 0; diff check clean; generated Host worker bundle restored; no tests run | Full-screen activity and all background tasks moved to sidebar; task clicks open task output or subagent progress panel |
+| `9fc6e46d7f8a8748d1d969e19f1dc97fa133c919` + dirty subagent workspace slice | Linux x64 / Node 26.13.0 | `npm run build:packages`; `npm run typecheck:all`; `npm run architecture:check`; `npm run build:cli-dev`; `git diff --check` | package build, full typecheck, architecture (no new violations), CLI/worker bundle and CLI bundle exit 0; diff check clean. `typecheck:all` also runs its built-in 4-case eval recorder check; no standalone test suite or PTY/UI interaction run. Generated tracked Host worker bundle changes restored. | Protocol/Host/CLI implementation compiles; PR #634 remains draft; worktree dirty paths listed above plus this plan |
+| `2587b062b948f9a15ec765511f67726e88d4cb66` | Linux x64 / Node 26.13.0 | `npm run -w @duya/cli typecheck`; `npm run -w @duya/host typecheck`; `git diff --check` | CLI and Host typecheck exit 0; diff check clean; no standalone tests or live TUI run | Source changes committed; PR #634 updated |
+| `7b132069985e35a5fdee8232ff5e0de053370f79` | GitHub | `gh pr view 634 --json headRefOid,state,isDraft,statusCheckRollup,url` | PR #634 OPEN / DRAFT; head matched; statusCheckRollup empty at query time | No merge; pushed to existing draft PR |
 
 ## 接续 / 结果
 
-输入、选择、回底按钮、可见工具行点击展开、单面板工作台、三档显示和输入框下方的两行 footer 已实现。Pi 插件 UI 槽位与 Duya 合同建议已写入参考文档；通用插件 UI API 仍未实施。当前相关 TUI 测试 62/62 通过，完整 TUI 目录 123 文件中 122 文件通过、1 个未变更的 `tui-file-diff-stream.test.ts` 文件有 6 个失败：预览渲染只输出 `└ ⏺ write [-]`。相同失败签名出现在 PR #631 旧 head 的 GitHub test job；本轮没有改动该测试及对应 transcript 渲染源码。全量类型/架构门禁、CLI/worker bundle 和实际 PTY smoke 通过。构建改动过的 tracked Host worker bundle 已按生成产物路径还原。
+输入、选择、回底按钮、工具行详情、单面板工作台、三档显示、两行 footer、subagent transcript workspace 与 worktree/变更/PR 侧栏已实现。子任务实时文本、thinking、tool use/result 映射到通用转录 block；完成后加载 child session 持久化记录。滚动控制沿用主 transcript，Ctrl+End 恢复跟随；Ctrl+K 只对正在运行且属于当前 parent session 的 subagent 请求停止。Pi 插件 UI 槽位与 Duya 合同建议已写入参考文档；通用插件 UI API 仍未实施。PR #631 已按用户要求合并到 master，临时全局 CLI 已构建。
 
-工作台改动已提交为 `cb15fe5493b7b67cda18515c1e0d0db44dbcc933`，验证记录为 `9a381c5e2c5b96e35681aba9f3afd68d04efbfef`，均已推送到 PR #631。最新 CI 的 architecture、test scope、typecheck、build 通过；test 仍因未变更的流式 write 预览 6 项失败。PR 保持 OPEN / DRAFT，未合并。下一步：单独定位 `tui-file-diff-stream.test.ts` 的预览渲染，再更新 PR；不要在未评估该失败时集成。
+PR #634 head `4cfe00afa1bc436c85c119a06ff0c94b56238e9a`：architecture、typecheck、build 与 test scope PASS；全量测试 476 files pass / 2 fail。head `9a5dd8b333d2f34e400cd79f8295636818c5b480` 再次 architecture/build/typecheck PASS、test scope PASS，但同两项测试仍失败。原因是宽度在 Blessed Screen 初始化后才设置，Screen 已锁定原始 80 列布局。head `28c553327f6c8e42351ce18eac9c1ec5e07eb7f4` 把列数设置前移后仍失败，日志显示测试没有配置 `onWorkbenchCommand`，因此 TUI 的 `workbenchColumns()` 按设计隐藏侧栏。当前 dirty slice 在宽屏测试中同时配置回调以挂载 Workbench；本地未另行运行测试。下一步提交并推送布局初始化修正，等待最新 head 全部必需 CI；通过后按用户授权合并，再从 master 构建临时全局 CLI 并切换 installer shim，保留旧 package/shim 以便回滚。真实 TUI 验收由用户在切换后的全局 CLI 上进行。

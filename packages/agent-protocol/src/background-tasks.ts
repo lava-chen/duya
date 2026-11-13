@@ -103,4 +103,6 @@ export interface HostLocalBackgroundTaskApiV1 {
     taskId: string,
     maxBytes?: number,
   ): Promise<BackgroundTaskOutputV1 | null>;
+  /** Stop a running child agent owned by the given parent session. */
+  stopSubagentTask?(sessionId: string, taskId: string): Promise<boolean>;
 }

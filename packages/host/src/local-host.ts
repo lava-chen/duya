@@ -1030,7 +1030,11 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
           runExecutionApi: runExecution,
           // The index lives on the execution controller because that is the
           // only object holding the worker message link it is fed from.
-          localBackgroundTaskApi: runExecution.backgroundTasks,
+          localBackgroundTaskApi: {
+            listBackgroundTasks: runExecution.backgroundTasks.listBackgroundTasks.bind(runExecution.backgroundTasks),
+            readBackgroundTaskOutput: runExecution.backgroundTasks.readBackgroundTaskOutput.bind(runExecution.backgroundTasks),
+            stopSubagentTask: runExecution.stopSubagentTask.bind(runExecution),
+          },
         }),
       ...(sessionCompactionApi === undefined ? {} : { sessionCompactionApi }),
       ...(sideQuestionApi === undefined ? {} : { sideQuestionApi }),

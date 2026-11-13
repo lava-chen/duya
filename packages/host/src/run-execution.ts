@@ -434,6 +434,14 @@ export class HostRunExecutionController {
     } finally { release?.(); }
   }
 
+  /** Forward an explicit TUI stop request to the parent worker's child lifecycle. */
+  async stopSubagentTask(sessionId: string, taskId: string): Promise<boolean> {
+    if (!this.backgroundTasks.isRunningSubagent(sessionId, taskId)) return false;
+    return this.#workerManager.sendCommand(sessionId, {
+      type: 'subagent:kill', sessionId, taskId, reason: 'user_kill',
+    });
+  }
+
   /** Internal Bot admission uses the same policy, supervisor and Run owner. */
   async startBotRun(input: StartAgentRunInput, admission: RunDispatchAdmission): Promise<StartAgentRunResult> {
     const release = await this.#options.checkoutService?.reserveRun(input.sessionId);

@@ -2148,6 +2148,15 @@ export class HostSessionHttpClient implements
     }
   }
 
+  async stopSubagentTask(sessionId: string, taskId: string): Promise<boolean> {
+    const query = new URLSearchParams({ sessionId });
+    const result = await this.request<{ stopped: boolean }>(
+      'POST',
+      `/v1/local/background-tasks/${encodeURIComponent(taskId)}/stop?${query.toString()}`,
+    );
+    return result.stopped;
+  }
+
   async getItem(id: string): Promise<HostMailboxItem | null> {
     const params = new URLSearchParams({ id });
     const result = await this.request<{ item: HostMailboxItem | null }>(

@@ -78,8 +78,9 @@ async function settleRendered(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, MIN_RENDER_INTERVAL_MS + 40));
 }
 
-function makeApp(submitted: string[] = []) {
+function makeApp(submitted: string[] = [], columns?: number) {
   const out = sink();
+  if (columns !== undefined) Object.assign(out.stream, { columns, rows: 40 });
   const app = new TUIApp({
     output: out.stream,
     input: input(),
@@ -93,6 +94,7 @@ function makeApp(submitted: string[] = []) {
     keyOverrides: {},
     // Pin the capability whose escape sequence these integration tests assert.
     terminalEnv: detectTerminalEnvironment({ TERM: 'xterm-256color', TERM_PROGRAM: 'WezTerm' }),
+    ...(columns !== undefined ? { onWorkbenchCommand: () => {} } : {}),
   });
   return { app, out };
 }
@@ -468,8 +470,10 @@ describe('TUIApp integration', () => {
     app.stop();
   });
 
-  it('shows the active task state and tool progress in the status bar', async () => {
-    const { app, out } = makeApp();
+  it('shows the active task state and tool progress in the Workbench', async () => {
+    // Activity and its spinner live in the Workbench sidebar, which is only
+    // mounted once the terminal is wide enough to show the second pane.
+    const { app, out } = makeApp([], 140);
     app.start();
     app.setBusy(true);
     app.push({ type: 'thinking_delta', data: { content: 'planning' } });
@@ -717,22 +721,40 @@ describe('TUIApp integration', () => {
       const clickAt = (x: number, y: number): void => {
         stdin.write(`\x1b[<0;${x + 1};${y + 1}M\x1b[<0;${x + 1};${y + 1}m`);
       };
+      const moveTo = (x: number, y: number): void => {
+        stdin.write(`\x1b[<35;${x + 1};${y + 1}M`);
+      };
       clickAt(column, screenRow);
       await new Promise((resolve) => setTimeout(resolve, 350));
       await settleRendered();
 
       const written = plainText(out.text());
-      expect(written).toContain('command: printf full-command');
+      expect(written).toContain('bash(printf full-command)');
       expect(written).toContain('output-0');
       expect(written).toContain('output-5');
+      const currentRows = (): string => internals.lastTranscriptRows
+        .map((row) => row.map((span) => span.text).join('')).join('\n');
+      expect(currentRows().match(/printf full-command/gu)).toHaveLength(1);
 
-      const expandedRow = internals.lastTranscriptRows.findIndex((row) => row.map((span) => span.text).join('').includes('bash'));
-      const expandedText = internals.lastTranscriptRows[expandedRow]?.map((span) => span.text).join('') ?? '';
       const updatedTranscript = internals.fullScreen.measure('transcript');
-      expect(expandedRow).toBeGreaterThanOrEqual(0);
-      const expandedColumn = updatedTranscript!.left + updatedTranscript!.innerLeft + Math.max(0, expandedText.indexOf('bash'));
-      const expandedScreenRow = updatedTranscript!.top + updatedTranscript!.innerTop + expandedRow;
-      clickAt(expandedColumn, expandedScreenRow);
+      const headerRow = internals.lastTranscriptRows.findIndex((row) => row.map((span) => span.text).join('').includes('bash'));
+      const bodyRow = internals.lastTranscriptRows.findIndex((row) => row.map((span) => span.text).join('').includes('output-5'));
+      const bodyText = internals.lastTranscriptRows[bodyRow]?.map((span) => span.text).join('') ?? '';
+      const bodyColumn = updatedTranscript!.left + updatedTranscript!.innerLeft + Math.max(0, bodyText.indexOf('output-5'));
+      const bodyScreenRow = updatedTranscript!.top + updatedTranscript!.innerTop + bodyRow;
+      expect(headerRow).toBeGreaterThanOrEqual(0);
+      expect(bodyRow).toBeGreaterThan(headerRow);
+      moveTo(bodyColumn, bodyScreenRow);
+      await settleRendered();
+      const hoveredRows = internals.lastTranscriptRows.slice(headerRow, bodyRow + 1);
+      expect(hoveredRows.every((row) => row.some((span) => span.bg?.kind === 'indexed' && span.bg.index === 236))).toBe(true);
+
+      moveTo(79, 22);
+      await settleRendered();
+      const unhoveredRows = internals.lastTranscriptRows.slice(headerRow, bodyRow + 1);
+      expect(unhoveredRows.every((row) => row.every((span) => span.bg?.kind !== 'indexed' || span.bg.index !== 236))).toBe(true);
+
+      clickAt(bodyColumn, bodyScreenRow);
       await new Promise((resolve) => setTimeout(resolve, 350));
       await settleRendered();
       const collapsedRows = internals.lastTranscriptRows.map((row) => row.map((span) => span.text).join('')).join('\n');

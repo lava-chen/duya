@@ -12,8 +12,8 @@ function assistant(text: string, options: RenderOptions = OPTIONS): string {
 
 describe('block shapes (plan 614 phase 3)', () => {
   it('renders levels 1-2 headings bold inside the heading colour, marker consumed', () => {
-    expect(assistant('# Title')).toContain('{cyan-fg}{bold}Title{/bold}{/cyan-fg}');
-    expect(assistant('## Section')).toContain('{cyan-fg}{bold}Section{/bold}{/cyan-fg}');
+    expect(assistant('# Title')).toContain('{bold}{cyan-fg}Title{/cyan-fg}{/bold}');
+    expect(assistant('## Section')).toContain('{bold}{cyan-fg}Section{/cyan-fg}{/bold}');
     expect(assistant('# Title')).not.toContain('#');
   });
 
@@ -25,11 +25,11 @@ describe('block shapes (plan 614 phase 3)', () => {
   });
 
   it('unifies -, *, and + into one bullet glyph; ordered markers keep their number', () => {
-    expect(assistant('- a')).toContain('{cyan-fg}•{/cyan-fg} a');
-    expect(assistant('* a')).toContain('{cyan-fg}•{/cyan-fg} a');
-    expect(assistant('+ a')).toContain('{cyan-fg}•{/cyan-fg} a');
-    expect(assistant('1. a')).toContain('{cyan-fg}1.{/cyan-fg} a');
-    expect(assistant('1) a')).toContain('{cyan-fg}1){/cyan-fg} a');
+    expect(assistant('- a')).toContain('{cyan-fg}•{/cyan-fg} {254-fg}a{/254-fg}');
+    expect(assistant('* a')).toContain('{cyan-fg}•{/cyan-fg} {254-fg}a{/254-fg}');
+    expect(assistant('+ a')).toContain('{cyan-fg}•{/cyan-fg} {254-fg}a{/254-fg}');
+    expect(assistant('1. a')).toContain('{cyan-fg}1.{/cyan-fg} {254-fg}a{/254-fg}');
+    expect(assistant('1) a')).toContain('{cyan-fg}1){/cyan-fg} {254-fg}a{/254-fg}');
   });
 
   it('keeps list indentation for nested items', () => {

@@ -7,6 +7,10 @@ export interface HitRegion {
   readonly width: number;
   readonly height: number;
   readonly revision?: string | number;
+  /** Let transcript text selection start here when a press becomes a drag. */
+  readonly allowTranscriptSelection?: boolean;
+  /** Semantic transcript block to paint while the pointer is over this region. */
+  readonly hoverId?: string;
   readonly drag?: (phase: 'start' | 'move' | 'end' | 'cancel', point: { readonly x: number; readonly y: number }) => void;
   readonly activate: (point: { readonly x: number; readonly y: number }) => void;
 }
@@ -52,6 +56,10 @@ export class PointerDispatcher {
 
   hasHit(x: number, y: number): boolean {
     return this.hit(x, y) !== undefined;
+  }
+
+  targetAt(x: number, y: number): HitRegion | undefined {
+    return this.hit(x, y);
   }
 
   handle(event: InputMouseEvent): void {

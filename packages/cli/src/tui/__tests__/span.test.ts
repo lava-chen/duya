@@ -295,6 +295,7 @@ describe('roles resolve from the theme', () => {
 
   it('reads the light palette’s indexed colours without inventing names', () => {
     const light = stylesOf({ renderer: 'own', theme: {
+      text: '238-fg',
       muted: '243-fg', accent: '30-fg', success: '28-fg', error: '160-fg', warning: '172-fg',
       user: '28-fg', thinking: '128-fg', diffAdd: '28-fg', diffDel: '160-fg', heading: '30-fg', link: '243-fg',
     } });

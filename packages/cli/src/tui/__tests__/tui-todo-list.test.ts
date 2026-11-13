@@ -134,6 +134,18 @@ describe('todo rendering', () => {
     expect(rendered).not.toContain('todo(');
   });
 
+  it('does not repeat raw todo arguments beside the rendered checklist', () => {
+    const model = todoModel(THREE_ITEMS);
+    const block = model.toolByCallId('call-1');
+    expect(block).not.toBeNull();
+    const rendered = strip(renderTranscript(model, {
+      ...DEFAULT_RENDER_OPTIONS,
+      expandedBlockIds: new Set([block!.id]),
+    }));
+    expect(rendered).not.toContain('Arguments:');
+    expect(rendered.match(/Read the schema/gu)).toHaveLength(1);
+  });
+
   it('shows a running write as a bare head', () => {
     const model = new TranscriptModel();
     model.upsertTool('call-1', 'todo', { todos: THREE_ITEMS });
