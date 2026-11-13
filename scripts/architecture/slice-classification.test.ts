@@ -1326,14 +1326,13 @@ const RECORDED_LOSSES: readonly RecordedLoss[] = [
   // wire (2)
   { path: 'packages/agent/src/channels/__tests__/prompts.test.ts', from: 'wire', why: RETIRED_WITH_THE_AGENT_TEST_SUITE },
   { path: 'packages/agent/src/channels/types.test.ts', from: 'wire', why: RETIRED_WITH_THE_AGENT_TEST_SUITE },
-  // runtime-coordination (30)
+  // runtime-coordination (29)
   { path: 'packages/agent/src/agent-profile/__tests__/config-groups.test.ts', from: 'runtime-coordination', why: RETIRED_WITH_THE_AGENT_TEST_SUITE },
   { path: 'packages/agent/src/agent/__tests__/permissions-gate.test.ts', from: 'runtime-coordination', why: RETIRED_WITH_THE_AGENT_TEST_SUITE },
   { path: 'packages/agent/src/agent/__tests__/stream-retry.test.ts', from: 'runtime-coordination', why: RETIRED_WITH_THE_AGENT_TEST_SUITE },
   { path: 'packages/agent/src/agent/__tests__/tool-group-progress.test.ts', from: 'runtime-coordination', why: RETIRED_WITH_THE_AGENT_TEST_SUITE },
   { path: 'packages/agent/src/agent/__tests__/toolInvokePermission.test.ts', from: 'runtime-coordination', why: RETIRED_WITH_THE_AGENT_TEST_SUITE },
   { path: 'packages/agent/src/agent/dm/wake-prompt.test.ts', from: 'runtime-coordination', why: RETIRED_WITH_THE_AGENT_TEST_SUITE },
-  { path: 'packages/agent/src/agent/tool-group-progress.ts', from: 'runtime-coordination', why: REMOVED_WITH_THE_PROGRESS_UPDATE_TOOL },
   { path: 'packages/agent/src/compact/__tests__/BackgroundPrefire.test.ts', from: 'runtime-coordination', why: RETIRED_WITH_THE_AGENT_TEST_SUITE },
   { path: 'packages/agent/src/compact/__tests__/CompactionManager.accounting.test.ts', from: 'runtime-coordination', why: RETIRED_WITH_THE_AGENT_TEST_SUITE },
   { path: 'packages/agent/src/compact/__tests__/CompactionManager.loop-guards.test.ts', from: 'runtime-coordination', why: RETIRED_WITH_THE_AGENT_TEST_SUITE },
@@ -1985,6 +1984,12 @@ const RECORDED_LOSSES: readonly RecordedLoss[] = [
   { path: 'packages/agent/src/compact/transforms/offloadCompress.ts', from: 'runtime-coordination', why: RETIRED_WITH_THE_PROJECTION_COMPRESS_PASS },
   { path: 'packages/agent/src/compact/transforms/reformatCompress.ts', from: 'runtime-coordination', why: RETIRED_WITH_THE_PROJECTION_COMPRESS_PASS },
   { path: 'packages/agent/src/compact/transforms/shared.ts', from: 'runtime-coordination', why: RETIRED_WITH_THE_PROJECTION_COMPRESS_PASS },
+  // And one more census-history entry: the progress_update control tool was
+  // removed on 2026-11-13, and its legacy `packages/agent` re-export shell
+  // went with it. Same bounded exemption as the entries above: the path has to
+  // be named for the census to accept the retirement, and the retirement gate
+  // scans literal `packages/agent/...` strings. Keep the markers tight.
+  { path: 'packages/agent/src/agent/tool-group-progress.ts', from: 'runtime-coordination', why: REMOVED_WITH_THE_PROGRESS_UPDATE_TOOL },
   // RETIREMENT_GATE_FIXTURE_CONTEXT_END
 ];
 

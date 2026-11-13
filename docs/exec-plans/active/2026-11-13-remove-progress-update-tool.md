@@ -59,6 +59,8 @@
 9. **本机依赖是独立安装的。** 主检出 `/home/lavachen/Projects/duya` 没有 `node_modules`，`junction-worktree.mjs` 的根级链接因此无法建立（它的 primary 无依赖可链）。按根 AGENTS「独立依赖目录可 `npm install`」在本检出执行 `npm ci`；`PUPPETEER_SKIP_DOWNLOAD=true` 绕过本机 Chrome 缓存不完整导致的 puppeteer 安装失败（e2e 浏览器用例本次不涉及）。
 10. **`agent-process-entry-import.test.ts` 的失败是既有基线失败，与本次改动无关。** 该用例断言 `process.send` 恰好被调用 1 次，实测 4 次。在**未修改的 base 检出**（`6d6ea333`）上跑同一条命令，失败签名逐字相同（同文件、同行号 `:185`、`expected "vi.fn()" to be called 1 times, but got 4 times`）。判定为既有债，不在本次范围内修。
 11. **本次改动消除了 4 条被 baseline 容忍的边界违规。** base `6d6ea333` 与本分支对跑 `architecture:check`：violation total 由 **3206 降到 3202**，「已失效 baseline 指纹」由 **60 升到 63**（多出的 3 条即被删工具的跨包 import 指纹）。未改动 `.architecture-baseline.json`，无新增违规。
+12. **CI 暴露了一个本地门禁集覆盖不到的闸门：`agent-retirement-gate`。** PR #635 的 `architecture` job 在第 9 步「Agent retirement reference ratchet」红，退出码 1：`773 current / 772 baseline / 1 new`，`new test-target references: 1`。该闸门**不在** `typecheck:all` 与 `architecture:check` 里，本地跑不到。根因：`RECORDED_LOSSES` 条目必须写出被删文件的字面路径 `packages/agent/src/agent/tool-group-progress.ts`，而退役闸门正是扫描这个字面串，把它算成一条新增的退役包引用（test-target 654 → 655）。
+13. **修法：把该条目移进 `RETIREMENT_GATE_FIXTURE_CONTEXT` 有界区间。** 退役闸门对 `scripts/architecture/slice-classification.test.ts` 有专门的有界豁免：位于 `// RETIREMENT_GATE_FIXTURE_CONTEXT_START` / `END` 之间的引用计入 `bounded synthetic fixture references`，不参与棘轮计数。仓库既有先例正是这条路径 —— `plan` 工具退役的 3 条与 projection-compress 退役的 6 条 census 条目都在该区间内（`:1965`–`:1988`）。把新条目移入后：退役闸门回到 `772 current / 772 baseline / 0 new`（bounded 计数 63 → 64），census 用例仍 30/30 通过。**未改任何 baseline 文件**，也没有放宽闸门。
 
 ## 验证记录
 
