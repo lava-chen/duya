@@ -1,8 +1,8 @@
 # CLI TUI 输入、选择、工具详情与消息色彩
 
-状态：active。负责人：本会话。更新：2026-11-12。
-分支：`codex/tui-cursor-selection`。worktree：`/home/lavachen/.codex/worktrees/tui-cursor-selection/duya`。
-base：`2af62ce3c81b059e3e82c5b41e9f5299bdfd61fc`。独占路径：`packages/cli/src/tui/**` 与本文档。
+状态：active。负责人：本会话。更新：2026-11-13。
+分支：`codex/tui-color-rendering`。worktree：`/home/lavachen/.codex/worktrees/tui-cursor-selection/duya`。
+base：`6d6ea333fbbb3567e55dec5ca80ec010a77ba6ef`。独占路径：`packages/cli/src/chat.ts`、`packages/cli/src/tui/**` 与本文档。
 
 ## 目标与边界
 
@@ -40,6 +40,8 @@ base：`2af62ce3c81b059e3e82c5b41e9f5299bdfd61fc`。独占路径：`packages/cli
 - [x] 将显示模式压缩为 Minimal / Default / Detailed，旧命令名做兼容映射。
 - [x] 将 fullscreen footer 调整为路径/分支在上、活动状态在下；验证 inline/footer 与提示弹层布局。
 - [x] 阅读 Pi 扩展的 widget、header/footer、custom UI、editor/theme、tool renderer 与 RPC 接口，并记录 Duya 合同建议。
+- [x] 将语义 `text` 色号应用到 assistant 普通正文、代码块、diff 上下文与表格。
+- [x] 将活动模型的 context window 通过模型目录回退值接入工作台侧栏，显示 `/` 后的预算总量。
 
 ## 发现与决策
 
@@ -80,6 +82,7 @@ base：`2af62ce3c81b059e3e82c5b41e9f5299bdfd61fc`。独占路径：`packages/cli
 
   背景 token 与前景色分开：保留 `promptBg`、`diff*Bg`、`search*Bg`，工具错误行使用 `toolErrorBg=52`（dark）/`224`（light）。所有正文渲染必须显式落到 `text` 或内容角色，避免透传终端默认前景色。色号表是首版建议，合入渲染器时需用 dark/light 真实 PTY 检查长文、选区、代码和链接的辨识度。
 - 分阶段实施：先扩展主题 token 并在 `transcript-view.ts` 为 assistant prose、thinking、tool title/output 和 Markdown 统一应用角色；随后迁移其他 TUI renderer 的硬编码颜色。兼容既有 `ThemeTags` 注入点，逐步迁移期间保留默认映射；色彩验证检查 token 覆盖、两套 palette 色号、CJK/代码/链接渲染，以及 dark/light PTY 截图。
+- 2026-11-13 跟进：普通 assistant 正文之前没有显式前景色，实际继承终端默认色；新增 `text` token（dark 254 / light 238）并接入正文、代码块、diff 上下文和表格。Context 侧栏只在 `TUIApp` 收到 `contextBudgetTokens` 时显示分母，而生产 `chatTui()` 未传该回调；现使用共享 `resolveContextWindow()` 按当前模型解析目录容量，未知模型沿用 200K 默认值。
 - `workspace_get_context` 工具当前不可用，按版本化计划和 Git 状态对账；共享检出干净，HEAD 与 `origin/master` 一致。
 
 ## 验证记录
@@ -98,9 +101,10 @@ base：`2af62ce3c81b059e3e82c5b41e9f5299bdfd61fc`。独占路径：`packages/cli
 | `bc0649969` + 当前工作区改动 | Linux x64 / Node 26.13.0 | 5 个相关 TUI 测试文件；`npm run typecheck:all`; `npm run architecture:check`; `npm run build:cli-dev`; fullscreen PTY `functional` | 相关用例 62/62；typecheck:all exit 0；architecture exit 0；CLI/worker build exit 0；PTY 10 项通过。全 TUI 共 123 文件：1613 passed、1 expected fail，另有 6 项 `tui-file-diff-stream.test.ts` 失败 | 失败签名也出现在 PR #631 旧 head 的必需 test CI；该文件及对应 transcript 渲染源码未改。生成的 Host worker bundle 变化已还原 |
 | PR #631 head `cb15fe5493b7b67cda18515c1e0d0db44dbcc933` | GitHub Actions run `43210652815` | `gh pr checks 631`; `gh run view 43210652815 --job 131157218167 --log-failed` | architecture / test scope / typecheck / build 均 PASS；test FAIL，仍是 `tui-file-diff-stream.test.ts` 同 6 项、同一错误签名 | PR 仍为 OPEN / DRAFT；未合并 |
 | PR #631 head `9a381c5e2c5b96e35681aba9f3afd68d04efbfef` | GitHub Actions run `43211687631` | `gh pr checks 631` | architecture / test scope / typecheck / build 均 PASS；test FAIL，仍是 `tui-file-diff-stream.test.ts` 同 6 项 | 这是仅含验证记录的文档提交；运行时代码仍是 `cb15fe549` |
+| `6d6ea333` + 当前 follow-up 改动 | Linux x64 / Node 26.13.0 | 4 个 TUI 测试文件；`npm run typecheck:all`; `npm run architecture:check`; `npm run build:cli-dev`; `python3 scripts/smoke-tui-pty.py functional ...`；`git diff --check` | 92 tests passed；typecheck exit 0；architecture exit 0（无新增违规）；CLI/worker bundle exit 0；diff check clean；PTY 9/10 检查通过，其中路径检查因脚本硬编码旧分支名 `codex/tui-cursor-selection` 而失败，实际输出为当前工作区路径与分支 | Host 生成 bundle 的构建副作用已恢复；当前 follow-up 尚未提交/推送 |
 
 ## 接续 / 结果
 
 输入、选择、回底按钮、可见工具行点击展开、单面板工作台、三档显示和输入框下方的两行 footer 已实现。Pi 插件 UI 槽位与 Duya 合同建议已写入参考文档；通用插件 UI API 仍未实施。当前相关 TUI 测试 62/62 通过，完整 TUI 目录 123 文件中 122 文件通过、1 个未变更的 `tui-file-diff-stream.test.ts` 文件有 6 个失败：预览渲染只输出 `└ ⏺ write [-]`。相同失败签名出现在 PR #631 旧 head 的 GitHub test job；本轮没有改动该测试及对应 transcript 渲染源码。全量类型/架构门禁、CLI/worker bundle 和实际 PTY smoke 通过。构建改动过的 tracked Host worker bundle 已按生成产物路径还原。
 
-工作台改动已提交为 `cb15fe5493b7b67cda18515c1e0d0db44dbcc933`，验证记录为 `9a381c5e2c5b96e35681aba9f3afd68d04efbfef`，均已推送到 PR #631。最新 CI 的 architecture、test scope、typecheck、build 通过；test 仍因未变更的流式 write 预览 6 项失败。PR 保持 OPEN / DRAFT，未合并。下一步：单独定位 `tui-file-diff-stream.test.ts` 的预览渲染，再更新 PR；不要在未评估该失败时集成。
+输入、选择、回底按钮、可见工具行点击展开、单面板工作台、三档显示和输入框下方的两行 footer 已实现。Pi 插件 UI 槽位与 Duya 合同建议已写入参考文档；通用插件 UI API 仍未实施。PR #631 后续已按用户要求合并到 master，临时全局 CLI 也已构建。当前 follow-up 的相关 TUI 测试 92/92 通过，全量类型/架构门禁和 CLI/worker bundle 通过。构建改动过的 tracked Host worker bundle 已按生成产物路径还原。当前分支尚未提交/推送；下一步提交并创建 follow-up draft PR，未经用户授权不得合并。

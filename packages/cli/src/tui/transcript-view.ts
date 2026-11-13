@@ -278,6 +278,7 @@ export interface Styles {
    * string first. Carrying the tokens makes that a lookup.
    */
   readonly tags: ThemeTags;
+  text(s: string): string;
   bold(s: string): string;
   /** Emphasis. The own renderer emits `{italic}`; blessed folds to accent. */
   italic(s: string): string;
@@ -303,6 +304,7 @@ export function stylesOf(options: Pick<RenderOptions, 'theme' | 'renderer'>): St
   return {
     renderer: options.renderer ?? 'blessed',
     tags,
+    text: (s) => flat(tags.text, s),
     bold: (s) => `{bold}${escapeTags(s)}{/bold}`,
     italic: (s) => `{italic}${escapeTags(s)}{/italic}`,
     strike: (s) => `{strike}${escapeTags(s)}{/strike}`,
@@ -346,12 +348,19 @@ function renderInlineRows(
   text: string,
   styles: Styles,
   width: number | undefined,
-  envelope: SpanStyle = PLAIN_STYLE,
+  envelope?: SpanStyle,
 ): string[] {
   const view = tagViewOf(styles);
-  const spans = tokensToSpans(tokenizeInline(text), spanRolesOf(styles));
-  if (width === undefined) return [spansToTags(spans, view, envelope)];
-  return wrapSpans(spans, width).map((row) => spansToTags(row, view, envelope));
+  const base = envelope ?? textEnvelopeOf(styles);
+  const spans = tokensToSpans(tokenizeInline(text), spanRolesOf(styles), base);
+  if (width === undefined) return [spansToTags(spans, view)];
+  return wrapSpans(spans, width).map((row) => spansToTags(row, view));
+}
+
+/** The foreground for ordinary message content in the selected palette. */
+function textEnvelopeOf(styles: Pick<Styles, 'tags'>): SpanStyle {
+  const color = colorFromTagBody(styles.tags.text);
+  return color === undefined ? PLAIN_STYLE : { fg: color };
 }
 
 /**
@@ -374,7 +383,7 @@ function renderCodeBlock(language: string, lines: readonly string[], styles: Sty
   for (const [index, line] of lines.entries()) {
     const number = String(index + 1).padStart(numberWidth, ' ');
     const gutter = styles.muted(`  │ ${number} │`);
-    rendered.push(`${gutter} ${diff ? renderDiffLine(line, styles) : escapeTags(line)}`);
+    rendered.push(`${gutter} ${diff ? renderDiffLine(line, styles) : styles.text(line)}`);
   }
   rendered.push(styles.muted('  └─'));
   return rendered.join('\n');
@@ -398,7 +407,7 @@ function renderDiffLine(line: string, styles: Styles): string {
   if (/^@@/u.test(line)) return styles.accent(line);
   if (line.startsWith('+')) return styles.diffAdd(line);
   if (line.startsWith('-')) return styles.diffDel(line);
-  return escapeTags(line);
+  return styles.text(line);
 }
 
 /**
@@ -490,7 +499,11 @@ function renderTable(
   // Markdown, lowered to spans so the width measured is the width shown.
   const headerText = (column: number): string => cellSource(0, column);
   const bodySpans = (rowIndex: number, column: number): readonly StyledSpan[] =>
-    tokensToSpans(tokenizeInline(cellSource(rowIndex, column)), spanRolesOf(styles));
+    tokensToSpans(
+      tokenizeInline(cellSource(rowIndex, column)),
+      spanRolesOf(styles),
+      textEnvelopeOf(styles),
+    );
 
   // Column widths: the natural width is what the cell NEEDS, the minimum is
   // what it cannot go below without cutting a word in half.

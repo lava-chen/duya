@@ -32,6 +32,7 @@ import type {
   SessionId,
 } from '@duya/agent-protocol';
 import { projectTimelinePersistenceMessages } from '@duya/agent-protocol/transcript';
+import { resolveContextWindow } from '@duya/ai/context';
 import type { PopoverItem } from '@duya/input-completion';
 import { rewritePluginMentionTokens } from '@duya/input-completion';
 import { describeSpec, findSpec, type CommandLocale } from '@duya/command-catalog';
@@ -1314,6 +1315,12 @@ export async function chatTui(
         ...(effort === null ? {} : { thinking: effort }),
       };
     },
+    // Keep the workbench context total consistent with the shared catalog
+    // fallback used by `/context` and compaction when Host capability metadata
+    // is unavailable to the live TUI.
+    contextBudgetTokens: () => resolveContextWindow({
+      modelId: activeSession.model || options.model,
+    }).contextWindow,
     // The composer's border colour: pi's tell for how much thinking the next
     // message will buy. Read through a callback so /effort repaints immediately.
     effort: () => effort,

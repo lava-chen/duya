@@ -15,9 +15,9 @@
  * (`'gray-fg'`, `'241-fg'`), not to a wrapped string. The wrapper stays in
  * `transcript-view.ts`, which owns escaping. Bodies may be:
  *
- * - named colours (`gray-fg`, `bright-green-fg`) — the dark palette, which is
- *   byte-identical to what the renderer emitted before theming existed, so the
- *   existing markup tests are also the dark-palette tests;
+ * - named colours (`gray-fg`, `bright-green-fg`) — the dark palette keeps its
+ *   established semantic accents, while message text uses an explicit
+ *   256-colour foreground so it does not inherit terminal-specific defaults;
  * - 256-colour numbers (`241-fg`) — the light palette. Verified against
  *   blessed's parser: `{241-fg}` renders as `\x1b[38;5;241m` (`element.js`
  *   `_parseTags` → `program._attr('241 fg')`). Hex tags were rejected: they
@@ -45,6 +45,7 @@ export type ThemeName = 'dark' | 'light';
 
 /** The semantic colours the transcript is allowed to paint with. */
 export type ThemeToken =
+  | 'text'
   | 'muted'
   | 'accent'
   | 'success'
@@ -100,12 +101,11 @@ export type ThemeToken =
 export type ThemeTags = Readonly<Record<ThemeToken, string>>;
 
 /**
- * Dark terminal palette — byte-identical to the pre-theme renderer.
- *
- * Kept hand-written (not derived) so a palette change here can never silently
- * move what the markup tests pin.
+ * Dark terminal palette. Accents keep their established ANSI roles; message
+ * text is explicit so its contrast does not depend on terminal defaults.
  */
 export const DARK_THEME_TAGS: ThemeTags = {
+  text: '254-fg',
   muted: 'gray-fg',
   accent: 'cyan-fg',
   success: 'bright-green-fg',
@@ -141,6 +141,7 @@ export const DARK_THEME_TAGS: ThemeTags = {
  * make invisible.
  */
 export const LIGHT_THEME_TAGS: ThemeTags = {
+  text: '238-fg',
   muted: '243-fg',
   accent: '30-fg',
   success: '28-fg',
