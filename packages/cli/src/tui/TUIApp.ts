@@ -2209,13 +2209,15 @@ export class TUIApp {
     // match's line number — depends on it.
     this.lastPaneWidth = width - (thumb !== null ? 1 : 0);
     if (sidebarWidth > 0) {
-      const model = this.options.modelLabel?.();
       const tools = this.model.blocks.filter((block) => block.kind === 'tool');
+      const busy = this.options.isBusy?.() ?? this.busy;
+      const working = busy || this.waitingForPermission;
       const props = {
         styles: stylesOf({ theme: this.theme.tags, renderer: 'own' }),
         sessionTitle: this.options.sessionTitle?.() ?? 'Current session',
-        model: model?.model ?? 'unknown', provider: model?.provider ?? 'unknown',
-        effort: this.effortLevel() ?? 'auto',
+        activity: `${working ? `${spinnerGlyph(this.spinnerFrame, this.terminalEnv.unicodeBox)} ` : ''}${this.activityLabel(busy)}`,
+        activityActive: working,
+        tasks: this.backgroundTasks.tasks(),
         contextTokens: this.contextTokens(),
         contextBudget: this.options.contextBudgetTokens?.() ?? null,
         profile: resolveDisplayProfile({ showThinking: this.showThinking, expandBlocks: this.expanded, showToolResults: this.showToolResults, toolGroupMode: this.toolGroupMode }),
@@ -2723,11 +2725,11 @@ export class TUIApp {
   }
 
   private paintStatus(): void {
-    const text = compactActivity(this.options.statusText?.() ?? '', 28);
+    const model = this.options.modelLabel?.();
+    const text = model === undefined || model === null
+      ? this.options.statusText?.() ?? ''
+      : [model.provider, model.model].filter((part) => part !== undefined && part !== '').join(' · ');
     const busy = this.options.isBusy?.() ?? this.busy;
-    const spinner = busy || this.waitingForPermission
-      ? `${spinnerGlyph(this.spinnerFrame, this.terminalEnv.unicodeBox)} `
-      : '';
     const tail = this.follow ? '' : ' [paused]';
     const taskRows = this.backgroundTaskRows();
     const taskSelection = this.selectedTaskRow < 0 ? 0 : this.selectedTaskRow + 1;
@@ -2774,12 +2776,9 @@ export class TUIApp {
       this.inlineStatusLines = this.footerLines(width, hint + queueSegment);
       return;
     }
-    const counts = this.backgroundSummaryCounts();
-    const fixed = text + ' · ' + spinner + this.activityLabel(busy) + backgroundSummarySuffix({
-      bashRunning: counts.bashRunning,
-      subagentRunning: counts.subagentRunning,
-      totalTasks: counts.backgroundSummaryTotal,
-    }) + tail + usage + queueSegment + ' · ' + context;
+    const fixed = [text, tail.trim(), usage.trim().replace(/^·\s*/u, ''), queueSegment.trim().replace(/^·\s*/u, ''), context]
+      .filter((part) => part !== '')
+      .join(' · ');
     // The permission badge rides the END of the status row, the way the
     // inline footer puts it at the end of its second row: the bottom-right
     // corner is where the session's standing state is shown. It is a separate
@@ -5499,8 +5498,11 @@ exportHistory(): string[] {
       for (const target of this.sidebar.pointerTargets()) {
         add(`sidebar:${target.id}`, geometry, target.row, layout.column + target.column, target.width, () => {
           if ((this.options.workbenchSessionId?.() ?? '') !== sessionId) return;
-          const command = target.action.command;
-          void Promise.resolve().then(() => this.options.onWorkbenchCommand?.(command)).catch((error: unknown) => {
+          const action = target.action;
+          const invoke = 'task' in action
+            ? () => this.openTaskDetail(action.task)
+            : () => this.options.onWorkbenchCommand?.(action.command);
+          void Promise.resolve().then(invoke).catch((error: unknown) => {
             this.printError(error instanceof Error ? error.message : String(error));
           });
         }, sessionId);

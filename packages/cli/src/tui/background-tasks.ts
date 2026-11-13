@@ -140,7 +140,13 @@ export function backgroundTaskDetailLines(
   field('id', task.id);
 
   if (task.kind === 'subagent') {
-    lines.push('', '  The subagent runs inside this session\'s turn; its transcript is not shown here.');
+    lines.push('');
+    if (output === null) {
+      lines.push('  No subagent messages are available yet.');
+      return lines;
+    }
+    if (output.truncated) lines.push('  Earlier activity omitted; showing the latest events.');
+    lines.push(...subagentProgressLines(output.text));
     return lines;
   }
 
@@ -153,6 +159,45 @@ export function backgroundTaskDetailLines(
   lines.push('');
   lines.push(output.text === '' ? '  (no output yet)' : output.text);
   return lines;
+}
+
+/** Render the Host's append-only progress log as readable child-agent activity. */
+function subagentProgressLines(text: string): string[] {
+  const lines: string[] = [];
+  for (const source of text.split(/\r?\n/u)) {
+    if (source.trim() === '') continue;
+    let record: unknown;
+    try { record = JSON.parse(source) as unknown; } catch { lines.push(`  ${source}`); continue; }
+    if (record === null || typeof record !== 'object' || Array.isArray(record)) continue;
+    const envelope = record as Record<string, unknown>;
+    const payload = envelope['payload'] !== null && typeof envelope['payload'] === 'object' && !Array.isArray(envelope['payload'])
+      ? envelope['payload'] as Record<string, unknown>
+      : envelope;
+    const kind = typeof payload['type'] === 'string' ? payload['type']
+      : typeof envelope['type'] === 'string' ? envelope['type'] : 'event';
+    const data = typeof payload['data'] === 'string' ? payload['data'] : '';
+    if (kind === 'text' || kind === 'thinking') {
+      const label = kind === 'thinking' ? 'Thinking' : 'Agent';
+      for (const row of data.split(/\r?\n/u)) if (row !== '') lines.push(`  ${label}: ${row}`);
+    } else if (kind === 'tool_use') {
+      const name = typeof payload['toolName'] === 'string' ? payload['toolName'] : 'tool';
+      const input = payload['toolInput'];
+      lines.push(`  ▸ ${name}`);
+      if (input !== undefined) {
+        for (const row of JSON.stringify(input, null, 2).split(/\r?\n/u)) lines.push(`    ${row}`);
+      }
+    } else if (kind === 'tool_result') {
+      const name = typeof payload['toolName'] === 'string' ? payload['toolName'] : 'tool';
+      const result = typeof payload['toolResult'] === 'string' ? payload['toolResult'] : data;
+      lines.push(`  ${name} result:`);
+      for (const row of result.split(/\r?\n/u)) lines.push(`    ${row}`);
+    } else if (kind === 'error') {
+      lines.push(`  Error: ${data || 'subagent reported an error'}`);
+    } else if (kind === 'started' || kind === 'completed' || kind === 'failed' || kind === 'done') {
+      lines.push(`  ${kind}${data === '' ? '' : `: ${data}`}`);
+    }
+  }
+  return lines.length === 0 ? ['  Waiting for the subagent to send its first event.'] : lines;
 }
 
 export class BackgroundTaskModel {

@@ -1419,25 +1419,19 @@ export async function chatTui(
 
   backgroundPoller.start();
 
-  /**
-   * Enter on a task row: read the output tail (bash only) and show the detail
-   * panel. The read is on demand, not streamed — the protocol has no stdout
-   * delta, and a tail snapshot is what the Host already keeps.
-   */
+  /** Enter on a task row: show its output or the subagent's latest activity. */
   async function openBackgroundTask(task: BackgroundTaskView): Promise<void> {
     let output: BackgroundTaskOutputV1 | null = null;
-    if (task.kind === 'bash') {
-      try {
-        output = await client.readBackgroundTaskOutput(activeSession.id, task.id);
-      } catch (error) {
-        if (!finished) {
-          tui.printError('Could not read task output: ' + errorText(error));
-        }
+    try {
+      output = await client.readBackgroundTaskOutput(activeSession.id, task.id);
+    } catch (error) {
+      if (!finished) {
+        tui.printError(`Could not read ${task.kind === 'bash' ? 'task output' : 'subagent activity'}: ` + errorText(error));
       }
     }
     if (finished) return;
     tui.showPanel(
-      task.kind === 'bash' ? 'Background task' : 'Subagent',
+      task.kind === 'bash' ? 'Background task' : 'Subagent activity',
       backgroundTaskDetailLines(task, output),
       { footer: '↑↓ / PgUp / PgDn scroll · Esc close', scrollable: true },
     );
