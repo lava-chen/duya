@@ -1283,7 +1283,11 @@ export class TranscriptModel {
 function serializeToolArguments(input: unknown): string | undefined {
   if (input === undefined) return undefined;
   try {
-    return JSON.stringify(input, null, 2);
+    const serialized = JSON.stringify(input, null, 2);
+    // A streaming call is announced with an empty object before its argument
+    // deltas arrive. Keeping that placeholder would prefix the raw JSON
+    // fragments and make the live invocation impossible to parse.
+    return serialized === '{}' ? undefined : serialized;
   } catch {
     return undefined;
   }
