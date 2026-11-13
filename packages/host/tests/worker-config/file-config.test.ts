@@ -132,6 +132,52 @@ describe('resolveProvider (the reported bug)', () => {
     );
     expect(expectOk(resolveProvider(undefined, tmpRoot)).apiKey).toBe('sk-nested');
   });
+
+  it('uses the only configured provider when no global default is selected', () => {
+    writeConfig(`
+[providers.minimax-cn]
+  name = "MiniMax (CN)"
+  providerType = "anthropic"
+  baseUrl = "https://api.minimax.cn/anthropic"
+  [providers.minimax-cn.options]
+  enabled_models = [ "MiniMax-M3" ]
+  defaultModel = "MiniMax-M3"
+`);
+    writeSecrets({ 'providers.minimax-cn.apiKey': 'sk-test' });
+
+    const provider = expectOk(resolveProvider(undefined, tmpRoot));
+    expect(provider.id).toBe('minimax-cn');
+    expect(provider.model.model).toBe('MiniMax-M3');
+  });
+
+  it('treats the legacy env placeholder as unset and honors the config default', () => {
+    writeConfig(REAL_CONFIG);
+    writeSecrets({ 'providers.minimax-cn.apiKey': 'sk-test' });
+
+    const provider = expectOk(resolveProvider(undefined, tmpRoot, 'env'));
+    expect(provider.id).toBe('minimax-cn');
+  });
+
+  it('does not guess between multiple providers without a selected default', () => {
+    writeConfig(`
+[providers.one]
+  providerType = "anthropic"
+[providers.one.options]
+  defaultModel = "model-one"
+[providers.two]
+  providerType = "openai-compatible"
+[providers.two.options]
+  defaultModel = "model-two"
+`);
+    writeSecrets({
+      'providers.one.apiKey': 'key-one',
+      'providers.two.apiKey': 'key-two',
+    });
+
+    const result = resolveProvider(undefined, tmpRoot);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe('no-provider-selected');
+  });
 });
 
 describe('model resolution', () => {
@@ -345,9 +391,11 @@ describe('failure modes each name the real cause', () => {
     expect(res.message).toContain('real');
   });
 
-  it('no-provider-selected when [model].provider is absent', () => {
-    writeConfig('[model]\n  default = "x"\n[providers.p]\n  providerType = "anthropic"\n');
-    writeSecrets({ 'providers.p.apiKey': 'k' });
+  it('no-provider-selected when multiple providers exist without a default', () => {
+    writeConfig(
+      '[providers.p]\n  providerType = "anthropic"\n[providers.q]\n  providerType = "openai"\n',
+    );
+    writeSecrets({ 'providers.p.apiKey': 'k', 'providers.q.apiKey': 'q' });
     const res = resolveProvider(undefined, tmpRoot);
     expect(res.ok).toBe(false);
     if (res.ok) return;

@@ -474,13 +474,22 @@ export function createHostSessionApi(options: HostSessionApiOptions): HostSessio
 
     const existing = sessions.get(id);
     if (existing) {
+      const canBackfillDefaults = input.model === undefined && input.providerId === undefined;
       const patch: SessionPatch = {
         ...(input.workspaceId === undefined ? {} : { workingDirectory }),
         ...(input.projectName !== undefined ? { projectName: input.projectName } : {}),
         ...(input.status !== undefined ? { status: input.status } : {}),
         ...(input.title !== undefined ? { title: input.title } : {}),
-        ...(input.model !== undefined ? { model: input.model } : {}),
-        ...(input.providerId !== undefined ? { providerId: input.providerId } : {}),
+        ...(input.model !== undefined
+          ? { model: input.model }
+          : canBackfillDefaults && existing.model === '' && fallback?.model !== undefined
+            ? { model: fallback.model }
+            : {}),
+        ...(input.providerId !== undefined
+          ? { providerId: input.providerId }
+          : canBackfillDefaults && existing.providerId === 'env' && fallback?.providerId !== undefined
+            ? { providerId: fallback.providerId }
+            : {}),
         ...(input.mode !== undefined ? { mode: input.mode } : {}),
         ...(input.permissionMode !== undefined ? { permissionMode: input.permissionMode } : {}),
         ...(input.agentProfileId !== undefined ? { agentProfileId: input.agentProfileId } : {}),
@@ -489,7 +498,7 @@ export function createHostSessionApi(options: HostSessionApiOptions): HostSessio
         ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
         ...(input.draft !== undefined ? { draft: input.draft } : {}),
       };
-      sessions.update(id, patch);
+      if (Object.keys(patch).length > 0) sessions.update(id, patch);
       for (const [key, value] of Object.entries(input.extensions ?? {})) {
         sessions.setExtension(id, key, value);
       }

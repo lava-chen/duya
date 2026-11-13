@@ -299,23 +299,27 @@ export function resolveProvider(
     };
   }
 
-  // An explicit provider id (e.g. the run manifest's frozen agent selection)
-  // wins over `[model].provider` in config.toml.
-  const providerId =
-    explicitProviderId?.trim() ||
-    (typeof doc.model?.provider === 'string' ? doc.model.provider.trim() : '');
+  const providers = isPlainObject(doc.providers) ? doc.providers : {};
+  // `env` is the session-store placeholder, not a provider selection. It can
+  // arrive from legacy sessions that were created before config.toml fallback
+  // was applied, so let the configured default or the single-provider fallback
+  // resolve those sessions too.
+  const explicit = explicitProviderId?.trim();
+  const configured = typeof doc.model?.provider === 'string' ? doc.model.provider.trim() : '';
+  const selected = explicit && explicit !== 'env' ? explicit : configured;
+  const providerIds = Object.keys(providers);
+  const providerId = selected || (providerIds.length === 1 ? providerIds[0] : '');
   if (!providerId) {
     return {
       ok: false,
       reason: 'no-provider-selected',
       message:
-        `${configPath} has no [model].provider set, so no provider is selected. ` +
-        'Set one in Settings, or pass --api-key/--base-url/--model.',
+        `${configPath} has no default provider selected. ` +
+        'Choose one with /provider, or choose a model with /model.',
       configRoot: root,
     };
   }
 
-  const providers = isPlainObject(doc.providers) ? doc.providers : {};
   const entry = providers[providerId];
   if (!isPlainObject(entry)) {
     const known = Object.keys(providers);

@@ -23,16 +23,16 @@ afterEach(async () => {
   }
 });
 
-/** A data root whose config.toml selects one provider, with a matching key. */
-async function createRoot(providerId: string, model: string): Promise<string> {
+/** A data root with one provider and an optional global selection. */
+async function createRoot(providerId: string, model: string, selectProvider = true): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'duya-session-model-'));
   roots.push(root);
   await fs.writeFile(
     path.join(root, 'config.toml'),
-    `[model]\nprovider = "${providerId}"\ndefault = "${model}"\n\n` +
+    (selectProvider ? `[model]\nprovider = "${providerId}"\ndefault = "${model}"\n\n` : '') +
       `[providers.${providerId}]\nproviderType = "anthropic"\n` +
       `baseUrl = "https://example.invalid"\n\n` +
-      `[providers.${providerId}.options]\ndefaultModel = "${model}"\n`,
+      `[providers.${providerId}.options]\nenabled_models = [ "${model}" ]\ndefaultModel = "${model}"\n`,
     'utf-8',
   );
   await fs.writeFile(
@@ -72,6 +72,32 @@ describe('session provider/model defaults', () => {
 
     expect(session.providerId).toBe('minimax-cn');
     expect(session.model).toBe('claude-sonnet-4');
+  }, 30_000);
+
+  it('uses a sole configured provider when no global provider is selected', async () => {
+    const dataRoot = await createRoot('minimax-cn', 'MiniMax-M3', false);
+    const session = await withHost(dataRoot, (client) =>
+      client.create({ title: 'duya chat', mode: 'code' }),
+    );
+
+    expect(session.providerId).toBe('minimax-cn');
+    expect(session.model).toBe('MiniMax-M3');
+  }, 30_000);
+
+  it('backfills legacy env/default placeholders when the session is resumed', async () => {
+    const dataRoot = await createRoot('minimax-cn', 'MiniMax-M3', false);
+    const session = await withHost(dataRoot, async (client) => {
+      const placeholder = await client.create({
+        title: 'old session',
+        mode: 'code',
+        model: '',
+        providerId: 'env',
+      });
+      return client.create({ id: placeholder.id });
+    });
+
+    expect(session.providerId).toBe('minimax-cn');
+    expect(session.model).toBe('MiniMax-M3');
   }, 30_000);
 
   it('keeps an explicitly requested model even when the configured one differs', async () => {

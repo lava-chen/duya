@@ -38,6 +38,7 @@ import { describeSpec, findSpec, type CommandLocale } from '@duya/command-catalo
 import { HostSessionHttpClient } from '@duya/host/http-client';
 import { resolveDataRoot } from '@duya/data';
 import { TUIApp, shouldUseTui, type CompletionSources, type TuiChoice } from './tui/index.js';
+import { describeTuiModelStatus } from './tui/model-status.js';
 import {
   appendShellContext,
   shellContextAttachment,
@@ -149,6 +150,15 @@ function resolveConnection(options: ChatCommandOptions): ResolvedConnection {
     `no Duya Host to connect to: pass --origin, set DUYA_HOST_ORIGIN, or start one with \`duya serve\` ` +
       `(no readable runtime descriptor at ${runtimeFile})`,
   );
+}
+
+/** Backfill only the old session-store placeholders from the Host's defaults. */
+async function resolvePlaceholderSession(
+  client: HostSessionHttpClient,
+  session: HostSessionRecord,
+): Promise<HostSessionRecord> {
+  if (session.providerId !== 'env' || session.model !== '') return session;
+  return client.create({ id: session.id });
 }
 
 const BRIGHT_CYAN = '\x1b[96m';
@@ -695,7 +705,7 @@ export async function chatTui(
   const initialSession = await client.get(sessionId, { includeAllSessions: true });
   if (initialSession === null) throw new Error(`session ${sessionId} does not exist on this Host`);
 
-  let activeSession = initialSession;
+  let activeSession = await resolvePlaceholderSession(client, initialSession);
   /**
    * The directory this surface works in.
    *
@@ -1287,20 +1297,23 @@ export async function chatTui(
     onSteer: steerDraft,
     onQueueDraft: queueDraft,
     onInterruptAndSend: interruptAndSend,
-    statusText: () => `${activeSession.providerId} · ${activeSession.model || options.model || 'default'} · ${activeSession.id.slice(0, 8)} · ${executionCwd()}`,
+    statusText: () => `${describeTuiModelStatus(activeSession.providerId, activeSession.model, options.model).statusText} · ${activeSession.id.slice(0, 8)} · ${executionCwd()}`,
     // The footer's right-hand column. Same facts as the status text above, but
     // split so the model can be right-aligned against the token counters
     // instead of sharing one crowded row with them.
     // The pull request the Host last observed for this session, for the
     // footer's badge. The loop owns the reading; the footer only draws it.
     pullRequestBadge: () => pullRequestBadge,
-    modelLabel: () => ({
-      provider: activeSession.providerId,
-      model: activeSession.model || options.model || 'default',
-      // pi prints `deepseek-flash • high`; the suffix is the same effort the
-      // composer border is painted with, so the two cannot disagree.
-      ...(effort === null ? {} : { thinking: effort }),
-    }),
+    modelLabel: () => {
+      const modelStatus = describeTuiModelStatus(activeSession.providerId, activeSession.model, options.model);
+      return {
+        provider: modelStatus.provider,
+        model: modelStatus.model,
+        // pi prints `deepseek-flash • high`; the suffix is the same effort the
+        // composer border is painted with, so the two cannot disagree.
+        ...(effort === null ? {} : { thinking: effort }),
+      };
+    },
     // The composer's border colour: pi's tell for how much thinking the next
     // message will buy. Read through a callback so /effort repaints immediately.
     effort: () => effort,
@@ -1540,7 +1553,7 @@ export async function chatTui(
       return;
     }
     const previousModel = activeSession.model;
-    activeSession = selected;
+    activeSession = await resolvePlaceholderSession(client, selected);
     // The badge belonged to the session we just left; the new one has to be
     // read on its own terms.
     pullRequestBadge = null;
@@ -1633,7 +1646,7 @@ export async function chatTui(
       return;
     }
     const previousModel = activeSession.model;
-    activeSession = adopted;
+    activeSession = await resolvePlaceholderSession(client, adopted);
     // The adopted session has its own turns; the prediction on screen belongs
     // to the session this surface just left.
     clearTurnSuggestion();
