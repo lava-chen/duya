@@ -738,6 +738,8 @@ export class TUIApp {
   private footerRate: boolean;
   /** Per-block transcript state for the Codex-style history navigation keys. */
   private selectedBlockId: string | undefined;
+  /** Tool block under the mouse, cleared as soon as the pointer leaves it. */
+  private hoveredToolBlockId: string | undefined;
   private readonly expandedBlockIds = new Set<string>();
   private readonly collapsedBlockIds = new Set<string>();
   /**
@@ -2172,6 +2174,7 @@ export class TUIApp {
       options: this.renderOptions(),
       scrollTop: this.scrollTop,
       following: this.follow,
+      ...(this.hoveredToolBlockId === undefined ? {} : { hoveredBlockId: this.hoveredToolBlockId }),
       revision: this.transcriptRevision,
       ...(this.search.active && this.inlineSurface === null
         ? { search: { query: this.search.query, cursor: this.search.cursor } }
@@ -4148,7 +4151,16 @@ exportHistory(): string[] {
           return;
         }
         if (this.mouseMode === 'all') {
-          const pointerHit = event.action === 'mousedown' && this.pointer.hasHit(event.x, event.y);
+          if (event.action === 'mousemove' || event.action === 'mousedown') {
+            const target = this.pointer.targetAt(event.x, event.y);
+            const hoverId = target?.hoverId;
+            if (hoverId !== this.hoveredToolBlockId) {
+              this.hoveredToolBlockId = hoverId;
+              this.scheduler.requestImmediate();
+            }
+          }
+          const target = event.action === 'mousedown' ? this.pointer.targetAt(event.x, event.y) : undefined;
+          const pointerHit = target !== undefined && target.allowTranscriptSelection !== true;
           this.pointer.handle(event);
           this.handleTranscriptSelectionMouseEvent(event, pointerHit);
         }
@@ -5379,10 +5391,13 @@ exportHistory(): string[] {
       return;
     }
     const hits: HitRegion[] = [];
-    const add = (id: string, region: RegionMetrics | null, row: number, column: number, width: number, activate: HitRegion['activate'], revision?: string | number) => {
+    const add = (id: string, region: RegionMetrics | null, row: number, column: number, width: number, activate: HitRegion['activate'], revision?: string | number, height = 1, allowTranscriptSelection = false, hoverId?: string) => {
       if (!region?.laidOut || row < 0 || row >= region.height - region.innerHeight || width <= 0)
         return;
-      hits.push({ id, row: region.top + region.innerTop + row, column: region.left + region.innerLeft + column, width: Math.min(width, region.width - region.innerWidth - column), height: 1, activate, revision });
+      const availableHeight = Math.max(0, region.height - region.innerHeight - row);
+      const clippedHeight = Math.min(height, availableHeight);
+      if (clippedHeight <= 0) return;
+      hits.push({ id, row: region.top + region.innerTop + row, column: region.left + region.innerLeft + column, width: Math.min(width, region.width - region.innerWidth - column), height: clippedHeight, activate, revision, allowTranscriptSelection, hoverId });
     };
     if (this.overlay.isActive) {
       const geometry = this.fullScreen.measure('overlay'), id = this.overlay.request?.requestId;
@@ -5471,7 +5486,7 @@ exportHistory(): string[] {
     const geometry = this.fullScreen.measure('transcript');
     const width = this.transcriptContentWidth();
     for (const target of this.transcriptPane.disclosureTargets(width, this.visibleTranscriptRows())) {
-      add(`block:${target.id}`, geometry, target.row, 0, target.width, () => this.toggleTranscriptBlock(target.id));
+      add(`block:${target.id}`, geometry, target.row, 0, target.width, () => this.toggleTranscriptBlock(target.id), undefined, target.height, target.hoverable, target.hoverable ? target.id : undefined);
     }
     if (this.sidebar && this.sidebarLayout) {
       const layout = this.sidebarLayout;

@@ -98,11 +98,12 @@ describe('tool disclosure details', () => {
         toolGroupMode,
         expandedBlockIds: new Set([block.id]),
       });
-      expect(strip(expanded)).toContain('Arguments:');
-      expect(strip(expanded)).toContain('command: printf full-command');
+      expect(strip(expanded)).toContain('bash(printf full-command)');
+      expect(strip(expanded)).not.toContain('Arguments:');
       expect(strip(expanded)).toContain('output 0');
       expect(strip(expanded)).toContain('output 23');
       expect(expanded).not.toContain('[+');
+      expect(strip(expanded).match(/printf full-command/gu)).toHaveLength(1);
 
       const collapsed = renderTranscript(model, {
         expanded: false,

@@ -42,6 +42,8 @@ base：`6d6ea333fbbb3567e55dec5ca80ec010a77ba6ef`。独占路径：`packages/cli
 - [x] 阅读 Pi 扩展的 widget、header/footer、custom UI、editor/theme、tool renderer 与 RPC 接口，并记录 Duya 合同建议。
 - [x] 将语义 `text` 色号应用到 assistant 普通正文、代码块、diff 上下文与表格。
 - [x] 将活动模型的 context window 通过模型目录回退值接入工作台侧栏，显示 `/` 后的预算总量。
+- [x] 将工具详情的点击区域扩至整块可见内容；鼠标悬停时按主题绘制临时灰底，拖选仍可用。
+- [x] 展开时避免标题摘要、Bash 命令、Todo JSON 和文件 diff 输入重复呈现。
 
 ## 发现与决策
 
@@ -84,6 +86,8 @@ base：`6d6ea333fbbb3567e55dec5ca80ec010a77ba6ef`。独占路径：`packages/cli
 - 分阶段实施：先扩展主题 token 并在 `transcript-view.ts` 为 assistant prose、thinking、tool title/output 和 Markdown 统一应用角色；随后迁移其他 TUI renderer 的硬编码颜色。兼容既有 `ThemeTags` 注入点，逐步迁移期间保留默认映射；色彩验证检查 token 覆盖、两套 palette 色号、CJK/代码/链接渲染，以及 dark/light PTY 截图。
 - 2026-11-13 跟进：普通 assistant 正文之前没有显式前景色，实际继承终端默认色；新增 `text` token（dark 254 / light 238）并接入正文、代码块、diff 上下文和表格。Context 侧栏只在 `TUIApp` 收到 `contextBudgetTokens` 时显示分母，而生产 `chatTui()` 未传该回调；现使用共享 `resolveContextWindow()` 按当前模型解析目录容量，未知模型沿用 200K 默认值。
 - 底部 `Σ` 与侧栏 `Context` 是不同指标：前者累计本次 CLI 进程收到的计费 token 帧，后者估算当前对话上下文（最近计费总量加计费后新增的转录内容）；生成中时侧栏估算可先增长。现有 `Σ` 缩写不够清楚，用户反馈已记录为后续文案改进，不混用两种数值。
+- 工具 disclosure 命中区域此前只有标题的一行；现按可见 viewport 为工具块建立多行命中区，整块可点击收起，工具文本区域仍允许鼠标拖选。`toolHoverBg` 只在鼠标位于工具块时由 TranscriptPane 叠加；错误块保留红色错误底色。
+- 展开详情时标题改为工具名或保留带语法色的 Bash 命令，已可在标题读取的命令/路径不再打印第二次；Todo 使用 checklist 作为输入投影，文件 diff 使用结构化 diff，因此不重复原始列表或变更内容。
 - `workspace_get_context` 工具当前不可用，按版本化计划和 Git 状态对账；共享检出干净，HEAD 与 `origin/master` 一致。
 
 ## 验证记录
@@ -103,9 +107,8 @@ base：`6d6ea333fbbb3567e55dec5ca80ec010a77ba6ef`。独占路径：`packages/cli
 | PR #631 head `cb15fe5493b7b67cda18515c1e0d0db44dbcc933` | GitHub Actions run `43210652815` | `gh pr checks 631`; `gh run view 43210652815 --job 131157218167 --log-failed` | architecture / test scope / typecheck / build 均 PASS；test FAIL，仍是 `tui-file-diff-stream.test.ts` 同 6 项、同一错误签名 | PR 仍为 OPEN / DRAFT；未合并 |
 | PR #631 head `9a381c5e2c5b96e35681aba9f3afd68d04efbfef` | GitHub Actions run `43211687631` | `gh pr checks 631` | architecture / test scope / typecheck / build 均 PASS；test FAIL，仍是 `tui-file-diff-stream.test.ts` 同 6 项 | 这是仅含验证记录的文档提交；运行时代码仍是 `cb15fe549` |
 | `1f794c09331f19cad97e48a3513ee9d1daf7f45b` | Linux x64 / Node 26.13.0；GitHub Actions run `43361602905` | 4 个 TUI 测试文件；`npm run typecheck:all`; `npm run architecture:check`; `npm run build:cli-dev`; `python3 scripts/smoke-tui-pty.py functional ...`；`git diff --check`; `gh pr view 634 --json headRefOid,statusCheckRollup` | 92 tests passed；typecheck exit 0；architecture exit 0（无新增违规）；CLI/worker bundle exit 0；diff check clean；PTY 9/10 检查通过，其中路径检查因脚本硬编码旧分支名 `codex/tui-cursor-selection` 而失败，实际输出为当前工作区路径与分支；PR architecture / test scope PASS，typecheck / test / build 当时 IN_PROGRESS | draft PR [#634](https://github.com/lava-chen/duya/pull/634)，当前 head 与此 SHA 一致；不合并 |
+| `7083a0f1` + 当前工具交互改动 | Linux x64 / Node 26.13.0 | 5 个 TUI 测试文件；全量 `packages/cli/src/tui/__tests__`；`npm run -w @duya/cli typecheck`; `npm run typecheck:all`; `npm run architecture:check`; `npm run build:cli-dev`; `git diff --check` | 5 files / 113 tests passed；全 TUI 93 files / 1209 passed、1 expected fail；CLI typecheck、typecheck:all、architecture、CLI/worker build、diff check 均 exit 0；Host 生成 bundle 副作用已还原 | 失败的 expected case 是原有 `tui-file-diff-stream.test.ts` 预览用例；工具 hover、跨块点击收起、去重已由交互与渲染测试覆盖；源代码仍未提交 |
 
 ## 接续 / 结果
 
-输入、选择、回底按钮、可见工具行点击展开、单面板工作台、三档显示和输入框下方的两行 footer 已实现。Pi 插件 UI 槽位与 Duya 合同建议已写入参考文档；通用插件 UI API 仍未实施。当前相关 TUI 测试 62/62 通过，完整 TUI 目录 123 文件中 122 文件通过、1 个未变更的 `tui-file-diff-stream.test.ts` 文件有 6 个失败：预览渲染只输出 `└ ⏺ write [-]`。相同失败签名出现在 PR #631 旧 head 的 GitHub test job；本轮没有改动该测试及对应 transcript 渲染源码。全量类型/架构门禁、CLI/worker bundle 和实际 PTY smoke 通过。构建改动过的 tracked Host worker bundle 已按生成产物路径还原。
-
-输入、选择、回底按钮、可见工具行点击展开、单面板工作台、三档显示和输入框下方的两行 footer 已实现。Pi 插件 UI 槽位与 Duya 合同建议已写入参考文档；通用插件 UI API 仍未实施。PR #631 后续已按用户要求合并到 master，临时全局 CLI 也已构建。当前 follow-up 已提交并推送到 draft PR #634（head `1f794c09331f19cad97e48a3513ee9d1daf7f45b`）；工作区提交前干净。相关 TUI 测试 92/92 通过，全量类型/架构门禁和 CLI/worker bundle 通过。PTY smoke 的单项失败由脚本对旧分支名的硬编码造成。PR architecture 与 test scope 已通过，typecheck/test/build 尚在运行；未经用户授权不得合并。最新截图运行的仍是 master 临时 CLI，尚未包含 PR #634 的 Context 分母修复。
+输入、选择、回底按钮、工具行详情、单面板工作台、三档显示和输入框下方的两行 footer 已实现。Pi 插件 UI 槽位与 Duya 合同建议已写入参考文档；通用插件 UI API 仍未实施。PR #631 已按用户要求合并到 master，临时全局 CLI 已构建。颜色和 Context 分母改动在 draft PR #634；本轮工具详情修复待提交后推送到同一 PR。工作区当前基于 PR #634 的 `7083a0f1`，待提交路径见 `git status`；最近全 TUI 93 文件中 1209 项通过、1 项 expected fail。typecheck、架构门禁和 CLI/worker 构建通过；PTY 的路径断言因脚本硬编码旧分支名而失败，实际输出路径正确。PR 未经用户授权不合并。

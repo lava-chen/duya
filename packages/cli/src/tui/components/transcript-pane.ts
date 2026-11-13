@@ -60,6 +60,8 @@ export interface TranscriptPaneProps {
    * reader is in.
    */
   readonly following: boolean;
+  /** Tool block under the mouse, highlighted only while it is hovered. */
+  readonly hoveredBlockId?: string;
   /**
    * Bumped by the owner whenever the document changed in a way the options key
    * cannot see — a commit, a clear, a replay. Optional so a one-shot caller
@@ -201,6 +203,7 @@ export class TranscriptPane implements UIComponent<TranscriptPaneProps> {
     // paint loop consumes, instead of a second `heights()` pass re-deriving
     // the identical numbers.
     const blocks = this.props.renderer.blocks(this.props.model, options);
+    const visible = visibleBlocks(this.props.model.blocks, options);
     const heights = blocks.map((blockLines) => blockLines.length);
     const window = visibleWindow(heights, viewport.height, this.props.scrollTop, this.props.following);
 
@@ -238,7 +241,20 @@ export class TranscriptPane implements UIComponent<TranscriptPaneProps> {
                 highlight.view,
               )
             : tagged;
-          scene.writeTagged(row, viewport.column, written, viewport.width);
+          const block = visible[index];
+          const hover = block?.kind === 'tool'
+            && block.id === this.props.hoveredBlockId
+            && block.status !== 'error'
+            && written.trim() !== ''
+            ? options.theme?.toolHoverBg ?? DARK_THEME_TAGS.toolHoverBg
+            : null;
+          if (hover === null) {
+            scene.writeTagged(row, viewport.column, written, viewport.width);
+          } else {
+            const text = tagsToSpans(written).map((span) => span.text).join('');
+            const padding = ' '.repeat(Math.max(0, viewport.width - visibleWidth(text)));
+            scene.writeTagged(row, viewport.column, `{${hover}}${written}${padding}{/${hover}}`, viewport.width);
+          }
           linesPainted += 1;
         }
       }
@@ -261,13 +277,13 @@ export class TranscriptPane implements UIComponent<TranscriptPaneProps> {
   }
 
   /** Disclosure targets share the exact block plan and viewport used by paint. */
-  disclosureTargets(width: number, rows: number): readonly { id: string; row: number; width: number }[] {
+  disclosureTargets(width: number, rows: number): readonly { id: string; row: number; width: number; height: number; hoverable: boolean }[] {
     const options = this.optionsFor(width);
     const blocks = visibleBlocks(this.props.model.blocks, options);
     const plans = planTranscript(blocks);
     const rendered = this.props.renderer.blocks(this.props.model, options);
     const window = visibleWindow(rendered.map((lines) => lines.length), rows, this.props.scrollTop, this.props.following);
-    const targets: Array<{ id: string; row: number; width: number }> = [];
+    const targets: Array<{ id: string; row: number; width: number; height: number; hoverable: boolean }> = [];
     let documentRow = 0;
     blocks.forEach((block, index) => {
       const lines = rendered[index] ?? [];
@@ -275,10 +291,21 @@ export class TranscriptPane implements UIComponent<TranscriptPaneProps> {
       if (documentRow < window.lineEnd && plan && options.toolGroupMode !== 'hidden' && (block.kind === 'tool' || block.kind === 'thinking')) {
         // A batch summary is not the first call's own disclosure row.
         const header = (plan.gap ? 1 : 0) + (plan.role === 'group-head' ? 1 : 0);
-        const row = documentRow + header - window.lineStart;
-        if (header < lines.length && row >= 0 && row < rows) {
+        const blockStart = documentRow + header;
+        const blockEnd = documentRow + lines.length;
+        const visibleStart = Math.max(blockStart, window.lineStart);
+        const visibleEnd = Math.min(blockEnd, window.lineEnd);
+        const row = visibleStart - window.lineStart;
+        if (header < lines.length && visibleEnd > visibleStart && row >= 0 && row < rows) {
+          const isTool = block.kind === 'tool';
           const text = tagsToSpans(lines[header]!).map((span) => span.text).join('');
-          targets.push({ id: block.id, row, width: Math.min(width, visibleWidth(text)) });
+          targets.push({
+            id: block.id,
+            row,
+            width: isTool ? width : Math.min(width, visibleWidth(text)),
+            height: isTool ? visibleEnd - visibleStart : 1,
+            hoverable: isTool,
+          });
         }
       }
       documentRow += lines.length;

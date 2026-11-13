@@ -51,6 +51,7 @@ export type ThemeToken =
   | 'success'
   | 'error'
   | 'toolErrorBg'
+  | 'toolHoverBg'
   | 'warning'
   | 'user'
   | 'thinking'
@@ -111,6 +112,7 @@ export const DARK_THEME_TAGS: ThemeTags = {
   success: 'bright-green-fg',
   error: 'bright-red-fg',
   toolErrorBg: '52-bg',
+  toolHoverBg: '236-bg',
   warning: 'yellow-fg',
   user: 'bright-green-fg',
   thinking: 'magenta-fg',
@@ -147,6 +149,7 @@ export const LIGHT_THEME_TAGS: ThemeTags = {
   success: '28-fg',
   error: '160-fg',
   toolErrorBg: '224-bg',
+  toolHoverBg: '254-bg',
   warning: '172-fg',
   user: '28-fg',
   thinking: '128-fg',
