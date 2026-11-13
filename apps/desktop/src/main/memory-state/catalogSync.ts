@@ -11,11 +11,10 @@ import type { SessionStore, CoreSession } from '../db/core';
 import { writeSystemLog } from '@duya/memory/system_log';
 
 /**
- * Main-DB catalog sync (Plan 301 Phase C, updated for Plan 328 Phase 5).
+ * Shared-database catalog sync (Plan 301 Phase C, updated for Plan 328 Phase 5).
  *
- * One-way read from the core database (`duya-core.db` sessions +
- * message_index tables), materializing one `rollout_catalog` row per
- * session in `memory-state.db`. Wired into the memory-worker runTick
+ * Session snapshots cross the Host API boundary; project resolution and the
+ * `rollout_catalog` write use the shared application database. Wired into the memory-worker runTick
  * (Plan 305): throttled to `catalogSyncIntervalMs` on regular ticks,
  * always runs on forceSweep.
  *
@@ -210,16 +209,7 @@ const UPDATE_HEARTBEAT_SQL = `
   WHERE rollout_id = @rollout_id
 `;
 
-// Plan 534: project entities now live in `duya-core.db`, but `rollout_catalog`
-// (a Plan 305 catalog table in `memory-state.db`) still carries a FOREIGN KEY
-// that references `projects` in the SAME (`memory-state.db`) database — SQLite
-// cannot enforce a cross-database FK. So every project scoped by catalogSync
-// needs a minimal bookkeeping row here to satisfy the legacy constraint.
-// We deliberately insert ONLY the 0001 base columns (project_id, canonical_root,
-// created_at, last_seen_at) so this works whether or not the 0012/0013 entity
-// columns were ever applied. The entity payload (name/description/paths/
-// icon/color) is maintained solely in core via projectResolver/projectService.
-const INSERT_PROJECT_FK_PLACEHOLDER_SQL = `
+const INSERT_PROJECT_FK_ROW_SQL = `
   INSERT OR IGNORE INTO projects (project_id, canonical_root, created_at, last_seen_at)
   VALUES (?, ?, ?, ?)
 `;
@@ -240,7 +230,7 @@ function resolveScope(opts: {
   agentProfileId: string | null;
   cwd?: string;
   workspaceOverridesPath?: string;
-  /** Projects now live in duya-core.db (plan 534) — pass coreDb for registration. */
+  /** Shared application database handle used for project registration. */
   coreDb: Database;
 }): {
   scope_kind: ScopeKind;
@@ -265,8 +255,7 @@ function resolveScope(opts: {
       agent_profile_id: opts.agentProfileId ?? undefined,
       cwd: opts.cwd,
       workspaceOverridesPath: opts.workspaceOverridesPath,
-      // Projects table lives in duya-core.db (plan 534): resolveProject's
-      // identity registration must target the core db, not the memory db.
+      // Project identities and memory catalog tables share this database.
       memoryDb: opts.coreDb,
     });
     return {
@@ -771,11 +760,10 @@ function activeSyncWithScope(
     return { status: 'unchanged' };
   }
 
-  // Plan 534: keep the legacy memory-state `projects` FK target in sync with
-  // the resolved project so the roll insert below never trips the constraint,
-  // even when the entity row exists only in core. No-op when global scope.
+  // With the production shared handle the resolver already created this row.
+  // Keep the local FK valid for callers that supply a separate project store.
   if (scope.scope_kind === 'project' && scope.project_id) {
-    memoryDb.prepare(INSERT_PROJECT_FK_PLACEHOLDER_SQL).run(
+    memoryDb.prepare(INSERT_PROJECT_FK_ROW_SQL).run(
       scope.project_id,
       scope.working_directory_normalized ?? scope.working_directory ?? '',
       now,

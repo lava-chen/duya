@@ -52,9 +52,10 @@ import {
 } from './bot-boundary-gate.mjs';
 import type { BotBoundaryReport } from './bot-boundary-gate.ts';
 
-const BOT_FIXTURE = 'packages/bot/src/__bot_boundary_fixture__';
-const CLIENT_FIXTURE = 'packages/ui/src/__bot_boundary_fixture__';
-const CORE_FIXTURE = 'packages/agent-core/src/__bot_boundary_fixture__.ts';
+const FIXTURE_SUFFIX = `-${process.pid}`;
+const BOT_FIXTURE = `packages/bot/src/__bot_boundary_fixture__${FIXTURE_SUFFIX}`;
+const CLIENT_FIXTURE = `packages/ui/src/__bot_boundary_fixture__${FIXTURE_SUFFIX}`;
+const CORE_FIXTURE = `packages/agent-core/src/__bot_boundary_fixture__${FIXTURE_SUFFIX}.ts`;
 
 /**
  * Resolve a fixture path, refusing anything that leaves the checkout.
@@ -216,7 +217,7 @@ describe('R2 goes RED when a downward package imports bot', () => {
       expect(r2.blind).toBe(false);
       expect(r2.findings).toEqual([
         {
-          from: 'packages/agent-core/src/__bot_boundary_fixture__.ts',
+          from: CORE_FIXTURE,
           spec: '../../bot/src/leaf.js',
           to: 'packages/bot/src/leaf.ts',
         },

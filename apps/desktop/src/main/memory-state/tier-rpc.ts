@@ -13,6 +13,7 @@
 import * as os from 'os';
 import * as path from 'path';
 import { bootstrap, getDb } from './db';
+import { getDatabase } from '../db/connection';
 import { resolveDuyaRoot } from './duyaRoot';
 import { forgetTierFact, writeTierFact, type TierWriteInput, type TierWriteResult } from './tierWriter';
 
@@ -73,9 +74,11 @@ function ensureDb() {
   try {
     return getDb();
   } catch {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires -- circular-free lazy import
+    const database = getDatabase();
+    if (!database) throw new Error('The shared application database is not initialized');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires -- avoids the historical module cycle
     const { getDatabasePath } = require('../db/connection') as typeof import('../db/connection');
-    return bootstrap({ bootJsonDatabaseDir: path.dirname(getDatabasePath()) });
+    return bootstrap({ bootJsonDatabaseDir: path.dirname(getDatabasePath()), database });
   }
 }
 

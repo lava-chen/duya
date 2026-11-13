@@ -28,7 +28,7 @@
       "format": "esm"
     },
     "packages/data/src/data-paths.ts": {
-      "bytes": 2281,
+      "bytes": 2744,
       "imports": [
         {
           "path": "os",
@@ -81,7 +81,7 @@
       "format": "esm"
     },
     "packages/data/src/core-database.ts": {
-      "bytes": 4342,
+      "bytes": 4822,
       "imports": [
         {
           "path": "packages/data/src/sqlite-connection.ts",
@@ -1132,7 +1132,7 @@
       "format": "esm"
     },
     "packages/data/src/workspace-store.ts": {
-      "bytes": 17651,
+      "bytes": 17559,
       "imports": [
         {
           "path": "node:crypto",
@@ -1277,7 +1277,7 @@
       "format": "esm"
     },
     "packages/data/src/message-log.ts": {
-      "bytes": 129551,
+      "bytes": 133595,
       "imports": [
         {
           "path": "node:fs",
@@ -1355,8 +1355,55 @@
       ],
       "format": "esm"
     },
+    "packages/data/src/database-owner-lock.ts": {
+      "bytes": 6143,
+      "imports": [
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/data/src/legacy-core-database-import.ts": {
+      "bytes": 8370,
+      "imports": [
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/data/src/database-owner-lock.ts",
+          "kind": "import-statement",
+          "original": "./database-owner-lock.js"
+        }
+      ],
+      "format": "esm"
+    },
     "packages/data/src/core-data-host.ts": {
-      "bytes": 2987,
+      "bytes": 3546,
       "imports": [
         {
           "path": "packages/data/src/core-database.ts",
@@ -1387,6 +1434,11 @@
           "path": "packages/data/src/projects-import.ts",
           "kind": "import-statement",
           "original": "./projects-import.js"
+        },
+        {
+          "path": "packages/data/src/legacy-core-database-import.ts",
+          "kind": "import-statement",
+          "original": "./legacy-core-database-import.js"
         }
       ],
       "format": "esm"
@@ -1444,34 +1496,8 @@
       ],
       "format": "esm"
     },
-    "packages/data/src/database-owner-lock.ts": {
-      "bytes": 6143,
-      "imports": [
-        {
-          "path": "node:crypto",
-          "kind": "import-statement",
-          "external": true
-        },
-        {
-          "path": "node:fs",
-          "kind": "import-statement",
-          "external": true
-        },
-        {
-          "path": "node:os",
-          "kind": "import-statement",
-          "external": true
-        },
-        {
-          "path": "node:path",
-          "kind": "import-statement",
-          "external": true
-        }
-      ],
-      "format": "esm"
-    },
     "packages/data/src/database-host.ts": {
-      "bytes": 2225,
+      "bytes": 3124,
       "imports": [
         {
           "path": "packages/data/src/core-data-host.ts",
@@ -1487,6 +1513,11 @@
           "path": "packages/data/src/database-owner-lock.ts",
           "kind": "import-statement",
           "original": "./database-owner-lock.js"
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
         }
       ],
       "format": "esm"
@@ -1737,7 +1768,7 @@
       "format": "esm"
     },
     "packages/data/src/index.ts": {
-      "bytes": 2958,
+      "bytes": 3008,
       "imports": [
         {
           "path": "packages/data/src/data-paths.ts",
@@ -1768,6 +1799,11 @@
           "path": "packages/data/src/database-owner-lock.ts",
           "kind": "import-statement",
           "original": "./database-owner-lock.js"
+        },
+        {
+          "path": "packages/data/src/legacy-core-database-import.ts",
+          "kind": "import-statement",
+          "original": "./legacy-core-database-import.js"
         },
         {
           "path": "packages/data/src/sqlite-connection.ts",
@@ -31779,7 +31815,7 @@
       "format": "esm"
     },
     "packages/host/src/workspace/session-checkout-service.ts": {
-      "bytes": 23581,
+      "bytes": 24475,
       "imports": [
         {
           "path": "node:crypto",
@@ -33454,7 +33490,7 @@
       "format": "esm"
     },
     "packages/host/src/run-execution.ts": {
-      "bytes": 51565,
+      "bytes": 51577,
       "imports": [
         {
           "path": "packages/agent-protocol/src/index.ts",
@@ -33888,7 +33924,7 @@
       "format": "esm"
     },
     "packages/host/src/local-host.ts": {
-      "bytes": 56343,
+      "bytes": 56399,
       "imports": [
         {
           "path": "packages/host/src/plugins/audit.ts",
@@ -40687,16 +40723,6 @@
           "external": true
         },
         {
-          "path": "node:path",
-          "kind": "require-call",
-          "external": true
-        },
-        {
-          "path": "crypto",
-          "kind": "require-call",
-          "external": true
-        },
-        {
           "path": "node:crypto",
           "kind": "require-call",
           "external": true
@@ -40708,6 +40734,31 @@
         },
         {
           "path": "node:os",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "crypto",
           "kind": "require-call",
           "external": true
         },
@@ -43452,7 +43503,7 @@
           "bytesInOutput": 15305
         },
         "packages/data/src/data-paths.ts": {
-          "bytesInOutput": 864
+          "bytesInOutput": 921
         },
         "packages/data/src/database-migration.ts": {
           "bytesInOutput": 3276
@@ -43461,7 +43512,7 @@
           "bytesInOutput": 434
         },
         "packages/data/src/core-database.ts": {
-          "bytesInOutput": 1762
+          "bytesInOutput": 1926
         },
         "packages/data/src/integration-store.ts": {
           "bytesInOutput": 6037
@@ -43521,7 +43572,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/rollout-events.ts": {
-          "bytesInOutput": 604
+          "bytesInOutput": 591
         },
         "packages/agent-protocol/src/workflow-runs.ts": {
           "bytesInOutput": 30
@@ -43545,7 +43596,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/tool-file-diff.ts": {
-          "bytesInOutput": 42
+          "bytesInOutput": 29
         },
         "packages/agent-protocol/src/locks.ts": {
           "bytesInOutput": 30
@@ -43611,10 +43662,10 @@
           "bytesInOutput": 1864
         },
         "packages/agent-protocol/src/agent-dm.ts": {
-          "bytesInOutput": 700
+          "bytesInOutput": 687
         },
         "packages/agent-protocol/src/session-ids.ts": {
-          "bytesInOutput": 189
+          "bytesInOutput": 176
         },
         "packages/agent-protocol/src/wake.ts": {
           "bytesInOutput": 30
@@ -43704,7 +43755,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/doctor.ts": {
-          "bytesInOutput": 97
+          "bytesInOutput": 84
         },
         "packages/agent-protocol/src/checkout-api.ts": {
           "bytesInOutput": 30
@@ -43761,7 +43812,7 @@
           "bytesInOutput": 1254
         },
         "packages/data/src/message-log.ts": {
-          "bytesInOutput": 31892
+          "bytesInOutput": 34041
         },
         "packages/data/src/archive-paths.ts": {
           "bytesInOutput": 828
@@ -43772,8 +43823,14 @@
         "packages/data/src/projects-import.ts": {
           "bytesInOutput": 1887
         },
+        "packages/data/src/database-owner-lock.ts": {
+          "bytesInOutput": 2650
+        },
+        "packages/data/src/legacy-core-database-import.ts": {
+          "bytesInOutput": 3943
+        },
         "packages/data/src/core-data-host.ts": {
-          "bytesInOutput": 1040
+          "bytesInOutput": 1180
         },
         "packages/data/src/tool-approval-state.ts": {
           "bytesInOutput": 3279
@@ -43787,11 +43844,8 @@
         "packages/data/src/main-database.ts": {
           "bytesInOutput": 447
         },
-        "packages/data/src/database-owner-lock.ts": {
-          "bytesInOutput": 2651
-        },
         "packages/data/src/database-host.ts": {
-          "bytesInOutput": 934
+          "bytesInOutput": 1284
         },
         "packages/data/src/main-settings-store.ts": {
           "bytesInOutput": 556
@@ -43872,7 +43926,7 @@
           "bytesInOutput": 3549
         },
         "packages/data/src/index.ts": {
-          "bytesInOutput": 355
+          "bytesInOutput": 360
         },
         "packages/host/src/worker-logger.ts": {
           "bytesInOutput": 4329
@@ -45111,25 +45165,25 @@
           "bytesInOutput": 348
         },
         "../../build-duya-cli/duya/node_modules/handlebars/dist/cjs/handlebars/helpers/lookup.js": {
-          "bytesInOutput": 176
+          "bytesInOutput": 180
         },
         "../../build-duya-cli/duya/node_modules/handlebars/dist/cjs/handlebars/helpers/with.js": {
-          "bytesInOutput": 588
+          "bytesInOutput": 592
         },
         "../../build-duya-cli/duya/node_modules/handlebars/dist/cjs/handlebars/helpers.js": {
-          "bytesInOutput": 519
+          "bytesInOutput": 523
         },
         "../../build-duya-cli/duya/node_modules/handlebars/dist/cjs/handlebars/decorators/inline.js": {
-          "bytesInOutput": 342
+          "bytesInOutput": 346
         },
         "../../build-duya-cli/duya/node_modules/handlebars/dist/cjs/handlebars/decorators.js": {
           "bytesInOutput": 195
         },
         "../../build-duya-cli/duya/node_modules/handlebars/dist/cjs/handlebars/logger.js": {
-          "bytesInOutput": 534
+          "bytesInOutput": 538
         },
         "../../build-duya-cli/duya/node_modules/handlebars/dist/cjs/handlebars/internal/proto-access.js": {
-          "bytesInOutput": 1391
+          "bytesInOutput": 1396
         },
         "../../build-duya-cli/duya/node_modules/handlebars/dist/cjs/handlebars/base.js": {
           "bytesInOutput": 1656
@@ -45438,7 +45492,7 @@
           "bytesInOutput": 889
         },
         "packages/memory/src/wakeup.ts": {
-          "bytesInOutput": 425
+          "bytesInOutput": 413
         },
         "packages/host/src/skills/paths.ts": {
           "bytesInOutput": 697
@@ -45615,7 +45669,7 @@
           "bytesInOutput": 1916
         },
         "packages/host/src/managed-shell/paths.ts": {
-          "bytesInOutput": 321
+          "bytesInOutput": 308
         },
         "packages/host/src/managed-shell/output-stream.ts": {
           "bytesInOutput": 370
@@ -47052,7 +47106,7 @@
           "bytesInOutput": 411
         },
         "packages/host/src/worker-tool-pool.ts": {
-          "bytesInOutput": 9982
+          "bytesInOutput": 9965
         },
         "packages/host/src/worker-subagents/built-in/exploreAgent.ts": {
           "bytesInOutput": 1913
@@ -47385,7 +47439,7 @@
           "bytesInOutput": 708
         },
         "packages/memory/src/memory_paths.ts": {
-          "bytesInOutput": 616
+          "bytesInOutput": 610
         },
         "packages/host/src/worker-prompts/dynamic/environmentPreBuildHook.ts": {
           "bytesInOutput": 611
@@ -47484,7 +47538,7 @@
           "bytesInOutput": 660
         },
         "packages/memory/src/forget_ledger.ts": {
-          "bytesInOutput": 1556
+          "bytesInOutput": 1552
         },
         "packages/bot/src/domain/bot-id.ts": {
           "bytesInOutput": 244
@@ -47511,7 +47565,7 @@
           "bytesInOutput": 3265
         },
         "packages/memory/src/canonical_file.ts": {
-          "bytesInOutput": 669
+          "bytesInOutput": 667
         },
         "packages/host/src/worker-prompts/bot/memory/access.ts": {
           "bytesInOutput": 279
@@ -47574,7 +47628,7 @@
           "bytesInOutput": 1611
         },
         "packages/host/src/worker-transport.ts": {
-          "bytesInOutput": 1454
+          "bytesInOutput": 1452
         },
         "packages/host/src/worker-modes/research-mode/research-events.ts": {
           "bytesInOutput": 330
@@ -48477,7 +48531,7 @@
           "bytesInOutput": 0
         },
         "packages/host/src/local-host.ts": {
-          "bytesInOutput": 15917
+          "bytesInOutput": 15961
         },
         "packages/host/src/session-api.ts": {
           "bytesInOutput": 13421
@@ -48513,7 +48567,7 @@
           "bytesInOutput": 1975
         },
         "packages/host/src/workspace/session-checkout-service.ts": {
-          "bytesInOutput": 14130
+          "bytesInOutput": 14474
         },
         "packages/host/src/skills/skill-inventory-api.ts": {
           "bytesInOutput": 1852
@@ -48765,7 +48819,7 @@
           "bytesInOutput": 1130
         },
         "packages/host/src/run-execution.ts": {
-          "bytesInOutput": 14986
+          "bytesInOutput": 14998
         },
         "packages/host/src/session-admission.ts": {
           "bytesInOutput": 1324
@@ -49548,7 +49602,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 5769191
+      "bytes": 5776302
     }
   }
 }

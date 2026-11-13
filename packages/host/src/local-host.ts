@@ -477,6 +477,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
     });
     const core = databaseHost.openCoreDatabase({
       filename: paths.coreDatabasePath,
+      legacyDatabasePath: paths.legacyCoreDatabasePath,
       rolloutRoot,
       attachmentsRoot,
       ...(options.sqlite ? { sqlite: options.sqlite } : {}),

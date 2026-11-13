@@ -12,6 +12,7 @@ Coordinator 的完整提示词设计见 [2026-11-06 提示词系统](active/2026
 
 | 范围 | 入口 | 下一动作 |
 | --- | --- | --- |
+| Duya 统一应用数据库 | [2026-11-11 统一数据库](active/2026-11-11-unified-database.md) | S1：Desktop 与独立 Host 共用单一 SQLite handle/owner lock，并实现旧库合并迁移基础 |
 | CLI TUI 全屏框架 | [2026-11-11 TUI 全屏框架先进化](active/2026-11-11-tui-fullscreen-framework.md) | S1 搜索、S2 滚动条、S3 回合跳转、S4 全屏默认翻转（依据用户方向性指令 + 功能级 PTY 冒烟 7/7；`DUYA_TUI_INLINE=1` 逃生舱保留）已实现并过门禁；[stacked draft PR #625](https://github.com/lava-chen/duya/pull/625)，观感反馈可继续叠主题微调 |
 | CLI TUI 渲染统一 | [2026-11-11 渲染管线统一](active/2026-11-11-tui-render-unification.md) | P0 开工：`core/layout.ts` 分发器 + `regionBoxes` 布局树（与 patch 算术黄金对拍 6/6，零接线）；独立分支 stacked 于 #625，**合并顺序**排在 #624/#625 之后；Step 3（Surface 换核）待集成后继续 |
 | CLI TUI 学习 Pi | [2026-11-10 CLI Pi 工作台](active/2026-11-10-cli-pi-workbench.md) | CLI 组件点击、回底与显示策略已实现；静态检查通过，侧栏及拖动调宽已实现，静态复核通过；[draft PR #624](https://github.com/lava-chen/duya/pull/624)，待终端验收和 review/CI |

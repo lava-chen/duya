@@ -36,8 +36,8 @@ export interface Migration {
  *   - 0012 — extend rollout_catalog.agent_type CHECK with 'room' (Plan 478 group-room transcript)
  *   - 0013/0014 (plan 525 project entity + icon/color) — these two entity
  *     migrations (name/description/paths columns + project_bots, icon/color)
- *     were migrated over to `duya-core.db` (ProjectStore, migration id=18) as
- *     part of plan 534 and are no longer applied to memory-state.db.
+ *     are owned by ProjectStore (migration id=18) in the canonical database
+ *     and remain outside this legacy migration sequence.
  */
 export const MIGRATIONS: Migration[] = [migration0001, migration0002, migration0003, migration0005, migration0006, migration0007, migration0008, migration0009, migration0010, migration0011, migration0012];
 
@@ -87,7 +87,7 @@ function ensureSchemaTable(db: Database): void {
  *     commits a migration while process B is waiting for the lock;
  *     process B then sees the row and skips.
  */
-export function runMigrations(db: Database): void {
+export function runMigrations(db: Database, options: { unifiedDatabase?: boolean } = {}): void {
   const logger = getLogger();
   ensureSchemaTable(db);
 
@@ -135,7 +135,13 @@ export function runMigrations(db: Database): void {
         }
         return; // already applied by a concurrent process
       }
-      db.exec(migration.sql);
+    // The unified application database already owns the canonical projects
+    // entity. Migration 0001's four-column table was a local FK placeholder.
+    // Keep the historical SQL/hash intact while making its CREATE idempotent.
+    const migrationSql = options.unifiedDatabase && migration.version === 1
+      ? migration.sql.replace('CREATE TABLE projects (', 'CREATE TABLE IF NOT EXISTS projects (')
+      : migration.sql;
+    db.exec(migrationSql);
       db.prepare(
         'INSERT INTO memory_schema (version, name, sha256, applied_at) VALUES (?, ?, ?, ?)'
       ).run(migration.version, migration.name, expectedSha, Date.now());

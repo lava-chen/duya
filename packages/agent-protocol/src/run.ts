@@ -21,10 +21,10 @@
  *    A hard kill means the clean cancel path was not honoured, and reporting
  *    `cancelled` would be a lie.
  *
- * `applied` is the improvement over `handleDeleteChat` (apps/desktop/src/main/agents/server/router.ts:2324-2336),
+ * `applied` is the improvement over `handleDeleteChat` (apps/desktop/src/main/agents/server/router.ts:2316-2336),
  * which
  * transitions `STREAMING -> COMPLETED` in the DB before cancellation is
- * acknowledged (apps/desktop/src/main/agents/server/router.ts:2335-2336,
+ * acknowledged (apps/desktop/src/main/agents/server/router.ts:2327-2329,
  * 2368) and returns `{ ok: true, interrupted: boolean }`. **A host today
  * cannot distinguish "I cancelled this" from "it had already ended".**
  */

@@ -38,6 +38,7 @@ import { resolveMemoryModel } from '../services/providers/memory-model-resolutio
 import { toLegacyApiProvider } from '../../renderer/lib/providers/legacy';
 import { createRagIndexExecutor } from './rag_refresh';
 import { getConfigStore } from '../config/store-instance';
+import { getDatabase } from '../db/connection';
 
 const logger = getLogger();
 
@@ -98,7 +99,9 @@ export async function startMemoryWorkerFromConfig(): Promise<MemoryWorkerStartOu
     const { toLLMProvider } = await import('../config/provider-types');
     const { toRuntimeConfigFromLegacy } = await import('@duya/ai');
 
-    const memoryDb = bootstrap({ bootJsonDatabaseDir: path.dirname(getDatabasePath()) });
+    const database = getDatabase();
+    if (!database) throw new Error('The shared application database is not initialized');
+    const memoryDb = bootstrap({ bootJsonDatabaseDir: path.dirname(getDatabasePath()), database });
 
     // S5: the forget ledger is written before the canonical file is retired,
     // so a crash in that window leaves a half-applied forget. Repair it

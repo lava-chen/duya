@@ -17,7 +17,7 @@
  *
  * The checkout is real (a linked worktree with an owner file) because the
  * verdict under test is produced by git, not by a stub. The run ledger is real
- * too: the external `CoreDataHost` opens the same `duya-core.db` the Host
+ * too: the external `CoreDataHost` opens the same `duya-main.db` the Host
  * serves, which is exactly how the product reads the ledger.
  */
 
@@ -72,7 +72,7 @@ async function makeRepoWithCheckout(): Promise<{ repo: string; checkout: string 
  */
 function openCoreHost(dataRoot: string): CoreDataHost {
   const dataHost = new CoreDataHost({
-    filename: path.join(dataRoot, 'duya-core.db'),
+    filename: path.join(dataRoot, 'duya-main.db'),
     rolloutRoot: path.join(dataRoot, 'sessions'),
     attachmentsRoot: path.join(dataRoot, 'attachments'),
     messageLogPorts: {

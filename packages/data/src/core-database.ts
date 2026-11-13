@@ -60,6 +60,8 @@ export function startWalCheckpoint(
 
 export interface CoreDatabaseOptions {
   filename: string;
+  /** Reuse a database handle already owned by the application DatabaseHost. */
+  database?: SqliteDatabase;
   sqlite?: SqliteCtor;
   migrations: Migration[];
   logger?: DataLogger;
@@ -69,12 +71,22 @@ export interface CoreDatabaseOptions {
 export class CoreDatabase {
   readonly db: SqliteDatabase;
   private readonly stopCheckpoint: () => void;
+  private readonly ownsDatabase: boolean;
 
   constructor(options: CoreDatabaseOptions) {
-    this.db = openSqliteDatabase(options);
-    this.ensureMeta();
-    this.runMigrations(options.migrations, options.logger);
-    this.stopCheckpoint = startWalCheckpoint(this.db, options.logger);
+    this.ownsDatabase = options.database === undefined;
+    this.db = options.database ?? openSqliteDatabase(options);
+    try {
+      this.ensureMeta();
+      this.runMigrations(options.migrations, options.logger);
+      // The owning MainDatabase already checkpoints a shared connection.
+      this.stopCheckpoint = this.ownsDatabase
+        ? startWalCheckpoint(this.db, options.logger)
+        : () => {};
+    } catch (error) {
+      if (this.ownsDatabase) this.db.close();
+      throw error;
+    }
   }
 
   get schemaVersion(): number {
@@ -86,7 +98,7 @@ export class CoreDatabase {
 
   close(): void {
     this.stopCheckpoint();
-    this.db.close();
+    if (this.ownsDatabase) this.db.close();
   }
 
   private ensureMeta(): void {

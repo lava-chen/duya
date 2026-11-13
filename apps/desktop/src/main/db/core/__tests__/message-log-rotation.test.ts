@@ -569,14 +569,9 @@ describe('MessageLog rotation (Plan 493, Phase B)', () => {
     expect(active).toContain('comp-1');
   });
 
-  it('listBySession self-heals a single-file bot session whose active.jsonl was rewritten in place', () => {
-    // Regression: the active file was overwritten (crash mid-rewrite or a bot
-    // rebuild) while `message_index.file_offset/byte_len` kept pointing at the
-    // OLD bytes. Previously every projection read garbage -> one
-    // "Unparseable rollout line skipped" WARN per stale row and the bot's
-    // history went invisible. With no `archive-*.jsonl`, the active file is the
-    // single authoritative source, so the projection must rebuild the index
-    // from it and return the surviving messages instead of skipping.
+  it('keeps SQLite history when a single-file bot rollout mirror is rewritten', () => {
+    // SQLite is the durable source. An in-place rewrite of the portable mirror
+    // must not replace indexed payloads or rebuild the index from that mirror.
     const agentId = 'recon';
     const sessionId = `bot:${agentId}`;
     const t = Date.now();
@@ -593,8 +588,8 @@ describe('MessageLog rotation (Plan 493, Phase B)', () => {
     // No archive exists yet.
     expect(fs.existsSync(path.join(sessionsDir, 'archive-0.jsonl'))).toBe(false);
 
-    // Simulate an in-place rewrite of the active file to a different, shorter
-    // set of messages. The existing index offsets are now stale.
+    // Simulate an in-place rewrite of the active mirror to a different,
+    // shorter set of messages.
     fs.writeFileSync(
       activePath,
       JSON.stringify(makeUserMessage('m-4', 'new four', t + 10)).trim() +
@@ -604,7 +599,7 @@ describe('MessageLog rotation (Plan 493, Phase B)', () => {
       'utf8',
     );
 
-    // Sanity: the original indexed offsets no longer parse against the new file.
+    // The old file offsets no longer describe the rewritten mirror.
     const stale = db
       .prepare('SELECT file_offset, byte_len FROM message_index WHERE session_id = ? ORDER BY seq')
       .all(sessionId) as Array<{ file_offset: number; byte_len: number }>;
@@ -625,23 +620,21 @@ describe('MessageLog rotation (Plan 493, Phase B)', () => {
     );
     expect(anyStaleFails).toBe(true);
 
-    // listBySession must reconcile (rebuild the index from the active file) and
-    // expose only the surviving messages — no throw, no dropped-history WARNs.
+    // Reads continue to return the durable database payloads.
     const events = log.listBySession(sessionId);
-    expect(events.map((e) => e.id)).toEqual(['m-4', 'm-5']);
+    expect(events.map((e) => e.id)).toEqual(['m-1', 'm-2', 'm-3']);
 
-    // The index is now consistent with the file: 2 rows, seq 1..2.
+    // A read does not rewrite the canonical index from an external mirror.
     const rebuilt = db
       .prepare('SELECT id, seq FROM message_index WHERE session_id = ? ORDER BY seq')
       .all(sessionId) as Array<{ id: string; seq: number }>;
-    expect(rebuilt.map((r) => r.id)).toEqual(['m-4', 'm-5']);
-    expect(rebuilt.map((r) => r.seq)).toEqual([1, 2]);
+    expect(rebuilt.map((r) => r.id)).toEqual(['m-1', 'm-2', 'm-3']);
+    expect(rebuilt.map((r) => r.seq)).toEqual([1, 2, 3]);
   });
 
-  it('does not rebuild multi-segment bot sessions from the active tail on an unparseable row', () => {
-    // A session that HAS archived generations must not be collapsed into the
-    // active file's rows by the self-heal path — one corrupt row in an archive
-    // could otherwise silently drop the healthy segments.
+  it('keeps SQLite history when an archived rollout mirror becomes unparseable', () => {
+    // A damaged archive mirror must not replace or remove durable database
+    // payloads, even when an active generation remains readable.
     const agentId = 'multirecon';
     const sessionId = `bot:${agentId}`;
     const t = Date.now();
@@ -654,7 +647,7 @@ describe('MessageLog rotation (Plan 493, Phase B)', () => {
     const sessionsDir = path.join(rootDir, 'agents', agentId, 'sessions');
     expect(fs.existsSync(path.join(sessionsDir, 'archive-0.jsonl'))).toBe(true);
 
-    // Corrupt one archive row's byte range so projection would hit the guard.
+    // Corrupt an archive row in the portable mirror.
     const archive = path.join(sessionsDir, 'archive-0.jsonl');
     const row = db
       .prepare(
@@ -665,15 +658,15 @@ describe('MessageLog rotation (Plan 493, Phase B)', () => {
     // Truncate the archive so that row reads past the end (unparseable).
     fs.writeFileSync(archive, content.slice(0, row.file_offset), 'utf8');
 
-    // Self-heal must NOT collapse the session to the active tail: the guard
-    // detects an archive segment and keeps skipping the stale row only.
+    // The database projection is unaffected by a damaged mirror.
     const events = log.listBySession(sessionId);
-    // m-1 is now unrecoverable (its archive bytes were wiped) but m-2 in the
-    // active segment survives and the timeline is NOT rebuilt from active alone.
-    expect(events.map((e) => e.id)).toEqual(['m-2']);
+    expect(events.map((e) => e.id)).toEqual(['m-1', 'm-2']);
     const remaining = db
       .prepare('SELECT id, generation FROM message_index WHERE session_id = ? ORDER BY seq')
       .all(sessionId) as Array<{ id: string; generation: number }>;
+    expect(remaining.map((row) => row.id).filter((id) => !id.startsWith('rotation:')))
+      .toEqual(['m-1', 'm-2']);
+    expect(remaining).toHaveLength(3);
     expect(remaining.some((r) => r.id === 'm-2')).toBe(true);
   });
 });

@@ -1,6 +1,7 @@
 import { CoreDataHost, type CoreDataHostOptions } from './core-data-host.js';
 import { MainDatabase, type MainDatabaseOptions } from './main-database.js';
 import { DatabaseOwnerLock } from './database-owner-lock.js';
+import { resolve } from 'node:path';
 
 /**
  * Owns the application's SQLite database lifetimes for one process.
@@ -28,9 +29,17 @@ export class DatabaseHost {
 
   openCoreDatabase(options: CoreDataHostOptions): CoreDataHost {
     if (this.core) return this.core;
-    const ownerLock = DatabaseOwnerLock.acquire(options.filename);
+    const sharesMainConnection = this.main !== null
+      && sameDatabasePath(options.filename, this.main.db.name);
+    // One physical database needs one process owner lock and one WAL
+    // checkpoint owner. CoreDataHost can install its stores and migrations on
+    // the MainDatabase handle when both paths resolve to the same file.
+    const ownerLock = sharesMainConnection ? null : DatabaseOwnerLock.acquire(options.filename);
     try {
-      this.core = new CoreDataHost(options);
+      this.core = new CoreDataHost({
+        ...options,
+        ...(sharesMainConnection && this.main ? { database: this.main.db } : {}),
+      });
       this.coreOwnerLock = ownerLock;
       return this.core;
     } catch (error) {
@@ -64,6 +73,9 @@ export class DatabaseHost {
   }
 
   closeMainDatabase(): void {
+    if (this.main && this.core?.database.db === this.main.db) {
+      this.closeCoreDatabase();
+    }
     const main = this.main;
     this.main = null;
     try {
@@ -82,4 +94,12 @@ export class DatabaseHost {
       this.closeMainDatabase();
     }
   }
+}
+
+function sameDatabasePath(left: string, right: string): boolean {
+  const resolvedLeft = resolve(left);
+  const resolvedRight = resolve(right);
+  return process.platform === 'win32'
+    ? resolvedLeft.toLowerCase() === resolvedRight.toLowerCase()
+    : resolvedLeft === resolvedRight;
 }

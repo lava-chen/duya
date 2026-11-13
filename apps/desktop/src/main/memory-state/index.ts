@@ -67,7 +67,7 @@ export {
 } from './sourceFingerprint';
 
 // Plan 525 Phase 3 — project entity service + global plans directory.
-// Moved to core (plan 534): the `projects` table now lives in duya-core.db.
+// The canonical projects table is shared with core stores in duya-main.db.
 // These re-exported symbols keep every existing consumer (IPC handlers,
 // db-bridge) pointing at the same implementation without churn.
 export {

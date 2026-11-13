@@ -13,7 +13,8 @@ import { normalizeProjectPathEntries, MAX_PROJECT_PATH_LENGTH } from './project-
 /**
  * Project entity service (ex Plan 525 Phase 3, moved to core in plan 534).
  *
- * The projects / project_bots rows now live in `duya-core.db` (ProjectStore).
+ * The projects / project_bots rows live in the canonical application database
+ * (ProjectStore).
  * The service owns the global plans directory layout:
  *
  *   ~/.duya/projects/<project_id>/
@@ -27,11 +28,9 @@ import { normalizeProjectPathEntries, MAX_PROJECT_PATH_LENGTH } from './project-
  * `~/.duya/projects` (DUYA_TEST-namespace aware).
  *
  * DB routing:
- *   - `projects.*` / `project_bots`  → injected core ProjectStore handle.
- *   - `rollout_catalog` unbind on delete → memory DB (memory-state catalog).
- *     That table lives in a SECOND SQLite database, which `db/core` must not
- *     open: the composition root injects the handle through
- *     `ProjectServiceOptions.memoryDb`. See `deleteProject`.
+ *   - `projects.*`, `project_bots`, and `rollout_catalog` all use the shared
+ *     application database. Separate injected handles keep store ownership
+ *     explicit while pointing at the same SQLite connection.
  *
  * `normalizeProjectPathEntries` is imported locally (so `createProject` can
  * call it) and re-exported — it remains a public entry point for consumers
@@ -88,14 +87,14 @@ export interface UpdateProjectInput {
 }
 
 export interface ProjectServiceOptions {
-  /** Core projects DB handle supplied by the composition root. */
+  /** Shared application DB handle supplied by the composition root. */
   projectsDb?: Database;
   /**
-   * Handle on the memory-state DB, whose `rollout_catalog` table `deleteProject`
-   * unbinds. Either the handle itself or a zero-arg resolver returning it.
+   * Handle on the shared application DB, whose `rollout_catalog` table
+   * `deleteProject` unbinds. Either the handle itself or a resolver.
    *
-   * `db/core` must not import memory-state to obtain this: it is a second
-   * SQLite database that the composition root owns (see
+   * `db/core` must not import memory-state to obtain this: the composition root
+   * owns both store boundaries (see
    * `apps/desktop/src/main/ipc/project-entity-handlers.ts`). The resolver form
    * exists to preserve the lookup ORDER the service has always had — the
    * handle is acquired only once an existing project has been confirmed, so a
@@ -109,10 +108,10 @@ export interface ProjectServiceOptions {
 }
 
 /**
- * Resolve the memory-state handle for the delete-path unbind.
+ * Resolve the shared DB handle for the delete-path catalog unbind.
  *
  * There is deliberately no module-level default: opening the memory-state
- * database is the caller's decision, and this module must not reach across
+ * connection is the caller's decision, and this module must not reach across
  * into that subsystem. A missing handle is a programming error and fails
  * loudly rather than silently skipping the unbind.
  */
@@ -122,7 +121,7 @@ function resolveMemoryDb(opts?: ProjectServiceOptions): Database {
   if (source) return source;
   throw new Error(
     'projectService: deleteProject requires `memoryDb` — the rollout_catalog ' +
-      'unbind targets the memory-state database, which db/core does not open itself',
+      'unbind requires the composition root to provide the shared database',
   );
 }
 

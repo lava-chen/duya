@@ -161,7 +161,7 @@
  *
  * `NAMESPACE` keys two DIFFERENT roots, and only one of them is per-worktree.
  * `--user-data-dir` (set by `launchDuya`) is the namespace's Electron userData,
- * so `databases/duya-core.db` lands inside THIS repo. But the config that
+ * so `databases/duya-main.db` lands inside THIS repo. But the config that
  * decides that path is `~/.duya/test-namespaces/<ns>/config.toml`
  * (`compass.resolveConfigRoot`), which is keyed on the namespace NAME ALONE and
  * is therefore shared by every worktree that picks the same name. At boot the
@@ -302,7 +302,7 @@ async function runRealTurn(opts: { stopAfter?: string; readBudgetMs: number }): 
  * reporting through IPC.
  */
 function openCoreDb(): Database.Database {
-  const dbPath = path.join(userDataRootFor(NAMESPACE), 'databases', 'duya-core.db');
+  const dbPath = path.join(userDataRootFor(NAMESPACE), 'databases', 'duya-main.db');
   if (!fs.existsSync(dbPath)) {
     const dir = path.dirname(dbPath);
     const listing = fs.existsSync(dir) ? fs.readdirSync(dir) : ['<no databases dir>'];
