@@ -6,7 +6,7 @@
 
 export type LLMProvider = 'anthropic' | 'openai' | 'ollama';
 
-const MINIMAX_DOMAINS = ['api.minimax.io', 'api.minimaxi.com'];
+const MINIMAX_DOMAINS = ['api.minimax.io', 'api.minimax.cn', 'api.minimaxi.com'];
 
 /**
  * Check if the URL is a MiniMax API endpoint

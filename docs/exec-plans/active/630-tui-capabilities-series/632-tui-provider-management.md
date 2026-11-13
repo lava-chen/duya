@@ -97,3 +97,30 @@ PR B 开工时要接住的三件事：`/provider` 编辑表单的"测连"只能�
 - 写操作一律从读到的行出发、只覆盖用户改的那一个字段，再带 `expectedRevision`。`HostProviderWriteInput` 的字段是**替换**而非合并，只发改动字段会把 alias / defaultModel 全部清空。
 - 保存后探测失败的处理分两种：新建时删掉刚建的行；编辑时把上一行原样写回（对着失败写入产生的新 revision）。这是"测连只能对已保存的 provider 发起"逼出来的顺序，代价是网络抖动时一次回滚。
 - 编辑完模型列表后 `defaultModel` 若已不在新列表里就顺延到第一个，否则会留下一个指向不存在模型的默认值。
+
+## 2026-11-11 · 添加向导 Provider 选择与静态模型探测
+
+### 发现与决策
+
+- 无已配置 provider 时，向导应先列 catalog 预设。选择内置 provider 后只问 API key，并使用 catalog 的 id、URL、模型；自定义 provider 才继续问 id、名称、URL 和模型。锁定内置 id 可保证探测与运行时特定兼容逻辑仍能识别供应商。
+- Pi 的 `/login` 由 `getLoginProviderOptions` 展示 provider 和认证方式，`modelRuntime.login` 保存 credential；`completeProviderAuthentication` 在保存后刷新模型目录，刷新失败只提示并保留 credential。Pi 不以 provider 的 `GET /models` 决定 key 是否可保存。
+- Duya 先前在 `writeProvider` 对新增和编辑一律 `validateConnection: true`，让模型列表路由变成保存门槛。静态 provider 的 catalog 已经给出可用模型，但 Anthropic 端点不一定有 `/models`；只允许在“所有候选都 404”时降级也不可靠，前一个候选的 401/405 会被最后一个 404 覆盖后显示。现在保存与显式连接测试分离；静态 provider 的测试直接返回 `not_testable`，提示发一条消息验证 key。
+- MiniMax CN API 请求地址采用官方 Claude Code 文档中的 `https://api.minimax.cn/anthropic`，同步 catalog、内置运行 provider 和模型数据。
+
+### 验证与接续
+
+基线 SHA：`3e2390141bc318a31e9b13dc41edee3976ae0610`；Linux x86_64 / Node v26.13.0；分支 `codex/tui-provider-picker`，worktree `/home/lavachen/.codex/worktrees/tui-provider-picker/duya`。
+
+| 命令 | 退出码 | 结果 |
+| --- | --- | --- |
+| `npm run build:cli-dev` | 0 | 18 个 workspace package、Host worker bundle 和 CLI bundle 构建成功 |
+| `npx vitest run packages/cli/src/tui/slash/__tests__/provider.test.ts packages/host/tests/provider-config-write.test.ts packages/ai/test/catalog.test.ts` | 0 | 3 files / 65 tests passed；覆盖内置 preset key-only 添加、未探测保存、静态 provider 不请求 `/models`、Anthropic 自定义 provider 鉴权头 |
+| `npm run typecheck:all` | 0 | 所有门禁结束；Electron gate 164 条已知错误、无新增；聚合命令中的 4 个 agent-core recorder checks 通过 |
+| `npm run architecture:check` | 0 | 无新增边界违规 |
+| `node packages/cli/bundle/cli.cjs --help` | 0 | 构建产物启动并输出 CLI 命令帮助 |
+
+未做：真实 TUI 添加流程和真实 MiniMax 消息请求；需要使用用户自己的 key。生成的 `packages/host/bundle/worker-entry.js` 与 metafile 随本次 worker 重建更新。
+
+接续：实现和验证在 `codex/tui-provider-picker`，base `3e2390141`，HEAD `954bacb623b2cc4cff3456af18d9d444a33477a0`。已创建 [draft PR #627](https://github.com/lava-chen/duya/pull/627)，CI/review 待完成；未授权合并。worktree 保留。
+
+下一步：等待 PR CI/review；用户重启 `dev:tui` 并用 MiniMax CN 有效 key 发起一轮消息，若失败继续检查该次 Host/worker 日志。未经授权不合并。

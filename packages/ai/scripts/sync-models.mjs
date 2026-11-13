@@ -438,14 +438,14 @@ const SHARDS = [
     key: 'minimax-cn',
     file: 'minimax-cn.models.ts',
     header: `// Model data. Sourced from https://models.dev/api.json (public, no key).
-// The MiniMax China token-plan catalogue (api.minimaxi.com/anthropic).
+// The MiniMax China token-plan catalogue (api.minimax.cn/anthropic).
 `,
     sections: [
       {
         exportName: 'minimaxCnModels',
         api: 'anthropic',
         providerId: 'minimax-cn',
-        baseUrl: 'https://api.minimaxi.com/anthropic',
+        baseUrl: 'https://api.minimax.cn/anthropic',
         source: 'modelsdev',
         group: 'minimax-cn-coding-plan',
         costGroup: 'minimax-cn',

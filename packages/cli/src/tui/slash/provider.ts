@@ -22,7 +22,7 @@
  * refusal instead of a silent overwrite.
  */
 
-import { BUILTIN_CATALOG } from '@duya/ai';
+import { BUILTIN_CATALOG, type ProviderCatalogEntry } from '@duya/ai';
 import type {
   HostProviderDetail,
   HostProviderList,
@@ -59,6 +59,28 @@ const PROVIDER_TYPES: readonly TuiChoice[] = [
     description: 'OpenRouter aggregation',
   },
 ];
+
+type ProviderType = 'openai-compatible' | 'anthropic' | 'openrouter';
+
+const PROVIDER_TYPE_BY_PROTOCOL: Partial<Record<ProviderCatalogEntry['protocol'], ProviderType>> = {
+  'openai-chat': 'openai-compatible',
+  anthropic: 'anthropic',
+  openrouter: 'openrouter',
+};
+
+interface ProviderSetupPreset {
+  readonly entry: ProviderCatalogEntry;
+  readonly providerType: ProviderType;
+}
+
+/** Presets whose wire protocol can be represented by the Host provider contract. */
+function providerSetupPresets(): readonly ProviderSetupPreset[] {
+  return BUILTIN_CATALOG.list().flatMap((entry) => {
+    if (entry.category === 'media') return [];
+    const providerType = PROVIDER_TYPE_BY_PROTOCOL[entry.protocol];
+    return providerType === undefined ? [] : [{ entry, providerType }];
+  });
+}
 
 /** `[providers.<id>]` is a TOML table key, so an id has to survive as one. */
 const PROVIDER_ID_PATTERN = /^[A-Za-z][A-Za-z0-9_.-]*$/u;
@@ -114,18 +136,6 @@ function presetFor(detail: HostProviderDetail) {
 }
 
 /**
- * The catalog entry the add wizard should seed the rest of its questions from.
- *
- * The chosen `providerType` is what the runtime needs; the catalog is what the
- * user would otherwise have to remember (a vendor's base URL and its current
- * model ids). Matching on protocol keeps the seed from contradicting the type.
- */
-function presetForProviderType(providerType: string) {
-  const wanted = providerType === 'anthropic' ? 'anthropic' : 'openai-chat';
-  return BUILTIN_CATALOG.list().find((entry) => entry.protocol === wanted);
-}
-
-/**
  * Ask for the model list, offering what the vendor ships as the starting point.
  *
  * Two sources feed the default: the provider's own presets from `@duya/ai`
@@ -164,20 +174,27 @@ async function promptModels(
   return models;
 }
 
-/** Validate the candidate in Host memory, then commit it without client rollback. */
+/** Save config independently; some providers cannot be validated by listing models. */
 async function writeProvider(
   ctx: TuiSlashContext,
   input: HostProviderWriteInput,
   previous: HostProviderDetail | undefined,
+  successNote?: string,
 ): Promise<boolean> {
   try {
-    const saved = await ctx.client.upsertProvider({ ...input, validateConnection: true });
+    const saved = await ctx.client.upsertProvider(input);
     const providerId = saved.provider.providerId;
     ctx.tui.printNotice(
       // Keyed on whether a row was replaced, not on whether the input carried
       // an id: the wizard names the id it is about to create, so an absent
       // `providerId` would report every new provider as an update.
-      `${previous === undefined ? 'Added' : 'Updated'} ${saved.provider.name} (${providerId})`,
+      [
+        `${previous === undefined ? 'Added' : 'Updated'} ${saved.provider.name} (${providerId})`,
+        saved.probeMessage,
+        successNote,
+      ]
+        .filter(Boolean)
+        .join(' · '),
     );
     return true;
   } catch (error) {
@@ -194,9 +211,30 @@ async function addProvider(ctx: TuiSlashContext, list: HostProviderList): Promis
     return;
   }
 
-  const rawId = await promptText('Provider id', {
-    placeholder: 'deepseek',
-  });
+  const presets = providerSetupPresets();
+  const selectedPresetId = await ctx.tui.choose('Provider', [
+    ...presets.map(({ entry }) => ({
+      label: entry.name,
+      value: entry.id,
+      description: [entry.protocol, entry.baseUrl].filter(Boolean).join(' · '),
+    })),
+    ...PROVIDER_TYPES.map((type) => ({
+      label: `Custom ${type.label}`,
+      value: type.value,
+      description: 'Enter the endpoint, models, and key manually',
+    })),
+  ]);
+  if (selectedPresetId === null) return;
+  const preset = presets.find(({ entry }) => entry.id === selectedPresetId);
+  const customProviderType = PROVIDER_TYPES.some((type) => type.value === selectedPresetId)
+    ? selectedPresetId as ProviderType
+    : undefined;
+  const providerType = preset?.providerType ?? customProviderType;
+  if (providerType === undefined) return;
+
+  const rawId = preset === undefined
+    ? await promptText('Provider id', { placeholder: 'deepseek' })
+    : preset.entry.id;
   if (rawId === null) return;
   const providerId = rawId.trim();
   if (!PROVIDER_ID_PATTERN.test(providerId)) {
@@ -208,18 +246,15 @@ async function addProvider(ctx: TuiSlashContext, list: HostProviderList): Promis
     return;
   }
 
-  const providerType = await ctx.tui.choose('API format', PROVIDER_TYPES);
-  if (providerType === null) return;
-
-  const preset = presetForProviderType(providerType);
-  const rawName = await promptText('Display name', { initialValue: preset?.name ?? providerId });
+  const rawName = preset === undefined
+    ? await promptText('Display name', { initialValue: providerId })
+    : preset.entry.name;
   if (rawName === null) return;
   const name = rawName.trim() || providerId;
 
-  const rawBaseUrl = await promptText('Base URL', {
-    initialValue: preset?.baseUrl ?? '',
-    placeholder: 'https://api.example.com/v1',
-  });
+  const rawBaseUrl = preset === undefined
+    ? await promptText('Base URL', { placeholder: 'https://api.example.com/v1' })
+    : preset.entry.baseUrl;
   if (rawBaseUrl === null) return;
   const baseUrl = rawBaseUrl.trim();
   if (!isHttpUrl(baseUrl)) {
@@ -227,10 +262,9 @@ async function addProvider(ctx: TuiSlashContext, list: HostProviderList): Promis
     return;
   }
 
-  const rawModels = await promptText('Models (comma separated)', {
-    initialValue: preset?.defaultModels.map((model) => model.modelId).join(', ') ?? '',
-    placeholder: 'gpt-4o, gpt-4o-mini',
-  });
+  const rawModels = preset === undefined
+    ? await promptText('Models (comma separated)', { placeholder: 'gpt-4o, gpt-4o-mini' })
+    : preset.entry.defaultModels.map((model) => model.modelId).join(', ');
   if (rawModels === null) return;
   const models = splitModels(rawModels);
   if (models.length === 0) {
@@ -258,6 +292,7 @@ async function addProvider(ctx: TuiSlashContext, list: HostProviderList): Promis
       apiKey,
     },
     undefined,
+    'API key not verified; send a message to test it.',
   );
 }
 
@@ -362,7 +397,7 @@ async function changeProvider(
     draft.alias = answer.trim();
   }
 
-  await writeProvider(ctx, draft, detail);
+  await writeProvider(ctx, draft, detail, 'Provider settings saved; send a message to verify the connection.');
 }
 
 async function runProvider(ctx: TuiSlashContext, args: string): Promise<TuiSlashOutcome> {
