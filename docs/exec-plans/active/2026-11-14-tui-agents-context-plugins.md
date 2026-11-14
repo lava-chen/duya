@@ -45,14 +45,14 @@
 
 | SHA / dirty 范围 | 环境 | 命令或操作 | 退出码 / 结果 | 证据 |
 | --- | --- | --- | --- | --- |
-| `53c9537baf45d98316d48d02409d3a8ed7dbb4f3` → source/docs dirty | Linux x64 / Node 26.13.0 / npm 11.20.0 | `npm run build:cli-dev` | exit 0; CLI `bundle/cli.cjs` built, 4.82 MB | local worktree artifact |
+| `53c9537baf45d98316d48d02409d3a8ed7dbb4f3` → `b05e90b1134068232342555eb4d05b39d525eb3f` | Linux x64 / Node 26.13.0 / npm 11.20.0 | `npm run build:cli-dev` | exit 0; CLI `bundle/cli.cjs` built, 4.82 MB | local worktree artifact |
 | same | Linux x64 / Node 26.13.0 | `npm run typecheck:all` | exit 0; no new type errors. Script's final `eval:agent:core:check` also ran its 4 Node checks; no dedicated suite run | baseline gate: 164 known Electron type errors |
 | same | Linux x64 / Node 26.13.0 | `npm run architecture:check`; `git diff --check` | both exit 0; no new architecture findings | 3,208 existing baseline violations tolerated |
 | same | Linux x64 / Node 26.13.0 | First `npm ci` / retry `PUPPETEER_SKIP_DOWNLOAD=1 npm ci` | first exit 1 because stale cached Puppeteer Chrome folder lacked executable; retry exit 0 | independent node_modules in this worktree |
 
 ## 接续 / 结果
 
-实现、验证与构建产物均留在此分支/worktree；不安装全局 CLI、不直接合并 master。临时运行命令：`cd /home/lavachen/.codex/worktrees/tui-agents-context-plugin/duya && npm run dev:tui`。CLI 交互终端未在本轮启动；用户可用此命令做实机验收。PR 与提交 SHA 待交付后补记。
+实现、验证与构建产物均留在此分支/worktree；不安装全局 CLI、不直接合并 master。commit `b05e90b1134068232342555eb4d05b39d525eb3f`；draft PR [#637](https://github.com/lava-chen/duya/pull/637)，待 review/CI。临时运行命令：`cd /home/lavachen/.codex/worktrees/tui-agents-context-plugin/duya && npm run dev:tui`。CLI 交互终端未在本轮启动；用户可用此命令做实机验收。
 
-回收：pending。
-下一步：完成 commit 与 draft PR，附加 PR 到当前任务；保留 branch/worktree 等待 review 与用户终端反馈。
+回收：保留 managed worktree，供用户终端验收与后续反馈；PR 未合并。
+下一步：用户运行 `dev:tui` 验收侧栏；再按 review/CI 结果更新 PR。Host context composition 协议与 marketplace plugin loader 是后续独立切片。
