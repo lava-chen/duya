@@ -16,6 +16,7 @@ Coordinator 的完整提示词设计见 [2026-11-06 提示词系统](active/2026
 | CLI TUI 全屏框架 | [2026-11-11 TUI 全屏框架先进化](active/2026-11-11-tui-fullscreen-framework.md) | S1 搜索、S2 滚动条、S3 回合跳转、S4 全屏默认翻转（依据用户方向性指令 + 功能级 PTY 冒烟 7/7；`DUYA_TUI_INLINE=1` 逃生舱保留）已实现并过门禁；[stacked draft PR #625](https://github.com/lava-chen/duya/pull/625)，观感反馈可继续叠主题微调 |
 | CLI TUI 渲染统一 | [2026-11-11 渲染管线统一](active/2026-11-11-tui-render-unification.md) | P0 开工：`core/layout.ts` 分发器 + `regionBoxes` 布局树（与 patch 算术黄金对拍 6/6，零接线）；独立分支 stacked 于 #625，**合并顺序**排在 #624/#625 之后；Step 3（Surface 换核）待集成后继续 |
 | CLI TUI 学习 Pi | [2026-11-10 CLI Pi 工作台](active/2026-11-10-cli-pi-workbench.md) | CLI 组件点击、回底与显示策略已实现；静态检查通过，侧栏及拖动调宽已实现，静态复核通过；[draft PR #624](https://github.com/lava-chen/duya/pull/624)，待终端验收和 review/CI |
+| CLI TUI 工作台后续 | [2026-11-14 AGENTS / Context / 插件扩展](active/2026-11-14-tui-agents-context-plugins.md) | 侧栏直接切换主/子 agent、Context 用量结构和受限插件贡献点；本地 CLI bundle 构建后提供 dev 运行命令 |
 | 后台任务重复轮询硬停止 | [2026-11-04 后台任务重复轮询硬停止](active/2026-11-04-background-task-poll-loop.md) | JSONL 确认为 45 次轮询、最长连续 15 次；Host 接通硬停止并加 `get_task_output` 专用阈值；PR #617 draft |
 | Session 工具迁移 | [Session tools as a `duya_app` MCP capability group](active/2026-11-02-session-tools-duya-app.md) | Host-owned `duya_app` 覆盖与集成测试已实现；PR #579 待授权集成 |
 | Worktree 根目录与清理（635） | [2026-11-03 Worktree 设置与自动清理](active/2026-11-03-worktree-settings-and-auto-cleanup.md) | P1–P6 已实现并过门禁；PR #594 待集成 |

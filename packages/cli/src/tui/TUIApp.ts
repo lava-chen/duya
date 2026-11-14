@@ -48,6 +48,7 @@ import { frameRecord, frameString, TranscriptModel, readBlockKey, type LegacyFra
 import { ActivityTracker } from './components/activity.js';
 import { TranscriptPane } from './components/transcript-pane.js';
 import { WorkbenchSidebar } from './components/workbench-sidebar.js';
+import type { WorkbenchSidebarContextPart, WorkbenchSidebarStatusItem } from './components/workbench-sidebar.js';
 import { HStack } from './core/containers.js';
 import type { StyledSpan } from './core/span.js';
 import { resolveDisplayProfile } from './display-profiles.js';
@@ -136,6 +137,7 @@ import {
   type TranscriptSelection,
 } from './transcript-selection.js';
 import { capacityBar } from './capacity-bar.js';
+import { estimateContextTextTokens } from '@duya/ai/context';
 import { formatTokensPerSecond, readGitBranch } from './footer.js';
 import type { PrBadge } from './pr-badge.js';
 import type { WorkbenchWorkspaceSummary } from './workbench-workspace.js';
@@ -461,6 +463,11 @@ export interface TUIAppOptions {
    * total.
    */
   readonly contextBudgetTokens?: () => number | null;
+  /**
+   * Bounded, plain-text status items contributed by trusted TUI integrations.
+   * Marketplace plugin loading is intentionally not implied by this hook.
+   */
+  readonly workbenchSidebarStatusItems?: () => readonly WorkbenchSidebarStatusItem[];
   /** Override the theme (`'dark' | 'light'`); defaults to `resolveThemeName()`. */
   readonly theme?: ThemeName;
   /**
@@ -2229,13 +2236,10 @@ export class TUIApp {
       const props = {
         styles: stylesOf({ theme: this.theme.tags, renderer: 'own' }),
         sessionTitle: this.options.sessionTitle?.() ?? 'Current session',
-        activity: this.watchedSubagentId === null
-          ? `${working ? `${spinnerGlyph(this.spinnerFrame, this.terminalEnv.unicodeBox)} ` : ''}${this.activityLabel(busy)}`
-          : `Subagent · ${this.backgroundTasks.tasks().find((task) => task.id === this.watchedSubagentId)?.status ?? 'live'} · Ctrl+K stop`,
-        activityActive: this.watchedSubagentId === null
-          ? working
-          : this.backgroundTasks.tasks().some((task) => task.id === this.watchedSubagentId && task.status === 'running'),
+        activity: `${working ? `${spinnerGlyph(this.spinnerFrame, this.terminalEnv.unicodeBox)} ` : ''}${this.activityLabel(busy)}`,
+        activityActive: working,
         tasks: this.backgroundTasks.tasks(),
+        selectedAgentId: this.watchedSubagentId,
         workspace: this.options.workbenchWorkspace?.() ?? {
           root: this.options.workspaceDirectory?.() ?? process.cwd(),
           branch: null,
@@ -2247,6 +2251,10 @@ export class TUIApp {
         pullRequest: this.options.pullRequestBadge?.() ?? null,
         contextTokens: this.watchedSubagentId === null ? this.contextTokens() : null,
         contextBudget: this.watchedSubagentId === null ? this.options.contextBudgetTokens?.() ?? null : null,
+        contextParts: this.watchedSubagentId === null
+          ? this.sidebarContextParts(this.model, this.contextTokens())
+          : [],
+        statusItems: this.options.workbenchSidebarStatusItems?.() ?? [],
         profile: resolveDisplayProfile({ showThinking: this.showThinking, expandBlocks: this.expanded, showToolResults: this.showToolResults, toolGroupMode: this.toolGroupMode }),
         tools: { total: tools.length, running: tools.filter((tool) => tool.status === 'running').length, errors: tools.filter((tool) => tool.status === 'error').length },
       };
@@ -3960,6 +3968,38 @@ export class TUIApp {
     return usage.total + Math.ceil(added / 4);
   }
 
+  /**
+   * Estimate visible transcript categories next to the provider-anchored
+   * context total. Anything the TUI cannot attribute (system prompt, tool
+   * definitions, injected context) remains in an explicit remainder bucket.
+   */
+  private sidebarContextParts(model: TranscriptModel, used: number | null): WorkbenchSidebarContextPart[] {
+    const categories = new Map<string, number>([
+      ['Conversation', 0],
+      ['Tool calls', 0],
+      ['Tool output', 0],
+    ]);
+    for (const block of model.blocks) {
+      if (block.kind === 'user' || block.kind === 'assistant' || block.kind === 'thinking') {
+        categories.set('Conversation', (categories.get('Conversation') ?? 0) + estimateContextTextTokens(block.text));
+      } else if (block.kind === 'tool') {
+        const callText = block.command ?? block.argumentText ?? '';
+        categories.set('Tool calls', (categories.get('Tool calls') ?? 0) + estimateContextTextTokens(callText));
+        categories.set('Tool output', (categories.get('Tool output') ?? 0) + estimateContextTextTokens(block.result ?? block.outputText ?? ''));
+      }
+    }
+
+    const knownTotal = [...categories.values()].reduce((total, value) => total + value, 0);
+    const scale = used !== null && knownTotal > used && knownTotal > 0 ? used / knownTotal : 1;
+    const parts: WorkbenchSidebarContextPart[] = [...categories].map(([label, tokens]) => ({
+      label,
+      tokens: Math.round(tokens * scale),
+    })).filter((part) => part.tokens > 0);
+    const attributed = parts.reduce((total, part) => total + part.tokens, 0);
+    if (used !== null && used > attributed) parts.push({ label: 'Unattributed', tokens: used - attributed });
+    return parts.sort((a, b) => b.tokens - a.tokens).slice(0, 3);
+  }
+
   /** Context occupancy against the window, clamped to 0–100. */
   private contextPercent(): number {
     const budget = this.options.contextBudgetTokens?.() ?? null;
@@ -5083,26 +5123,35 @@ exportHistory(): string[] {
   /** Render the detail window; output is read on demand (Phase 8). */
   private openTaskDetail(task: BackgroundTaskView): void {
     if (task.kind === 'subagent') {
-      this.watchedSubagentId = this.watchedSubagentId === task.id ? null : task.id;
-      const child = this.subagentTranscripts.get(task.id);
-      if (this.watchedSubagentId !== null && child === undefined) {
-        this.subagentTranscripts.set(task.id, { model: new TranscriptModel(), toolIds: [], revision: 0, loadGeneration: 0 });
-      }
-      if (this.watchedSubagentId !== null && task.status !== 'running') {
-        const state = this.subagentTranscripts.get(task.id);
-        if (state) void this.loadSubagentTranscript(task, state);
-      }
-      const workspace = this.subagentTranscripts.get(task.id);
-      if (this.watchedSubagentId === task.id && workspace?.model.blocks.length === 0) {
-        workspace.model.addNotice(`Subagent · ${task.title}`);
-        workspace.revision += 1;
-      }
-      this.follow = true;
-      this.scrollTop = 0;
-      this.scheduler.requestImmediate();
+      // Keep the task browser's existing Enter behavior. Sidebar rows use
+      // selectAgentTranscript directly, where selecting an already-active row
+      // must stay on that transcript.
+      this.selectAgentTranscript(this.watchedSubagentId === task.id ? null : task);
       return;
     }
     this.options.onBackgroundTaskOpen?.(task);
+  }
+
+  private selectAgentTranscript(task: BackgroundTaskView | null): void {
+    if (task === null) {
+      this.watchedSubagentId = null;
+    } else {
+      if (task.kind !== 'subagent') return;
+      this.watchedSubagentId = task.id;
+      let child = this.subagentTranscripts.get(task.id);
+      if (child === undefined) {
+        child = { model: new TranscriptModel(), toolIds: [], revision: 0, loadGeneration: 0 };
+        this.subagentTranscripts.set(task.id, child);
+      }
+      if (task.status !== 'running') void this.loadSubagentTranscript(task, child);
+      if (child.model.blocks.length === 0) {
+        child.model.addNotice(`Subagent · ${task.title}`);
+        child.revision += 1;
+      }
+    }
+    this.follow = true;
+    this.scrollTop = 0;
+    this.scheduler.requestImmediate();
   }
 
   private stopSelectedSubagent(): void {
@@ -5663,9 +5712,11 @@ exportHistory(): string[] {
         add(`sidebar:${target.id}`, geometry, target.row, layout.column + target.column, target.width, () => {
           if ((this.options.workbenchSessionId?.() ?? '') !== sessionId) return;
           const action = target.action;
-          const invoke = 'task' in action
-            ? () => this.openTaskDetail(action.task)
-            : () => this.options.onWorkbenchCommand?.(action.command);
+          const invoke = 'agent' in action
+            ? () => this.selectAgentTranscript(action.agent)
+            : 'task' in action
+              ? () => this.openTaskDetail(action.task)
+              : () => this.options.onWorkbenchCommand?.(action.command);
           void Promise.resolve().then(invoke).catch((error: unknown) => {
             this.printError(error instanceof Error ? error.message : String(error));
           });
