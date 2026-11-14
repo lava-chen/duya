@@ -138,7 +138,8 @@ import {
 } from './transcript-selection.js';
 import { capacityBar } from './capacity-bar.js';
 import { estimateContextTextTokens } from '@duya/ai/context';
-import { formatTokensPerSecond, readGitBranch } from './footer.js';
+import { fitFooterLocation, formatTokensPerSecond, readGitBranch } from './footer.js';
+import { prFooterLabel } from './pr-badge.js';
 import type { PrBadge } from './pr-badge.js';
 import type { WorkbenchWorkspaceSummary } from './workbench-workspace.js';
 import type { StatuslineProfile } from './preferences.js';
@@ -789,6 +790,8 @@ export class TUIApp {
     readonly toolIds: string[];
     revision: number;
     loadGeneration: number;
+    loadInFlight: boolean;
+    loadAgain: boolean;
   }>();
   /** Tail-following. Disengaged by scrolling up, restored by Ctrl+End. */
   private follow = true;
@@ -1296,8 +1299,14 @@ export class TUIApp {
    * the polled half. Subagents arrive through `push()` as run frames.
    */
   setBackgroundTasks(snapshot: BackgroundTaskListV1): void {
-    if (!this.backgroundTasks.applyBashSnapshot(snapshot)) return;
-    this.clampTaskSelection();
+    const changed = this.backgroundTasks.applyBashSnapshot(snapshot);
+    if (changed) this.clampTaskSelection();
+    const watchedId = this.watchedSubagentId;
+    if (watchedId !== null) {
+      const task = this.backgroundTasks.tasks().find((entry) => entry.id === watchedId && entry.kind === 'subagent');
+      const child = this.subagentTranscripts.get(watchedId);
+      if (task !== undefined && child !== undefined) void this.loadSubagentTranscript(task, child);
+    }
     this.scheduler.requestImmediate();
   }
 
@@ -1990,11 +1999,9 @@ export class TUIApp {
   /**
    * Rows for the subagent being watched, or none.
    *
-   * The panel is a STATUS CARD, not a transcript: what the child is, what it
-   * was asked, how long it has been running and how it ended. It stops there
-   * because that is what this process can prove — a child's own messages live in
-   * the worker that runs it, and inventing a "transcript" here would be an empty
-   * promise dressed as a page.
+   * The task browser keeps a compact identity/status card above the same live
+   * transcript model used by the main agent. The transcript itself is selected
+   * by the sidebar or task row; this card only explains which child is active.
    */
   private watchPanelLines(width: number): string[] {
     const id = this.watchedSubagentId;
@@ -2238,18 +2245,11 @@ export class TUIApp {
         sessionTitle: this.options.sessionTitle?.() ?? 'Current session',
         activity: `${working ? `${spinnerGlyph(this.spinnerFrame, this.terminalEnv.unicodeBox)} ` : ''}${this.activityLabel(busy)}`,
         activityActive: working,
-        tasks: this.backgroundTasks.tasks(),
+        tasks: this.sidebarAgentTasks(),
         selectedAgentId: this.watchedSubagentId,
-        workspace: this.options.workbenchWorkspace?.() ?? {
-          root: this.options.workspaceDirectory?.() ?? process.cwd(),
-          branch: null,
-          linkedWorktree: false,
-          observed: false,
-          changedFiles: null,
-          changes: [],
-        },
-        pullRequest: this.options.pullRequestBadge?.() ?? null,
-        contextTokens: this.watchedSubagentId === null ? this.contextTokens() : null,
+        contextTokens: this.watchedSubagentId === null ? this.sidebarContextTotal() : null,
+        contextEstimated: this.watchedSubagentId === null && this.contextTokens() === null
+          && this.sidebarContextParts(this.model, null).length > 0,
         contextBudget: this.watchedSubagentId === null ? this.options.contextBudgetTokens?.() ?? null : null,
         contextParts: this.watchedSubagentId === null
           ? this.sidebarContextParts(this.model, this.contextTokens())
@@ -2834,8 +2834,10 @@ export class TUIApp {
       ? ''
       : ' ' + taggedWith(this.theme.tags, badge.token, escapeTags(badgePlain));
     const cwd = this.options.workspaceDirectory?.() ?? process.cwd();
-    const branch = this.gitBranch(cwd);
-    const location = branch ? `${cwd} · ${branch}` : cwd;
+    const branch = this.footerBranch(cwd);
+    const pullRequest = this.options.pullRequestBadge?.() ?? null;
+    const suffix = `${branch === null ? '' : ` (${branch})`}${pullRequest === null ? '' : ` · ${prFooterLabel(pullRequest)}`}`;
+    const location = fitFooterLocation(cwd, suffix, width);
     this.fullScreen.update('status', {
       height: STATUS_ROWS,
       lines: [
@@ -2864,7 +2866,7 @@ export class TUIApp {
     const budget = this.options.contextBudgetTokens?.() ?? null;
     const props = {
       cwd,
-      branch: this.gitBranch(cwd),
+      branch: this.footerBranch(cwd),
       sessionName: this.options.sessionName?.() ?? null,
       hint,
       stats: {
@@ -2971,6 +2973,13 @@ export class TUIApp {
     const branch = readGitBranch(cwd);
     this.gitBranchCache = { cwd, branch, at };
     return branch;
+  }
+
+  /** Use the execution checkout's branch while the footer keeps project path A. */
+  private footerBranch(projectDirectory: string): string | null {
+    const workspace = this.options.workbenchWorkspace?.();
+    if (workspace?.observed === true) return workspace.branch ?? 'detached';
+    return this.gitBranch(projectDirectory);
   }
 
   /**
@@ -3188,6 +3197,8 @@ export class TUIApp {
     readonly toolIds: string[];
     revision: number;
     loadGeneration: number;
+    loadInFlight: boolean;
+    loadAgain: boolean;
   } | null {
     const id = this.watchedSubagentId;
     return id === null ? null : this.subagentTranscripts.get(id) ?? null;
@@ -3204,9 +3215,18 @@ export class TUIApp {
     const id = frameString(data, 'subagentId') || frameString(data, 'agentId');
     const eventType = frameString(data, 'agentEventType');
     if (id === '' || eventType === '') return;
+    const parentCallId = eventType === 'subagent_started' || eventType === 'started'
+      ? frameString(data, 'parentToolCallId') || frameString(data, 'toolCallId')
+      : '';
+    if (parentCallId !== '' && this.watchedSubagentId === parentCallId) {
+      const provisional = this.subagentTranscripts.get(parentCallId);
+      this.watchedSubagentId = id;
+      if (provisional !== undefined && !this.subagentTranscripts.has(id)) this.subagentTranscripts.set(id, provisional);
+      this.subagentTranscripts.delete(parentCallId);
+    }
     let child = this.subagentTranscripts.get(id);
     if (child === undefined) {
-      child = { model: new TranscriptModel(), toolIds: [], revision: 0, loadGeneration: 0 };
+      child = { model: new TranscriptModel(), toolIds: [], revision: 0, loadGeneration: 0, loadInFlight: false, loadAgain: false };
       this.subagentTranscripts.set(id, child);
     }
     const model = child.model;
@@ -3251,20 +3271,34 @@ export class TUIApp {
   private async loadSubagentTranscript(
     task: BackgroundTaskView,
     child: NonNullable<ReturnType<TUIApp['activeSubagentTranscript']>>,
+    quiet = false,
   ): Promise<void> {
-    if (task.subagentSessionId === undefined || this.options.onSubagentTranscriptLoad === undefined) return;
+    if (this.options.onSubagentTranscriptLoad === undefined) return;
+    if (child.loadInFlight) {
+      child.loadAgain = true;
+      return;
+    }
+    child.loadInFlight = true;
     const generation = ++child.loadGeneration;
     try {
       const messages = await this.options.onSubagentTranscriptLoad(task);
       if (generation !== child.loadGeneration || this.disposed) return;
-      this.replaceTranscript(messages, child.model);
+      if (messages.length > 0) {
+        this.replaceTranscript(messages, child.model);
+        child.revision += 1;
+        this.transcriptPane.revision += 1;
+      }
       if (this.watchedSubagentId === task.id) {
-        this.follow = true;
-        this.scrollTop = 0;
         this.scheduleRender();
       }
     } catch (error) {
-      this.printError(`Could not load subagent transcript: ${error instanceof Error ? error.message : String(error)}`);
+      if (!quiet) this.printError(`Could not load subagent transcript: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      child.loadInFlight = false;
+      if (child.loadAgain && !this.disposed) {
+        child.loadAgain = false;
+        void this.loadSubagentTranscript(task, child, quiet);
+      }
     }
   }
 
@@ -3965,6 +3999,55 @@ export class TUIApp {
     // of a conversation (`packages/ai/src/utils/estimate.ts:14`).
     const added = Math.max(0, this.model.contextChars - this.usageCharBaseline);
     return usage.total + Math.ceil(added / 4);
+  }
+
+  /** The sidebar may use transcript estimates when no provider total arrived. */
+  private sidebarContextTotal(): number | null {
+    const exact = this.contextTokens();
+    if (exact !== null) return exact;
+    const estimated = this.sidebarContextParts(this.model, null)
+      .reduce((total, part) => total + part.tokens, 0);
+    return estimated > 0 ? estimated : null;
+  }
+
+  /** Merge Host task rows with subagent calls already present in the transcript. */
+  private sidebarAgentTasks(): BackgroundTaskView[] {
+    const tracked = this.backgroundTasks.tasks();
+    const trackedAgents = new Map(tracked
+      .filter((task) => task.kind === 'subagent')
+      .map((task) => [task.id, task]));
+    const seen = new Set<string>();
+    const agents: BackgroundTaskView[] = [];
+    const cards = this.model.subagentCards().slice().reverse();
+    for (const { block, card } of cards) {
+      const id = card.subagentId ?? block.callId;
+      if (id === '' || seen.has(id)) continue;
+      seen.add(id);
+      const task = trackedAgents.get(id);
+      let status: BackgroundTaskView['status'] = task?.status ?? 'running';
+      if (task === undefined) {
+        if (card.outcome === 'completed') status = 'completed';
+        else if (card.outcome === 'failed') status = 'failed';
+        else if (card.outcome === 'cancelled') status = 'cancelled';
+      }
+      const endedAtMs = task?.endedAtMs
+        ?? (card.durationMs === undefined ? undefined : card.startedAtMs + card.durationMs);
+      agents.push({
+        id,
+        kind: 'subagent',
+        title: task?.title ?? subagentIdentityText(card.spec, id),
+        ...(card.spec.brief === '' ? task?.detail === undefined ? {} : { detail: task.detail } : { detail: card.spec.brief }),
+        status,
+        startedAtMs: task?.startedAtMs ?? card.startedAtMs,
+        ...(endedAtMs === undefined ? {} : { endedAtMs }),
+        ...(task?.subagentSessionId === undefined ? {} : { subagentSessionId: task.subagentSessionId }),
+        ...(card.summary === undefined ? task?.summary === undefined ? {} : { summary: task.summary } : { summary: card.summary }),
+      });
+    }
+    for (const task of tracked) {
+      if (task.kind === 'subagent' && !seen.has(task.id)) agents.push(task);
+    }
+    return [...agents, ...tracked.filter((task) => task.kind === 'bash')];
   }
 
   /**
@@ -5139,10 +5222,10 @@ exportHistory(): string[] {
       this.watchedSubagentId = task.id;
       let child = this.subagentTranscripts.get(task.id);
       if (child === undefined) {
-        child = { model: new TranscriptModel(), toolIds: [], revision: 0, loadGeneration: 0 };
+        child = { model: new TranscriptModel(), toolIds: [], revision: 0, loadGeneration: 0, loadInFlight: false, loadAgain: false };
         this.subagentTranscripts.set(task.id, child);
       }
-      if (task.status !== 'running') void this.loadSubagentTranscript(task, child);
+      void this.loadSubagentTranscript(task, child);
       if (child.model.blocks.length === 0) {
         child.model.addNotice(`Subagent · ${task.title}`);
         child.revision += 1;
@@ -5156,7 +5239,7 @@ exportHistory(): string[] {
   private stopSelectedSubagent(): void {
     const id = this.watchedSubagentId ?? this.selectedTaskId;
     if (id === null || this.options.onSubagentStop === undefined) return;
-    const task = this.backgroundTasks.tasks().find((entry) => entry.id === id && entry.kind === 'subagent');
+    const task = this.sidebarAgentTasks().find((entry) => entry.id === id && entry.kind === 'subagent');
     if (task === undefined || task.status !== 'running') return;
     void this.options.onSubagentStop(task).then((stopped) => {
       if (!stopped) this.printNotice(`Subagent ${task.title} is no longer running.`);

@@ -44,10 +44,10 @@ import {
 import type { PermissionBadge } from './permission-mode.js';
 import type { StatuslineProfile } from './preferences.js';
 import { encodeHyperlinkTag } from './core/span.js';
-import { prTone, type PrBadge } from './pr-badge.js';
+import { prFooterLabel, prTone, type PrBadge } from './pr-badge.js';
 import { taggedWith } from './theme.js';
 import type { Styles } from './transcript-view.js';
-import { visibleWidth } from './width.js';
+import { codePointWidth, truncateToWidth, visibleWidth } from './width.js';
 
 /** Counters shown on the footer's second row. */
 export interface FooterStats {
@@ -186,6 +186,14 @@ export function formatCwdForFooter(cwd: string, home: string | undefined): strin
   return relativeToHome === '' ? '~' : `~${sep}${relativeToHome}`;
 }
 
+/** Keep the path recognizable while reserving room for branch and PR state. */
+export function fitFooterLocation(path: string, suffix: string, width: number): string {
+  const available = Math.max(0, Math.floor(width));
+  if (visibleWidth(path + suffix) <= available) return path + suffix;
+  if (visibleWidth(suffix) >= available) return truncateToWidth(suffix, available);
+  return middleClip(path, available - visibleWidth(suffix)) + suffix;
+}
+
 /**
  * The current git branch of `directory`, read from `.git/HEAD`.
  *
@@ -274,17 +282,34 @@ export function buildFooterLines(input: FooterInput): string[] {
   const showModel = profile !== 'location' || profile === 'location';
   const location = showLocation ? formatCwdForFooter(input.cwd, input.home) : '';
   const branch = showBranch ? input.branch ?? null : null;
-  const withBranch = branch === null || branch === '' ? location : `${location} (${branch})`;
+  const branchText = branch === null || branch === '' ? '' : ` (${branch})`;
   // The pull request belongs to "where": it says what the work in this
   // session is FOR. The narrow profiles leave it out — they are the ones the
   // reader chose to have less on screen.
   const showPullRequest = profile === 'full' || profile === 'location';
   const badge = showPullRequest ? input.pullRequest ?? null : null;
   const sessionName = !showSession || input.sessionName === undefined || input.sessionName === null ? '' : input.sessionName;
-  // The badge sits BETWEEN the path and the session name: the path is where
-  // the work happens and the name is a label, so a narrow terminal — which
-  // clips from the right — loses the name first and keeps the badge.
-  const row1Plain = `${withBranch}${badge === null ? '' : ` • ${badge.label}`}${sessionName === '' ? '' : ` • ${sessionName}`}`;
+  // The badge sits between the path and the session name. Long paths give up
+  // their middle first so the branch and PR state stay visible; the session
+  // name is dropped before either when the terminal is too narrow.
+  const badgeLabel = badge === null ? '' : prFooterLabel(badge);
+  let visibleBadgeLabel = badgeLabel;
+  let badgeSuffix = badge === null ? '' : ` · ${visibleBadgeLabel}`;
+  if (visibleWidth(badgeSuffix) > width) {
+    visibleBadgeLabel = width <= 3 ? '' : truncateToWidth(badgeLabel, width - 3);
+    badgeSuffix = visibleBadgeLabel === '' ? '' : ` · ${visibleBadgeLabel}`;
+  }
+  const sessionSuffix = sessionName === '' ? '' : ` · ${sessionName}`;
+  let visibleBranch = branchText;
+  let visibleSession = sessionSuffix;
+  if (visibleWidth(visibleBranch + badgeSuffix + visibleSession) > width) visibleSession = '';
+  if (visibleWidth(visibleBranch + badgeSuffix) > width && badgeSuffix !== '') {
+    visibleBranch = truncateToWidth(visibleBranch, Math.max(0, width - visibleWidth(badgeSuffix)));
+  }
+  const visibleSuffix = visibleBranch + badgeSuffix + visibleSession;
+  const visibleLocation = fitFooterLocation(location, visibleSuffix, width);
+  const visiblePath = visibleLocation.slice(0, visibleLocation.length - visibleSuffix.length);
+  const row1Plain = visibleLocation;
   const stats = input.stats;
   const counters: string[] = [];
   if (showUsage && stats.inputTokens > 0) counters.push(`↑${formatTokenCount(stats.inputTokens)}`);
@@ -332,26 +357,26 @@ export function buildFooterLines(input: FooterInput): string[] {
   const thinking = model?.thinking === undefined || model.thinking === '' ? '' : ` • ${model.thinking}`;
   const modelPlain = model === null ? '' : `${provider}${model.model}${thinking}`;
 
-  // The badge's state is a COLOUR, not a glyph: the footer is a fixed-width
-  // row and a symbol's cell width is ambiguous in CJK terminals.
-  const paintPrBadge = (target: PrBadge): string => {
+  // The badge's state is explicit text with a reinforcing colour, not a glyph:
+  // the footer is fixed-width and a symbol's cell width is ambiguous in CJK terminals.
+  const paintPrBadge = (target: PrBadge, label: string): string => {
     const tone = prTone(target.state);
-    const painted = tone === 'success' ? styles.success(target.label)
-      : tone === 'error' ? styles.error(target.label)
-      : tone === 'warning' ? styles.warning(target.label)
-      : tone === 'muted' ? styles.muted(target.label)
-      : styles.accent(target.label);
+    const painted = tone === 'success' ? styles.success(label)
+      : tone === 'error' ? styles.error(label)
+      : tone === 'warning' ? styles.warning(label)
+      : tone === 'muted' ? styles.muted(label)
+      : styles.accent(label);
     if (input.hyperlinks !== true || target.url === null) return painted;
     const tag = encodeHyperlinkTag(target.url);
     return tag === null ? painted : `{${tag}}${painted}{/${tag}}`;
   };
   // Without a badge the row is one muted run, exactly as it was before the
   // badge existed; with one, only the badge carries its own colour.
-  const row1Tagged = badge === null
-    ? styles.muted(`${withBranch}${sessionName === '' ? '' : ` • ${sessionName}`}`)
-    : styles.muted(`${withBranch} • `)
-      + paintPrBadge(badge)
-      + (sessionName === '' ? '' : styles.muted(` • ${sessionName}`));
+  const row1Tagged = badge === null || badgeSuffix === ''
+    ? styles.muted(visibleLocation)
+    : styles.muted(`${visiblePath}${visibleBranch} · `)
+      + paintPrBadge(badge, visibleBadgeLabel)
+      + (visibleSession === '' ? '' : styles.muted(visibleSession));
   const row1 = composeRow(row1Plain, [
     { plain: profile === 'full' || profile === 'compact' ? input.hint ?? '' : '', tagged: (text) => styles.muted(text) },
   ], width, styles, row1Tagged);
@@ -600,4 +625,35 @@ function clipPlain(text: string, maxWidth: number): string {
     width += next;
   }
   return out;
+}
+
+/** Keep both ends of a long path and the suffix callers reserved beside it. */
+function middleClip(text: string, maxWidth: number): string {
+  if (maxWidth <= 0) return '';
+  if (visibleWidth(text) <= maxWidth) return text;
+  if (maxWidth === 1) return '…';
+  const budget = maxWidth - 1;
+  let left = '';
+  let leftWidth = 0;
+  const points = Array.from(text);
+  let leftIndex = 0;
+  const leftBudget = Math.ceil(budget / 2);
+  while (leftIndex < points.length) {
+    const point = points[leftIndex]!;
+    const pointWidth = codePointWidth(point);
+    if (leftWidth + pointWidth > leftBudget) break;
+    left += point;
+    leftWidth += pointWidth;
+    leftIndex += 1;
+  }
+  let right = '';
+  let rightWidth = 0;
+  for (let index = points.length - 1; index >= leftIndex; index -= 1) {
+    const point = points[index]!;
+    const pointWidth = codePointWidth(point);
+    if (leftWidth + rightWidth + pointWidth > budget) break;
+    right = point + right;
+    rightWidth += pointWidth;
+  }
+  return `${left}…${right}`;
 }

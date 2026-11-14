@@ -3,8 +3,6 @@ import { truncateToWidth } from '../width.js';
 import { escapeTags, type Styles } from '../transcript-view.js';
 import { DISPLAY_PROFILES, type DisplayProfileId } from '../display-profiles.js';
 import { formatTaskDuration, taskStatusGlyph, type BackgroundTaskView } from '../background-tasks.js';
-import { prStateLabel, prTone, type PrBadge } from '../pr-badge.js';
-import type { WorkbenchWorkspaceSummary } from '../workbench-workspace.js';
 import { capacityBar } from '../capacity-bar.js';
 
 export interface WorkbenchSidebarContextPart {
@@ -37,9 +35,8 @@ export interface WorkbenchSidebarProps {
   readonly activityActive: boolean;
   readonly tasks: readonly BackgroundTaskView[];
   readonly selectedAgentId: string | null;
-  readonly workspace: WorkbenchWorkspaceSummary;
-  readonly pullRequest: PrBadge | null;
   readonly contextTokens: number | null;
+  readonly contextEstimated: boolean;
   readonly contextBudget: number | null;
   readonly contextParts: readonly WorkbenchSidebarContextPart[];
   readonly statusItems: readonly WorkbenchSidebarStatusItem[];
@@ -99,28 +96,7 @@ export class WorkbenchSidebar implements UIComponent<WorkbenchSidebarProps> {
       lines.push({ text: tone(clipped), agent: task });
     };
     const number = (value: number | null): string => value === null ? '—' : value.toLocaleString('en-US');
-    const workspace = this.props.workspace;
     text(this.props.sessionTitle);
-    text('');
-    text('WORKTREE');
-    text(`${workspace.branch ?? 'detached'} · ${workspace.linkedWorktree ? 'linked worktree' : 'repository'}`);
-    text(workspace.root);
-    if (!workspace.observed) {
-      text('Git status unavailable');
-    } else if (workspace.changedFiles === 0) {
-      text('Working tree clean');
-    } else {
-      action(`${number(workspace.changedFiles)} changed files`, '/diff');
-      for (const change of workspace.changes) text(`${change.status} ${change.path}`);
-      const remaining = (workspace.changedFiles ?? 0) - workspace.changes.length;
-      if (remaining > 0) text(`+ ${remaining} more · /diff`);
-    }
-    if (this.props.pullRequest !== null) {
-      const badge = this.props.pullRequest;
-      const label = `${badge.label} · ${prStateLabel(badge.state)}`;
-      const clipped = escapeTags(truncateToWidth(`› ${label}`, width));
-      lines.push({ text: styles[prTone(badge.state)](clipped), command: '/pr' });
-    }
     text('');
     text('AGENTS');
     agentAction(
@@ -153,7 +129,7 @@ export class WorkbenchSidebar implements UIComponent<WorkbenchSidebarProps> {
       ? Math.min(100, Math.round((used / budget) * 100))
       : null;
     const ratio = used !== null && budget !== null && budget > 0 ? used / budget : null;
-    text(`Context  ${number(used)} / ${number(budget)}${percent === null ? '' : ` · ${percent}%`}`);
+    text(`Context  ${this.props.contextEstimated && used !== null ? '≈ ' : ''}${number(used)} / ${number(budget)}${percent === null ? '' : ` · ${percent}%`}`);
     lines.push({ text: styles.accent(escapeTags(capacityBar(ratio, 12))) });
     for (const part of this.props.contextParts.slice(0, 3)) {
       text(`≈ ${part.label}  ${number(part.tokens)}`);

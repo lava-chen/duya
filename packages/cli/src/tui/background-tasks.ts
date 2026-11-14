@@ -18,6 +18,7 @@ import type {
   BackgroundTaskStatusV1,
   BackgroundTaskSummaryV1,
 } from '@duya/agent-protocol';
+import type { Message as TranscriptMessage, MessageContent } from '@duya/agent-protocol/transcript';
 import { frameRecord, frameString, type LegacyFrame } from './blocks.js';
 import { formatTaskDuration } from './subagent.js';
 
@@ -160,6 +161,60 @@ export function backgroundTaskDetailLines(
   lines.push('');
   lines.push(output.text === '' ? '  (no output yet)' : output.text);
   return lines;
+}
+
+/** Project the append-only child activity log into the regular transcript view. */
+export function backgroundTaskTranscriptMessages(output: BackgroundTaskOutputV1 | null): TranscriptMessage[] {
+  if (output === null || output.text.trim() === '') {
+    return [{ role: 'assistant', source: 'subagent', content: 'Waiting for the subagent to send its first event.' }];
+  }
+  const content: MessageContent[] = [];
+  const toolIds: string[] = [];
+  let nextToolId = 0;
+  const appendText = (text: string): void => {
+    if (text === '') return;
+    const last = content[content.length - 1];
+    if (last?.type === 'text') last.text += text;
+    else content.push({ type: 'text', text });
+  };
+  if (output.truncated) appendText('Earlier activity omitted; showing the latest events.\n');
+  for (const source of output.text.split(/\r?\n/u)) {
+    if (source.trim() === '') continue;
+    let record: unknown;
+    try { record = JSON.parse(source) as unknown; } catch { appendText(`${source}\n`); continue; }
+    if (record === null || typeof record !== 'object' || Array.isArray(record)) continue;
+    const envelope = record as Record<string, unknown>;
+    const payload = envelope['payload'] !== null && typeof envelope['payload'] === 'object' && !Array.isArray(envelope['payload'])
+      ? envelope['payload'] as Record<string, unknown>
+      : envelope;
+    const kind = typeof payload['type'] === 'string' ? payload['type']
+      : typeof envelope['type'] === 'string' ? envelope['type'] : '';
+    const data = typeof payload['data'] === 'string' ? payload['data'] : '';
+    if (kind === 'text') appendText(data);
+    else if (kind === 'thinking') {
+      if (data !== '') content.push({ type: 'thinking', thinking: data });
+    } else if (kind === 'tool_use') {
+      const id = `subagent:${output.taskId}:${nextToolId++}`;
+      const rawInput = payload['toolInput'];
+      const input = rawInput !== null && typeof rawInput === 'object' && !Array.isArray(rawInput)
+        ? rawInput as Record<string, unknown>
+        : {};
+      toolIds.push(id);
+      content.push({
+        type: 'tool_use',
+        id,
+        name: typeof payload['toolName'] === 'string' && payload['toolName'] !== '' ? payload['toolName'] : 'tool',
+        input,
+      });
+    } else if (kind === 'tool_result') {
+      const result = typeof payload['toolResult'] === 'string' ? payload['toolResult'] : data;
+      const id = toolIds.pop();
+      if (id === undefined) appendText(`\n${typeof payload['toolName'] === 'string' ? payload['toolName'] : 'tool'} result:\n${result}\n`);
+      else content.push({ type: 'tool_result', tool_use_id: id, content: result, is_error: result.includes('<tool_use_error>') });
+    } else if (kind === 'error') appendText(`\nError: ${data || 'subagent reported an error'}\n`);
+  }
+  if (content.length === 0) appendText('Waiting for the subagent to send its first event.');
+  return [{ role: 'assistant', source: 'subagent', content }];
 }
 
 /** Render the Host's append-only progress log as readable child-agent activity. */

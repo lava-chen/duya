@@ -29,6 +29,9 @@
 - [x] 按反馈移除侧栏的 `New session` 与 `All sessions` 快捷项。
 - [x] 去掉全屏对话区底部多预留的两行，让最新消息紧邻输入框。
 - [x] 执行静态检查、构建 CLI bundle，并记录临时 dev 命令。
+- [x] 补充用户反馈：代理列表合并 transcript 卡片与后台任务；选中后从后台活动日志回退生成消息流，并在运行时刷新且保留跟随/暂停状态。
+- [x] 补充用户反馈：Context 没有 provider 总量时显示可见消息估算值并标记 `≈`。
+- [x] 补充用户反馈：底部用项目路径 A + 执行 worktree 分支名 + PR 状态；侧栏移除 WORKTREE/PR 区块。
 
 ## 发现与决策
 
@@ -59,4 +62,18 @@
 实现、验证与构建产物均留在此分支/worktree；不安装全局 CLI、不直接合并 master。此前 commit `b05e90b1134068232342555eb4d05b39d525eb3f`；draft PR [#637](https://github.com/lava-chen/duya/pull/637)，待 review/CI。临时运行命令：`cd /home/lavachen/.codex/worktrees/tui-agents-context-plugin/duya && npm run dev:tui`。CLI 交互终端未在本轮启动；用户可用此命令做实机验收。
 
 回收：保留 managed worktree，供用户终端验收与后续反馈；PR 未合并。
-下一步：等待 PR #637 对本次 sidebar 简化的 CI；用户可运行 `dev:tui` 验收。Host context composition 协议与 marketplace plugin loader 是后续独立切片。
+后续工作：Host context composition 协议与 marketplace plugin loader 是独立切片；本次交付继续留在 PR #637，等待 review/CI 与用户 TUI 验收。
+
+## 后续反馈切片（2026-11-15）
+
+- 子代理侧栏行同时从主 transcript 的 task 卡片和 Host 后台任务快照构造，避免只有后台运行时才出现。
+- 点击子代理会始终尝试载入；后台任务日志会转成同一 TranscriptModel 可渲染的消息块（思考、工具调用和工具结果），作为缺少/空子代理 session 历史时的回退。后台运行中每秒刷新已选子代理，不改动用户主动暂停的滚动跟随状态。
+- 精确 provider Context total 未出现时，侧栏显示 transcript 分类估算合计并标 `≈`；不改底部账单 token 与 `/context` 的 provider anchored 语义。
+- 底部路径继续使用项目目录；括号内分支取执行 worktree；PR 状态紧接其后。路径在终端窄时保留两端，侧栏不再展示 worktree 和 PR 详情。
+- 验证与交付：静态门禁、CLI bundle 构建和 CLI help smoke check 均完成；真实 TUI 中的子代理交互仍需用户运行当前检出验证。改动将推送到 draft PR #637，不合并。
+
+| SHA / dirty 范围 | 环境 | 命令 | 退出码 / 结果 | 证据 |
+| --- | --- | --- | --- | --- |
+| `b41e012a1e3eb73be231e0890eb40a2bcb138226` → 本轮 6 个源文件与计划记录 dirty | Linux x64 / Node 26.13.0 / npm 11.20.0 | `npm run typecheck:all`; `npm run architecture:check`; `npm run build:cli-dev`; `npm run dev:tui -- --help`; `git diff --check` | 全部 exit 0；CLI bundle 4.83 MB；无新增类型或架构问题 | 架构门禁 3,209 项既有 baseline；typecheck 脚本内嵌的 4 个 agent-core 检查通过；构建生成的 Host worker tracked bundle 已恢复 |
+
+- 实机边界：没有在本轮启动真实 TUI provider 会话或运行中的子代理，因此无法从这里证明终端交互里的流式内容；`--help` 只确认构建产物可启动并解析命令。

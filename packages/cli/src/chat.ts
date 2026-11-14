@@ -51,7 +51,11 @@ import { watchRunEventsWithResume } from './tui/run-event-resume.js';
 import { RemoteSessionWatch } from './tui/remote-session-watch.js';
 import { createRunSessionView, projectRunSessionView } from './tui/run-session-view.js';
 import { BackgroundTaskPoller } from './tui/background-task-poller.js';
-import { backgroundTaskDetailLines, type BackgroundTaskView } from './tui/background-tasks.js';
+import {
+  backgroundTaskDetailLines,
+  backgroundTaskTranscriptMessages,
+  type BackgroundTaskView,
+} from './tui/background-tasks.js';
 import { RunSession } from '@duya/client-core';
 import { TurnQueue, type PendingDraft, type TurnOutcome } from './tui/turn-queue.js';
 import { createFileCompletionSource } from './tui/candidates.js';
@@ -1372,9 +1376,19 @@ export async function chatTui(
     // because the timer is deliberately quiet while nothing is live.
     onBackgroundTasksRefresh: () => { void backgroundPoller.poll(); },
     onBackgroundTaskOpen: (task) => { void openBackgroundTask(task); },
-    onSubagentTranscriptLoad: async (task) => task.subagentSessionId === undefined
-      ? []
-      : loadSessionMessages(client, task.subagentSessionId),
+    onSubagentTranscriptLoad: async (task) => {
+      if (task.status !== 'running' && task.subagentSessionId !== undefined) {
+        const messages = await loadSessionMessages(client, task.subagentSessionId);
+        if (messages.length > 0) return messages;
+      }
+      const output = await client.readBackgroundTaskOutput(activeSession.id, task.id);
+      if (output !== null && output.text.trim() !== '') return backgroundTaskTranscriptMessages(output);
+      if (task.subagentSessionId !== undefined) {
+        const messages = await loadSessionMessages(client, task.subagentSessionId);
+        if (messages.length > 0) return messages;
+      }
+      return backgroundTaskTranscriptMessages(output);
+    },
     onSubagentStop: (task) => client.stopSubagentTask(activeSession.id, task.id),
   });
 
