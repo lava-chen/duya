@@ -2305,15 +2305,14 @@ export class TUIApp {
    */
   private visibleTranscriptRows(): number {
     const screenRows = asNumber((this.output as { rows?: unknown }).rows, 24);
-    // input box (rows + its two border rows), status bar, the popup while it is
-    // open, and the transcript's own top and bottom border.
+    // input box (rows + its two border rows), status bar, and the popup while
+    // open. The transcript has no border, so it uses every remaining row.
     return Math.max(
       1,
       screenRows -
         this.inputRows -
         this.inputChromeRows() -
         STATUS_ROWS -
-        2 -
         this.popupRows(),
     );
   }
