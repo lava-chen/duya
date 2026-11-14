@@ -26,6 +26,7 @@
 - [x] 实现 AGENTS 点击切换及侧栏布局。
 - [x] 实现 Context 进度和 transcript 分类估算；精确 Host composition 协议留后续。
 - [x] 实现 TUI 受限状态注入点并写明 Pi 对照/安全边界；Host marketplace 接入留后续。
+- [x] 按反馈移除侧栏的 `New session` 与 `All sessions` 快捷项。
 - [x] 执行静态检查、构建 CLI bundle，并记录临时 dev 命令。
 
 ## 发现与决策
@@ -46,6 +47,7 @@
 | SHA / dirty 范围 | 环境 | 命令或操作 | 退出码 / 结果 | 证据 |
 | --- | --- | --- | --- | --- |
 | `53c9537baf45d98316d48d02409d3a8ed7dbb4f3` → `b05e90b1134068232342555eb4d05b39d525eb3f` | Linux x64 / Node 26.13.0 / npm 11.20.0 | `npm run build:cli-dev` | exit 0; CLI `bundle/cli.cjs` built, 4.82 MB | local worktree artifact |
+| `68677b1387e057b1990076ee492a75fc48908a3c` → sidebar change dirty | Linux x64 / Node 26.13.0 / npm 11.20.0 | `npm run build:cli-dev`; CLI `typecheck`; `architecture:check`; `git diff --check` | all exit 0; CLI bundle rebuilt, 4.82 MB; no new architecture findings | local worktree artifact |
 | same | Linux x64 / Node 26.13.0 | `npm run typecheck:all` | exit 0; no new type errors. Script's final `eval:agent:core:check` also ran its 4 Node checks; no dedicated suite run | baseline gate: 164 known Electron type errors |
 | same | Linux x64 / Node 26.13.0 | `npm run architecture:check`; `git diff --check` | both exit 0; no new architecture findings | 3,208 existing baseline violations tolerated |
 | same | Linux x64 / Node 26.13.0 | First `npm ci` / retry `PUPPETEER_SKIP_DOWNLOAD=1 npm ci` | first exit 1 because stale cached Puppeteer Chrome folder lacked executable; retry exit 0 | independent node_modules in this worktree |
@@ -55,4 +57,4 @@
 实现、验证与构建产物均留在此分支/worktree；不安装全局 CLI、不直接合并 master。commit `b05e90b1134068232342555eb4d05b39d525eb3f`；draft PR [#637](https://github.com/lava-chen/duya/pull/637)，待 review/CI。临时运行命令：`cd /home/lavachen/.codex/worktrees/tui-agents-context-plugin/duya && npm run dev:tui`。CLI 交互终端未在本轮启动；用户可用此命令做实机验收。
 
 回收：保留 managed worktree，供用户终端验收与后续反馈；PR 未合并。
-下一步：用户运行 `dev:tui` 验收侧栏；再按 review/CI 结果更新 PR。Host context composition 协议与 marketplace plugin loader 是后续独立切片。
+下一步：等待 PR #637 对本次 sidebar 简化的 CI；用户可运行 `dev:tui` 验收。Host context composition 协议与 marketplace plugin loader 是后续独立切片。

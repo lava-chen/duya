@@ -101,8 +101,6 @@ export class WorkbenchSidebar implements UIComponent<WorkbenchSidebarProps> {
     const number = (value: number | null): string => value === null ? '—' : value.toLocaleString('en-US');
     const workspace = this.props.workspace;
     text(this.props.sessionTitle);
-    action('New session', '/new');
-    action('All sessions', '/sessions');
     text('');
     text('WORKTREE');
     text(`${workspace.branch ?? 'detached'} · ${workspace.linkedWorktree ? 'linked worktree' : 'repository'}`);
