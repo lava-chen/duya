@@ -134,3 +134,10 @@ export {
 } from './stream-commit.js';
 
 export { ACTION_DEFS, helpGroups, keysColumn, type ActionDef } from './actions.js';
+
+export {
+  WorkbenchSidebar,
+  type WorkbenchSidebarContextPart,
+  type WorkbenchSidebarStatusItem,
+  type WorkbenchSidebarProps,
+} from './components/workbench-sidebar.js';
