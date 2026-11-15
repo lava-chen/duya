@@ -38,7 +38,7 @@ import { rewritePluginMentionTokens } from '@duya/input-completion';
 import { describeSpec, findSpec, type CommandLocale } from '@duya/command-catalog';
 import { HostSessionHttpClient } from '@duya/host/http-client';
 import { resolveDataRoot } from '@duya/data';
-import { TUIApp, shouldUseTui, type CompletionSources, type TuiChoice } from './tui/index.js';
+import { TUIApp, shouldUseTui, type CompletionSources, type SessionDashboardEntry, type TuiChoice } from './tui/index.js';
 import { describeTuiModelStatus } from './tui/model-status.js';
 import {
   appendShellContext,
@@ -544,11 +544,12 @@ export async function createChatSession(
   client: HostSessionHttpClient,
   options: ChatCommandOptions,
   workingDirectory = path.resolve(process.cwd()),
+  title = 'duya chat',
 ): Promise<HostSessionRecord> {
   const directory = path.resolve(workingDirectory);
   const workspace = await client.registerLocalDirectory(directory);
   return client.create({
-    title: 'duya chat',
+    title,
     projectName: path.basename(directory),
     workspaceId: workspace.workspaceId,
     workspaceRootId: workspace.rootId,
@@ -774,6 +775,8 @@ export async function chatTui(
     changes: [],
   };
   let workspaceStatusTimer: ReturnType<typeof setInterval> | null = null;
+  let sessionDashboardTimer: ReturnType<typeof setInterval> | null = null;
+  let dashboardRefreshInFlight = false;
   let prSyncedSessionId: string | null = null;
   let cancellationRequested = false;
   /**
@@ -1372,6 +1375,8 @@ export async function chatTui(
     // because the timer is deliberately quiet while nothing is live.
     onBackgroundTasksRefresh: () => { void backgroundPoller.poll(); },
     onBackgroundTaskOpen: (task) => { void openBackgroundTask(task); },
+    onSessionDashboardOpen: (id) => openDashboardSession(id),
+    onSessionDashboardSubmit: (prompt) => startBackgroundSession(prompt),
     onSubagentTranscriptLoad: async (task) => task.subagentSessionId === undefined
       ? []
       : loadSessionMessages(client, task.subagentSessionId),
@@ -1524,6 +1529,7 @@ export async function chatTui(
     if (finished) return;
     finished = true;
     if (remoteWatchTimer !== null) clearInterval(remoteWatchTimer);
+    if (sessionDashboardTimer !== null) clearInterval(sessionDashboardTimer);
     if (workspaceStatusTimer !== null) clearInterval(workspaceStatusTimer);
     backgroundPoller.stop();
     remoteWatch.stop();
@@ -1589,6 +1595,95 @@ export async function chatTui(
     tui.replaceTranscript(await loadSessionMessages(client, selectedId));
     tui.refreshTerminalTitle();
     tui.printNotice(`Resumed "${selected.title || 'Untitled session'}".`);
+  }
+
+  async function refreshSessionDashboard(): Promise<void> {
+    if (dashboardRefreshInFlight || finished) return;
+    dashboardRefreshInFlight = true;
+    try {
+      const sessions = await listWorkspaceSessions(client, activeSession);
+      const permissions = await client.listPendingPermissionRequests();
+      const entries: SessionDashboardEntry[] = await Promise.all(sessions.map(async ({ session }) => {
+        const [latest] = await client.listAgentRunsBySession(session.id, 1);
+        const needsInput = permissions.some((request) => request.sessionId === session.id && request.status === 'pending');
+        return {
+          id: session.id,
+          title: session.title || `Session ${session.id.slice(0, 8)}`,
+          status: needsInput ? 'needs_input' : latest?.status === 'running' ? 'working' : 'completed',
+          ...(needsInput ? { detail: 'waiting for approval' }
+            : latest?.status === 'running' ? { detail: session.model } : {}),
+        };
+      }));
+      tui.setSessionDashboardEntries(entries);
+    } catch (error) {
+      if (!finished) tui.printError('Could not refresh sessions: ' + errorText(error));
+    } finally {
+      dashboardRefreshInFlight = false;
+    }
+  }
+
+  async function startBackgroundSession(prompt: string): Promise<void> {
+    const text = prompt.trim();
+    if (text === '') return;
+    try {
+      const title = text.replace(/\s+/gu, ' ').slice(0, 72) || 'duya background session';
+      const session = await createChatSession(client, options, executionCwd(), title);
+      owned?.own(session.id);
+      const started = await client.startAgentRun({
+        sessionId: session.id,
+        prompt: text,
+        ...(options.model !== undefined ? { model: options.model } : {}),
+        ...(options.providerId !== undefined ? { providerId: options.providerId } : {}),
+        ...(options.apiFormat !== undefined ? { apiFormat: options.apiFormat } : {}),
+        ...(effort !== null ? { effort } : {}),
+        workingDirectory: executionCwd(),
+      });
+      if (!started.accepted) {
+        tui.printError(`Could not start background session: ${started.stage} · ${started.reason ?? 'Host refused the run'}`);
+        return;
+      }
+      owned?.markUsed(session.id);
+      tui.printNotice(`Started background session “${session.title || session.id.slice(0, 8)}”.`);
+      void refreshSessionDashboard();
+    } catch (error) {
+      tui.printError('Could not start background session: ' + errorText(error));
+    }
+  }
+
+  async function openDashboardSession(sessionId: string): Promise<void> {
+    if (sessionId === activeSession.id) {
+      tui.printNotice('This is the session currently open.');
+      return;
+    }
+    if (refuseSessionSwitch('opening another session')) return;
+    sessionTransition = true;
+    try {
+      await resumeSession(sessionId);
+      tui.closeSessionsDashboard();
+      const pending = await client.listPendingPermissionRequests(sessionId);
+      for (const request of pending) {
+        if (request.mode === 'ask_user_question') {
+          tui.printNotice(`This run's question must be answered in the client that started it (${request.toolName}).`);
+          continue;
+        }
+        const decision = await tui.chooseFiltered(
+          `Approval needed · ${request.toolName}`,
+          [
+            { label: 'Allow once', value: 'once', description: request.reason ?? '' },
+            { label: 'Allow for this session', value: 'always' },
+            { label: 'Deny', value: 'deny' },
+          ],
+          { footer: '↑↓ choose · Enter confirm · Esc leave pending' },
+        );
+        if (decision === null) break;
+        await client.resolvePermissionRequest(request.id, {
+          status: decision === 'deny' ? 'deny' : 'allow',
+          decision: decision === 'always' ? 'allow_for_session' : decision === 'once' ? 'allow_once' : 'deny',
+        });
+      }
+    } finally {
+      sessionTransition = false;
+    }
   }
 
   /** Refuse a session boundary while a turn owns the session. */
@@ -1959,7 +2054,10 @@ export async function chatTui(
           sessionTransition = true;
           try {
             if (name === 'new') await startNewSession(preserveDraft);
-            else await resumeSession(args);
+            else if (name === 'sessions') {
+              await refreshSessionDashboard();
+              tui.openSessionsDashboard();
+            } else await resumeSession(args);
           } finally {
             sessionTransition = false;
           }
@@ -2121,6 +2219,10 @@ export async function chatTui(
   remoteWatchTimer = setInterval(() => {
     void remoteWatch.poll();
   }, REMOTE_WATCH_INTERVAL_MS);
+  sessionDashboardTimer = setInterval(() => {
+    if (tui.isSessionsDashboardOpen()) void refreshSessionDashboard();
+  }, 2_000);
+  sessionDashboardTimer.unref?.();
   await finishedPromise;
   return 0;
 }
