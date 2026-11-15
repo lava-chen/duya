@@ -20,9 +20,16 @@ export interface CheckoutWriteDenial {
 }
 
 function denied(root: string, reason: CheckoutWriteDenial['reason']): CheckoutWriteDenial {
+  const message = reason === 'not_owner'
+    ? `Checkout access denied (${reason}) at ${root}. This session does not own this managed checkout. Bash and PowerShell are blocked here even for read-only commands because shell input can write. Do not retry shell; use Read, Grep, or Glob to inspect files. To run shell commands or make changes, resume the owning session or create a checkout for this session with enter_worktree. Permission approval does not transfer checkout ownership.`
+    : reason === 'unowned'
+      ? `Checkout access denied (${reason}) at ${root}. This managed checkout has no verifiable owner binding, so shell commands and writes are blocked. Use Read, Grep, or Glob for inspection, or create a checkout for this session with enter_worktree. Do not try to claim it through permission approval.`
+      : reason === 'outside_checkout'
+        ? `Checkout write denied (${reason}) at ${root}. The target is outside this session's owned checkout. Write under the owned checkout or switch to a workspace where this session has write access.`
+        : `Checkout access denied (${reason}) at ${root}. The checkout ownership could not be verified, so shell commands and writes are blocked. Use Read, Grep, or Glob for inspection, or resume the owning session. Do not bypass the owner check with permission approval.`;
   return {
     code: 'checkout_write_denied', reason, root,
-    message: `Checkout write denied (${reason}) at ${root}. Resume the owning session or explicitly bind this checkout before writing. Permission approval does not transfer checkout ownership.`,
+    message,
   };
 }
 
