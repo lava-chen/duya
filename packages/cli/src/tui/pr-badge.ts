@@ -18,13 +18,13 @@
  * plan 621), so the projection is a list. The badge shows ONE of them — the
  * one the user is most likely looking at — and the panel shows the rest.
  *
- * ## Colour carries the state; the label stays plain
+ * ## The label and colour share the state
  *
- * The footer is a fixed-width row that must never wrap, so the badge reads
- * `PR #123` and the state is a colour. A symbol would be more explicit and
- * would also cost a column whose width is ambiguous in CJK terminals — the
- * footer has already been bitten by a glyph the width table called one cell
- * and Windows Terminal drew as two (see `footer.ts`).
+ * The footer is a fixed-width row that must never wrap. Keep the explicit
+ * state wording short and let its color reinforce the label. A symbol would
+ * cost a column whose width is ambiguous in CJK terminals — the footer has
+ * already been bitten by a glyph the width table called one cell and Windows
+ * Terminal drew as two (see `footer.ts`).
  */
 
 import type { HostIntegrationRecord, HostIntegrationState } from '@duya/agent-protocol';
@@ -41,6 +41,18 @@ export interface PrBadge {
   readonly observedAt: number;
   /** `PR #123` — the text the footer paints. */
   readonly label: string;
+}
+
+/** Compact state shown beside the session's path in the composer footer. */
+export function prFooterLabel(badge: PrBadge): string {
+  const state = badge.state === 'checks_failing' ? 'checks failed'
+    : badge.state === 'checks_passing' ? 'checks passed'
+    : badge.state === 'review_requested' ? 'review requested'
+    : badge.state === 'changes_requested' ? 'changes requested'
+    : badge.state === 'closed_unmerged' ? 'closed'
+    : badge.state === 'unknown' ? 'unknown'
+    : badge.state;
+  return `${badge.label} · ${state}`;
 }
 
 /**

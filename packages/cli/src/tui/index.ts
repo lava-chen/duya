@@ -6,7 +6,13 @@
  * Construct `TUIApp` only after `shouldUseTui()` confirms both streams are TTYs.
  */
 
-export { TUIApp, type TUIAppOptions, type TuiChoice } from './TUIApp.js';
+export {
+  TUIApp,
+  type TUIAppOptions,
+  type TuiChoice,
+  type TuiSessionCenterItem,
+  type TuiSessionCenterSelection,
+} from './TUIApp.js';
 export {
   runProviderLogin,
   type ProviderLoginAction,
@@ -134,3 +140,10 @@ export {
 } from './stream-commit.js';
 
 export { ACTION_DEFS, helpGroups, keysColumn, type ActionDef } from './actions.js';
+
+export {
+  WorkbenchSidebar,
+  type WorkbenchSidebarContextPart,
+  type WorkbenchSidebarStatusItem,
+  type WorkbenchSidebarProps,
+} from './components/workbench-sidebar.js';

@@ -48,6 +48,7 @@ import { frameRecord, frameString, TranscriptModel, readBlockKey, type LegacyFra
 import { ActivityTracker } from './components/activity.js';
 import { TranscriptPane } from './components/transcript-pane.js';
 import { WorkbenchSidebar } from './components/workbench-sidebar.js';
+import type { WorkbenchSidebarContextPart, WorkbenchSidebarStatusItem } from './components/workbench-sidebar.js';
 import { HStack } from './core/containers.js';
 import type { StyledSpan } from './core/span.js';
 import { resolveDisplayProfile } from './display-profiles.js';
@@ -124,6 +125,7 @@ import {
   themeFor,
   type EffortLevel,
   type ThemeName,
+  type ThemeTags,
 } from './theme.js';
 import { compactActivity } from './text.js';
 import {
@@ -136,7 +138,9 @@ import {
   type TranscriptSelection,
 } from './transcript-selection.js';
 import { capacityBar } from './capacity-bar.js';
-import { formatTokensPerSecond, readGitBranch } from './footer.js';
+import { estimateContextTextTokens } from '@duya/ai/context';
+import { fitFooterLocation, formatTokensPerSecond, readGitBranch } from './footer.js';
+import { prFooterLabel } from './pr-badge.js';
 import type { PrBadge } from './pr-badge.js';
 import type { WorkbenchWorkspaceSummary } from './workbench-workspace.js';
 import type { StatuslineProfile } from './preferences.js';
@@ -279,6 +283,31 @@ export interface TuiChoice {
   readonly description?: string;
 }
 
+/** A session row projected into the full-screen Session Center. */
+export interface TuiSessionCenterItem {
+  readonly id: string;
+  readonly title: string;
+  readonly projectName: string;
+  readonly status: 'running' | 'completed' | 'failed' | 'cancelled' | 'budget_exhausted' | 'unknown';
+  readonly updatedAt: number;
+}
+
+export type TuiSessionCenterSelection =
+  | { readonly kind: 'new' }
+  | { readonly kind: 'resume'; readonly sessionId: string };
+
+const SESSION_CENTER_NEW_VALUE = '__duya_session_center_new__';
+
+interface SessionCenterState {
+  items: readonly TuiSessionCenterItem[];
+  loading: boolean;
+  errorMessage: string | null;
+  readonly currentSessionId: string;
+  filter: string;
+  selectedValue: string;
+  readonly resolve: (selection: TuiSessionCenterSelection | null) => void;
+}
+
 /**
  * One draft the user is still waiting on, as the queue preview paints it.
  *
@@ -402,6 +431,8 @@ export interface TUIAppOptions {
   readonly echoSubmitted?: boolean;
   /** Trusted sidebar controls enter the same slash dispatcher without consuming the draft. */
   readonly onWorkbenchCommand?: (command: string) => void | Promise<void>;
+  /** Open the session center when Left is pressed on an empty composer. */
+  readonly onOpenSessionCenter?: () => void | Promise<void>;
   readonly workbenchSessionId?: () => string;
   readonly sidebarWidth?: number;
   readonly onSidebarWidthChange?: (columns: number) => void | Promise<void>;
@@ -461,6 +492,11 @@ export interface TUIAppOptions {
    * total.
    */
   readonly contextBudgetTokens?: () => number | null;
+  /**
+   * Bounded, plain-text status items contributed by trusted TUI integrations.
+   * Marketplace plugin loading is intentionally not implied by this hook.
+   */
+  readonly workbenchSidebarStatusItems?: () => readonly WorkbenchSidebarStatusItem[];
   /** Override the theme (`'dark' | 'light'`); defaults to `resolveThemeName()`. */
   readonly theme?: ThemeName;
   /**
@@ -699,7 +735,9 @@ export class TUIApp {
   /** Rows the popup shows. Mutable: `/settings` resizes it while running. */
   private completionRows: number;
 
-  private readonly model = new TranscriptModel();
+  private model = new TranscriptModel();
+  private transcriptSessionId: string | null = null;
+  private readonly cachedSessionTranscripts = new Map<string, TranscriptModel>();
   private readonly editor = new InputEditor();
   private readonly overlay = new OverlayState();
   /** Permission events and Host polling can report the same pending ask. */
@@ -709,6 +747,8 @@ export class TUIApp {
   private interactivePromptResolver: ((value: string | null) => void) | null = null;
   /** The tabbed panel currently owning the dock, if any (630a). */
   private activeRichPanel: RichPanelController | null = null;
+  /** A full-screen session browser; run streams keep flowing while it is open. */
+  private sessionCenter: SessionCenterState | null = null;
   private readonly scheduler: RenderScheduler;
 
   /** Per stream: assistant text and thinking text get their own buffers. */
@@ -782,6 +822,8 @@ export class TUIApp {
     readonly toolIds: string[];
     revision: number;
     loadGeneration: number;
+    loadInFlight: boolean;
+    loadAgain: boolean;
   }>();
   /** Tail-following. Disengaged by scrolling up, restored by Ctrl+End. */
   private follow = true;
@@ -1189,6 +1231,7 @@ export class TUIApp {
     this.disposed = true;
     this.running = false;
     this.pointer.clear();
+    this.closeSessionCenter(null);
     this.settleInteractivePrompt(null);
     this.overlay.abortAll();
     this.windowMgr.close();
@@ -1289,8 +1332,14 @@ export class TUIApp {
    * the polled half. Subagents arrive through `push()` as run frames.
    */
   setBackgroundTasks(snapshot: BackgroundTaskListV1): void {
-    if (!this.backgroundTasks.applyBashSnapshot(snapshot)) return;
-    this.clampTaskSelection();
+    const changed = this.backgroundTasks.applyBashSnapshot(snapshot);
+    if (changed) this.clampTaskSelection();
+    const watchedId = this.watchedSubagentId;
+    if (watchedId !== null) {
+      const task = this.backgroundTasks.tasks().find((entry) => entry.id === watchedId && entry.kind === 'subagent');
+      const child = this.subagentTranscripts.get(watchedId);
+      if (task !== undefined && child !== undefined) void this.loadSubagentTranscript(task, child);
+    }
     this.scheduler.requestImmediate();
   }
 
@@ -1546,6 +1595,234 @@ export class TUIApp {
       ...(options.scrollable === undefined ? {} : { scrollable: options.scrollable }),
     });
     this.scheduler.requestImmediate();
+  }
+
+  /** Open the full-screen session browser. Resolves only after selection or Esc. */
+  openSessionCenter(
+    items: readonly TuiSessionCenterItem[],
+    currentSessionId: string,
+  ): Promise<TuiSessionCenterSelection | null> {
+    if (this.sessionCenter !== null || this.interactivePrompt !== null || this.overlay.isActive) {
+      return Promise.resolve(null);
+    }
+    this.completion.close();
+    let resolve: (selection: TuiSessionCenterSelection | null) => void = () => {};
+    const selection = new Promise<TuiSessionCenterSelection | null>((done) => {
+      resolve = done;
+    });
+    this.sessionCenter = {
+      items,
+      loading: items.length === 0,
+      errorMessage: null,
+      currentSessionId,
+      filter: '',
+      selectedValue: currentSessionId,
+      resolve,
+    };
+    this.keepSessionCenterSelectionValid();
+    this.scheduler.requestImmediate();
+    return selection;
+  }
+
+  /** Replace the live list while preserving its filter and selected session. */
+  updateSessionCenter(items: readonly TuiSessionCenterItem[], errorMessage: string | null = null): void {
+    if (this.sessionCenter === null) return;
+    this.sessionCenter.items = items;
+    this.sessionCenter.loading = false;
+    this.sessionCenter.errorMessage = errorMessage;
+    this.keepSessionCenterSelectionValid();
+    this.scheduler.requestImmediate();
+  }
+
+  isSessionCenterOpen(): boolean {
+    return this.sessionCenter !== null;
+  }
+
+  private closeSessionCenter(selection: TuiSessionCenterSelection | null): void {
+    const state = this.sessionCenter;
+    if (state === null) return;
+    this.sessionCenter = null;
+    state.resolve(selection);
+    this.scheduler.requestImmediate();
+  }
+
+  private sessionCenterChoices(): Array<{ value: string; item: TuiSessionCenterItem | null }> {
+    const state = this.sessionCenter;
+    if (state === null) return [];
+    const query = state.filter.trim().toLocaleLowerCase();
+    const choices: Array<{ value: string; item: TuiSessionCenterItem | null }> = [];
+    if (query === '' || 'new session'.includes(query)) {
+      choices.push({ value: SESSION_CENTER_NEW_VALUE, item: null });
+    }
+    const matching = state.items
+      .filter((item) => query === '' || [item.title, item.projectName, item.id, item.status]
+        .some((value) => value.toLocaleLowerCase().includes(query)))
+      .slice()
+      .sort((left, right) => {
+        const leftRunning = left.status === 'running' ? 1 : 0;
+        const rightRunning = right.status === 'running' ? 1 : 0;
+        return rightRunning - leftRunning || right.updatedAt - left.updatedAt;
+      });
+    for (const item of matching) choices.push({ value: item.id, item });
+    return choices;
+  }
+
+  private keepSessionCenterSelectionValid(): void {
+    const state = this.sessionCenter;
+    if (state === null) return;
+    const choices = this.sessionCenterChoices();
+    if (choices.some((choice) => choice.value === state.selectedValue)) return;
+    state.selectedValue = choices.find((choice) => choice.value === state.currentSessionId)?.value
+      ?? choices[0]?.value
+      ?? SESSION_CENTER_NEW_VALUE;
+  }
+
+  private moveSessionCenterSelection(delta: number): void {
+    const state = this.sessionCenter;
+    if (state === null) return;
+    const choices = this.sessionCenterChoices();
+    if (choices.length === 0) return;
+    const current = choices.findIndex((choice) => choice.value === state.selectedValue);
+    const next = (Math.max(0, current) + delta + choices.length) % choices.length;
+    state.selectedValue = choices[next]?.value ?? SESSION_CENTER_NEW_VALUE;
+    this.scheduler.requestImmediate();
+  }
+
+  private handleSessionCenterInput(event: InputEvent): void {
+    const state = this.sessionCenter;
+    if (state === null) return;
+    if (event.kind === 'paste') {
+      state.filter += event.text.replace(/[\r\n\0]/gu, '');
+      this.keepSessionCenterSelectionValid();
+      this.scheduler.requestImmediate();
+      return;
+    }
+    if (event.kind === 'mouse') {
+      if (event.event.action === 'wheelup') this.moveSessionCenterSelection(-3);
+      else if (event.event.action === 'wheeldown') this.moveSessionCenterSelection(3);
+      return;
+    }
+
+    const { full, ch, ctrl, meta } = event.key;
+    if (full === 'escape' || full === 'C-c' || full === 'left') {
+      this.closeSessionCenter(null);
+      return;
+    }
+    if (full === 'return' || full === 'enter') {
+      const selected = this.sessionCenterChoices().find((choice) => choice.value === state.selectedValue);
+      if (selected?.value === SESSION_CENTER_NEW_VALUE) this.closeSessionCenter({ kind: 'new' });
+      else if (selected?.item) this.closeSessionCenter({ kind: 'resume', sessionId: selected.item.id });
+      return;
+    }
+    if (full === 'up') this.moveSessionCenterSelection(-1);
+    else if (full === 'down') this.moveSessionCenterSelection(1);
+    else if (full === 'pageup') this.moveSessionCenterSelection(-8);
+    else if (full === 'pagedown') this.moveSessionCenterSelection(8);
+    else if (full === 'home' || full === 'C-a') {
+      const first = this.sessionCenterChoices()[0];
+      if (first) state.selectedValue = first.value;
+      this.scheduler.requestImmediate();
+    }
+    else if (full === 'end' || full === 'C-e') {
+      const choices = this.sessionCenterChoices();
+      const last = choices.at(-1);
+      if (last) state.selectedValue = last.value;
+      this.scheduler.requestImmediate();
+    }
+    else if (full === 'backspace') {
+      state.filter = Array.from(state.filter).slice(0, -1).join('');
+      this.keepSessionCenterSelectionValid();
+      this.scheduler.requestImmediate();
+    }
+    else if (full === 'C-u') {
+      state.filter = '';
+      this.keepSessionCenterSelectionValid();
+      this.scheduler.requestImmediate();
+    }
+    else if (ch && !ctrl && !meta && !/^[\u0000-\u001f\u007f]$/u.test(ch)) {
+      state.filter += ch;
+      this.keepSessionCenterSelectionValid();
+      this.scheduler.requestImmediate();
+    }
+  }
+
+  private sessionCenterLines(width: number, height: number): string[] {
+    const state = this.sessionCenter;
+    if (state === null) return [];
+    const accent = this.theme.tags.accent;
+    const muted = this.theme.tags.muted;
+    const success = this.theme.tags.success;
+    const error = this.theme.tags.error;
+    const now = new Date();
+    const dateBoundaries = sessionCenterDateBoundaries(now);
+    const choices = this.sessionCenterChoices();
+    const rows: Array<{ line: string; value?: string }> = [];
+    const groupRows = new Map<string, Array<{ value: string; item: TuiSessionCenterItem }>>();
+    for (const choice of choices) {
+      if (choice.item === null) continue;
+      const group = choice.item.status === 'running'
+        ? 'Running'
+        : sessionCenterDateGroup(choice.item.updatedAt, dateBoundaries);
+      const grouped = groupRows.get(group) ?? [];
+      grouped.push({ value: choice.value, item: choice.item });
+      groupRows.set(group, grouped);
+    }
+    const orderedGroups = ['Running', 'Today', 'Yesterday', 'Last week', 'Older'];
+    const newChoice = choices.find((choice) => choice.value === SESSION_CENTER_NEW_VALUE);
+    if (newChoice !== undefined) {
+      rows.push({ line: `{${muted}}ACTIONS{/${muted}}` });
+      rows.push({
+        line: renderSessionCenterRow(
+          '＋ New session',
+          'Start a fresh conversation',
+          state.selectedValue === SESSION_CENTER_NEW_VALUE,
+          width,
+          this.theme.tags,
+        ),
+        value: SESSION_CENTER_NEW_VALUE,
+      });
+    }
+    if (state.loading) rows.push({ line: `{${muted}}Loading sessions…{/${muted}}` });
+    else if (state.errorMessage !== null) rows.push({ line: `{${error}}${escapeTags(state.errorMessage)}{/${error}}` });
+    for (const group of orderedGroups) {
+      const grouped = groupRows.get(group);
+      if (grouped === undefined || grouped.length === 0) continue;
+      rows.push({ line: `{${accent}}${group.toUpperCase()}{/${accent}}` });
+      for (const { value, item } of grouped) {
+        const status = sessionCenterStatusLabel(item.status);
+        const statusTag = item.status === 'running' ? accent : item.status === 'failed' ? error : success;
+        const time = sessionCenterRelativeTime(item.updatedAt, now.getTime());
+        rows.push({
+          line: renderSessionCenterRow(
+            item.title || 'Untitled session',
+            `${item.projectName || 'Session'} · ${status} · ${time}${item.id === state.currentSessionId ? ' · Current' : ''}`,
+            state.selectedValue === value,
+            width,
+            this.theme.tags,
+            statusTag,
+          ),
+          value,
+        });
+      }
+    }
+    if (rows.length === 0) {
+      rows.push({ line: `{${muted}}${state.loading ? 'Loading sessions…' : 'No matching sessions.'}{/${muted}}` });
+    }
+
+    const header = [
+      `{bold}{${accent}}SESSION CENTER{/${accent}}{/bold}`,
+      `{${muted}}Sessions keep running after you leave a conversation.{/${muted}}`,
+      `{${muted}}/ ${escapeTags(state.filter)}▏{/${muted}}`,
+      '',
+    ];
+    const footer = `{${muted}}↑↓ move · Enter open · type to filter · Esc back{/${muted}}`;
+    const bodyHeight = Math.max(1, height - header.length - 1);
+    const selectedLine = rows.findIndex((row) => row.value === state.selectedValue);
+    let scrollTop = Math.max(0, selectedLine - bodyHeight + 1);
+    if (selectedLine >= 0 && selectedLine < scrollTop) scrollTop = selectedLine;
+    const body = rows.slice(scrollTop, scrollTop + bodyHeight).map((row) => row.line);
+    const result = [...header, ...body, footer];
+    return result.slice(0, height);
   }
 
   /**
@@ -1867,12 +2144,11 @@ export class TUIApp {
 
   /** True when something needs the full-screen takeover. */
   private overlayActive(): boolean {
-    // ONLY the permission/question overlay. A slash secondary page, the
-    // settings menu and a login prompt are docked into the composer's slot
-    // (see `paintInput`), so they never take the alternate buffer away from
-    // the conversation — which is the whole difference the user sees between
-    // "my terminal" and "some app".
-    return this.overlay.body(this.options.canAnswerPermissions?.() ?? false) !== null;
+    // The full-screen session center and permission/question prompts use the
+    // overlay region. Secondary pages, settings, and login stay docked into
+    // the composer's slot, so they do not take over the terminal.
+    return this.sessionCenter !== null
+      || this.overlay.body(this.options.canAnswerPermissions?.() ?? false) !== null;
   }
 
   /**
@@ -1983,11 +2259,9 @@ export class TUIApp {
   /**
    * Rows for the subagent being watched, or none.
    *
-   * The panel is a STATUS CARD, not a transcript: what the child is, what it
-   * was asked, how long it has been running and how it ended. It stops there
-   * because that is what this process can prove — a child's own messages live in
-   * the worker that runs it, and inventing a "transcript" here would be an empty
-   * promise dressed as a page.
+   * The task browser keeps a compact identity/status card above the same live
+   * transcript model used by the main agent. The transcript itself is selected
+   * by the sidebar or task row; this card only explains which child is active.
    */
   private watchPanelLines(width: number): string[] {
     const id = this.watchedSubagentId;
@@ -2229,24 +2503,18 @@ export class TUIApp {
       const props = {
         styles: stylesOf({ theme: this.theme.tags, renderer: 'own' }),
         sessionTitle: this.options.sessionTitle?.() ?? 'Current session',
-        activity: this.watchedSubagentId === null
-          ? `${working ? `${spinnerGlyph(this.spinnerFrame, this.terminalEnv.unicodeBox)} ` : ''}${this.activityLabel(busy)}`
-          : `Subagent · ${this.backgroundTasks.tasks().find((task) => task.id === this.watchedSubagentId)?.status ?? 'live'} · Ctrl+K stop`,
-        activityActive: this.watchedSubagentId === null
-          ? working
-          : this.backgroundTasks.tasks().some((task) => task.id === this.watchedSubagentId && task.status === 'running'),
-        tasks: this.backgroundTasks.tasks(),
-        workspace: this.options.workbenchWorkspace?.() ?? {
-          root: this.options.workspaceDirectory?.() ?? process.cwd(),
-          branch: null,
-          linkedWorktree: false,
-          observed: false,
-          changedFiles: null,
-          changes: [],
-        },
-        pullRequest: this.options.pullRequestBadge?.() ?? null,
-        contextTokens: this.watchedSubagentId === null ? this.contextTokens() : null,
+        activity: `${working ? `${spinnerGlyph(this.spinnerFrame, this.terminalEnv.unicodeBox)} ` : ''}${this.activityLabel(busy)}`,
+        activityActive: working,
+        tasks: this.sidebarAgentTasks(),
+        selectedAgentId: this.watchedSubagentId,
+        contextTokens: this.watchedSubagentId === null ? this.sidebarContextTotal() : null,
+        contextEstimated: this.watchedSubagentId === null && this.contextTokens() === null
+          && this.sidebarContextParts(this.model, null).length > 0,
         contextBudget: this.watchedSubagentId === null ? this.options.contextBudgetTokens?.() ?? null : null,
+        contextParts: this.watchedSubagentId === null
+          ? this.sidebarContextParts(this.model, this.contextTokens())
+          : [],
+        statusItems: this.options.workbenchSidebarStatusItems?.() ?? [],
         profile: resolveDisplayProfile({ showThinking: this.showThinking, expandBlocks: this.expanded, showToolResults: this.showToolResults, toolGroupMode: this.toolGroupMode }),
         tools: { total: tools.length, running: tools.filter((tool) => tool.status === 'running').length, errors: tools.filter((tool) => tool.status === 'error').length },
       };
@@ -2297,15 +2565,14 @@ export class TUIApp {
    */
   private visibleTranscriptRows(): number {
     const screenRows = asNumber((this.output as { rows?: unknown }).rows, 24);
-    // input box (rows + its two border rows), status bar, the popup while it is
-    // open, and the transcript's own top and bottom border.
+    // input box (rows + its two border rows), status bar, and the popup while
+    // open. The transcript has no border, so it uses every remaining row.
     return Math.max(
       1,
       screenRows -
         this.inputRows -
         this.inputChromeRows() -
         STATUS_ROWS -
-        2 -
         this.popupRows(),
     );
   }
@@ -2623,7 +2890,7 @@ export class TUIApp {
   }
 
   private placeCursor(): void {
-    if (this.focus !== 'input' || this.dockPanelActive()) {
+    if (this.sessionCenter !== null || this.focus !== 'input' || this.dockPanelActive()) {
       this.fullScreen.setCaret(null);
       return;
     }
@@ -2769,12 +3036,12 @@ export class TUIApp {
         ? 'Enter run / Tab fill / arrows choose'
         : 'Tab accept / arrows choose'
       : busy
-        ? 'Enter steer · Tab queue · Esc stop'
+        ? 'Enter steer · Tab queue · Esc stop · ← sessions'
       : this.focus === 'tasks'
         ? `tasks ${taskSelection}/${taskRows.length} / arrows select / Enter open/watch / Esc back`
         : this.editor.isEmpty && this.hasTurnSuggestion()
-        ? 'Enter adopt / Tab history / F6 tasks'
-        : `${this.editor.isEmpty ? 'Tab history' : 'Tab indent'} / F6 tasks / arrows prompts`;
+        ? 'Enter adopt / ← sessions / Tab history / F6 tasks'
+        : `${this.editor.isEmpty ? '← sessions / Tab history' : 'Tab indent'} / F6 tasks / arrows prompts`;
     // The status line is chrome, so in inline mode it is a row inside the live
     // area — and a row that wraps moves every row below it, which is how an
     // inline TUI's geometry goes wrong on a narrow terminal. `?7l` is disabled
@@ -2796,10 +3063,10 @@ export class TUIApp {
       const hint = this.options.queuePaused?.() && queued > 0
         ? '/queue resume · Esc recall'
         : this.completion.isOpen ? context
-        : busy ? 'Enter steer · Tab queue · Esc stop'
+        : busy ? 'Enter steer · Tab queue · Esc stop · ← sessions'
         : this.editor.isEmpty && this.hasTurnSuggestion()
-        ? 'Enter adopt · / commands · F1 help'
-        : '/ commands · F1 help';
+        ? 'Enter adopt · ← sessions · / commands · F1 help'
+        : this.editor.isEmpty ? '← sessions · / commands · F1 help' : '/ commands · F1 help';
       this.inlineStatusLines = this.footerLines(width, hint + queueSegment);
       return;
     }
@@ -2827,8 +3094,10 @@ export class TUIApp {
       ? ''
       : ' ' + taggedWith(this.theme.tags, badge.token, escapeTags(badgePlain));
     const cwd = this.options.workspaceDirectory?.() ?? process.cwd();
-    const branch = this.gitBranch(cwd);
-    const location = branch ? `${cwd} · ${branch}` : cwd;
+    const branch = this.footerBranch(cwd);
+    const pullRequest = this.options.pullRequestBadge?.() ?? null;
+    const suffix = `${branch === null ? '' : ` (${branch})`}${pullRequest === null ? '' : ` · ${prFooterLabel(pullRequest)}`}`;
+    const location = fitFooterLocation(cwd, suffix, width);
     this.fullScreen.update('status', {
       height: STATUS_ROWS,
       lines: [
@@ -2857,7 +3126,7 @@ export class TUIApp {
     const budget = this.options.contextBudgetTokens?.() ?? null;
     const props = {
       cwd,
-      branch: this.gitBranch(cwd),
+      branch: this.footerBranch(cwd),
       sessionName: this.options.sessionName?.() ?? null,
       hint,
       stats: {
@@ -2966,6 +3235,13 @@ export class TUIApp {
     return branch;
   }
 
+  /** Use the execution checkout's branch while the footer keeps project path A. */
+  private footerBranch(projectDirectory: string): string | null {
+    const workspace = this.options.workbenchWorkspace?.();
+    if (workspace?.observed === true) return workspace.branch ?? 'detached';
+    return this.gitBranch(projectDirectory);
+  }
+
   /**
    * Status-bar token segment: the context bar when a budget is resolvable,
    * otherwise the bare session total. Empty until the first `token_usage`
@@ -3025,6 +3301,20 @@ export class TUIApp {
    */
   private paintOverlay(): void {
     if (!this.fullScreen.ready) return;
+    if (this.sessionCenter !== null && !this.overlay.isActive) {
+      const size = this.terminalSize();
+      this.fullScreen.update('overlay', {
+        width: size.columns,
+        height: size.rows,
+        left: 0,
+        top: 0,
+        borderStyle: 'none',
+        lines: this.sessionCenterLines(size.columns, size.rows),
+        hidden: false,
+      });
+      this.fullScreen.update('completion', { hidden: true });
+      return;
+    }
     const body = this.overlay.body(this.options.canAnswerPermissions?.() ?? false);
     if (body === null) {
       this.fullScreen.update('overlay', { hidden: true });
@@ -3035,6 +3325,10 @@ export class TUIApp {
     // overlay that renders at zero height is an overlay that never appears.
     this.fullScreen.update('overlay', {
       height: body.split('\n').length + 2,
+      width: undefined,
+      left: undefined,
+      top: undefined,
+      borderStyle: 'framed',
       borderColor: 'yellow',
       lines: body.split('\n'),
       hidden: false,
@@ -3181,6 +3475,8 @@ export class TUIApp {
     readonly toolIds: string[];
     revision: number;
     loadGeneration: number;
+    loadInFlight: boolean;
+    loadAgain: boolean;
   } | null {
     const id = this.watchedSubagentId;
     return id === null ? null : this.subagentTranscripts.get(id) ?? null;
@@ -3197,9 +3493,18 @@ export class TUIApp {
     const id = frameString(data, 'subagentId') || frameString(data, 'agentId');
     const eventType = frameString(data, 'agentEventType');
     if (id === '' || eventType === '') return;
+    const parentCallId = eventType === 'subagent_started' || eventType === 'started'
+      ? frameString(data, 'parentToolCallId') || frameString(data, 'toolCallId')
+      : '';
+    if (parentCallId !== '' && this.watchedSubagentId === parentCallId) {
+      const provisional = this.subagentTranscripts.get(parentCallId);
+      this.watchedSubagentId = id;
+      if (provisional !== undefined && !this.subagentTranscripts.has(id)) this.subagentTranscripts.set(id, provisional);
+      this.subagentTranscripts.delete(parentCallId);
+    }
     let child = this.subagentTranscripts.get(id);
     if (child === undefined) {
-      child = { model: new TranscriptModel(), toolIds: [], revision: 0, loadGeneration: 0 };
+      child = { model: new TranscriptModel(), toolIds: [], revision: 0, loadGeneration: 0, loadInFlight: false, loadAgain: false };
       this.subagentTranscripts.set(id, child);
     }
     const model = child.model;
@@ -3244,20 +3549,34 @@ export class TUIApp {
   private async loadSubagentTranscript(
     task: BackgroundTaskView,
     child: NonNullable<ReturnType<TUIApp['activeSubagentTranscript']>>,
+    quiet = false,
   ): Promise<void> {
-    if (task.subagentSessionId === undefined || this.options.onSubagentTranscriptLoad === undefined) return;
+    if (this.options.onSubagentTranscriptLoad === undefined) return;
+    if (child.loadInFlight) {
+      child.loadAgain = true;
+      return;
+    }
+    child.loadInFlight = true;
     const generation = ++child.loadGeneration;
     try {
       const messages = await this.options.onSubagentTranscriptLoad(task);
       if (generation !== child.loadGeneration || this.disposed) return;
-      this.replaceTranscript(messages, child.model);
+      if (messages.length > 0) {
+        this.replaceTranscript(messages, child.model);
+        child.revision += 1;
+        this.transcriptPane.revision += 1;
+      }
       if (this.watchedSubagentId === task.id) {
-        this.follow = true;
-        this.scrollTop = 0;
         this.scheduleRender();
       }
     } catch (error) {
-      this.printError(`Could not load subagent transcript: ${error instanceof Error ? error.message : String(error)}`);
+      if (!quiet) this.printError(`Could not load subagent transcript: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      child.loadInFlight = false;
+      if (child.loadAgain && !this.disposed) {
+        child.loadAgain = false;
+        void this.loadSubagentTranscript(task, child, quiet);
+      }
     }
   }
 
@@ -3539,6 +3858,84 @@ export class TUIApp {
     this.scheduler.requestImmediate();
   }
 
+  /**
+   * Activate a session transcript while preserving the live model of a run
+   * that is being left in the background.
+   *
+   * Completed sessions are reloaded from durable history when revisited. Only
+   * the caller's currently running session should be cached across a switch;
+   * this keeps the live partial output without retaining every visited chat.
+   * Returns true when an in-memory transcript was restored.
+   */
+  activateSessionTranscript(
+    sessionId: string,
+    messages: readonly TranscriptMessage[],
+    options: { readonly cacheCurrent?: boolean; readonly clearDraft?: boolean } = {},
+  ): boolean {
+    if (this.transcriptSessionId === sessionId) {
+      this.replaceTranscript(messages);
+      if (options.clearDraft === true) this.editor.clear();
+      return false;
+    }
+
+    // Commit the current delta buffers before its model is cached. Their
+    // timers are process-wide, so carrying one into another session would
+    // append text to whichever model happened to be selected later.
+    this.commitBuffers();
+    this.textBuffer.reset();
+    this.thinkingBuffer.reset();
+    if (this.transcriptSessionId !== null) {
+      this.cachedSessionTranscripts.delete(this.transcriptSessionId);
+      if (options.cacheCurrent === true) {
+        this.cachedSessionTranscripts.set(this.transcriptSessionId, this.model);
+      }
+    }
+
+    const cached = this.cachedSessionTranscripts.get(sessionId);
+    if (cached !== undefined) {
+      this.cachedSessionTranscripts.delete(sessionId);
+      this.model = cached;
+      this.resetSessionTranscriptView(options.clearDraft === true);
+      this.noteTranscriptMutation();
+      this.scheduler.requestImmediate();
+      this.transcriptSessionId = sessionId;
+      return true;
+    }
+
+    this.model = new TranscriptModel();
+    this.resetSessionTranscriptView(options.clearDraft === true);
+    this.transcriptSessionId = sessionId;
+    this.replaceTranscript(messages);
+    while (this.cachedSessionTranscripts.size > 8) {
+      const oldest = this.cachedSessionTranscripts.keys().next().value;
+      if (oldest === undefined) break;
+      this.cachedSessionTranscripts.delete(oldest);
+    }
+    return false;
+  }
+
+  /** Drop a hidden session's cached partial transcript after its run settles. */
+  invalidateSessionTranscript(sessionId: string): void {
+    if (this.transcriptSessionId !== sessionId) this.cachedSessionTranscripts.delete(sessionId);
+  }
+
+  private resetSessionTranscriptView(clearDraft: boolean): void {
+    this.selectedBlockId = undefined;
+    this.hoveredToolBlockId = undefined;
+    this.expandedBlockIds.clear();
+    this.collapsedBlockIds.clear();
+    this.lastUsage = null;
+    this.sessionTokens = 0;
+    if (clearDraft) this.editor.clear();
+    this.follow = true;
+    this.scrollTop = 0;
+    this.focus = 'input';
+    this.selectedTaskRow = -1;
+    this.backgroundTasks.clear();
+    this.activity.phase = 'ready';
+    this.clearActiveActivity();
+  }
+
   /** Replace the visible transcript with a persisted session history. */
   replaceTranscript(messages: readonly TranscriptMessage[], targetModel: TranscriptModel = this.model): void {
     const model = targetModel;
@@ -3753,6 +4150,17 @@ export class TUIApp {
     return this.swallowForWindow();
   }
 
+  /** Mirror Codex's empty-composer navigation without stealing text editing. */
+  private canOpenSessionCenter(): boolean {
+    return this.options.onOpenSessionCenter !== undefined
+      && this.editor.isEmpty
+      && this.focus === 'input'
+      && this.interactivePrompt === null
+      && !this.completion.isOpen
+      && !this.windowMgr.isActive
+      && !this.overlay.isActive;
+  }
+
   /**
    * Bind one rebindable action from the effective action table.
    *
@@ -3808,6 +4216,10 @@ export class TUIApp {
    * hit every contended binding.
    */
   private dispatchInput(event: InputEvent): void {
+    if (this.sessionCenter !== null && !this.overlay.isActive) {
+      this.handleSessionCenterInput(event);
+      return;
+    }
     switch (event.kind) {
       case 'key': {
         this.pointer.cancel();
@@ -3958,6 +4370,87 @@ export class TUIApp {
     // of a conversation (`packages/ai/src/utils/estimate.ts:14`).
     const added = Math.max(0, this.model.contextChars - this.usageCharBaseline);
     return usage.total + Math.ceil(added / 4);
+  }
+
+  /** The sidebar may use transcript estimates when no provider total arrived. */
+  private sidebarContextTotal(): number | null {
+    const exact = this.contextTokens();
+    if (exact !== null) return exact;
+    const estimated = this.sidebarContextParts(this.model, null)
+      .reduce((total, part) => total + part.tokens, 0);
+    return estimated > 0 ? estimated : null;
+  }
+
+  /** Merge Host task rows with subagent calls already present in the transcript. */
+  private sidebarAgentTasks(): BackgroundTaskView[] {
+    const tracked = this.backgroundTasks.tasks();
+    const trackedAgents = new Map(tracked
+      .filter((task) => task.kind === 'subagent')
+      .map((task) => [task.id, task]));
+    const seen = new Set<string>();
+    const agents: BackgroundTaskView[] = [];
+    const cards = this.model.subagentCards().slice().reverse();
+    for (const { block, card } of cards) {
+      const id = card.subagentId ?? block.callId;
+      if (id === '' || seen.has(id)) continue;
+      seen.add(id);
+      const task = trackedAgents.get(id);
+      let status: BackgroundTaskView['status'] = task?.status ?? 'running';
+      if (task === undefined) {
+        if (card.outcome === 'completed') status = 'completed';
+        else if (card.outcome === 'failed') status = 'failed';
+        else if (card.outcome === 'cancelled') status = 'cancelled';
+      }
+      const endedAtMs = task?.endedAtMs
+        ?? (card.durationMs === undefined ? undefined : card.startedAtMs + card.durationMs);
+      agents.push({
+        id,
+        kind: 'subagent',
+        title: task?.title ?? subagentIdentityText(card.spec, id),
+        ...(card.spec.brief === '' ? task?.detail === undefined ? {} : { detail: task.detail } : { detail: card.spec.brief }),
+        status,
+        startedAtMs: task?.startedAtMs ?? card.startedAtMs,
+        ...(endedAtMs === undefined ? {} : { endedAtMs }),
+        ...(task?.subagentSessionId === undefined ? {} : { subagentSessionId: task.subagentSessionId }),
+        ...(card.summary === undefined ? task?.summary === undefined ? {} : { summary: task.summary } : { summary: card.summary }),
+      });
+    }
+    for (const task of tracked) {
+      if (task.kind === 'subagent' && !seen.has(task.id)) agents.push(task);
+    }
+    return [...agents, ...tracked.filter((task) => task.kind === 'bash')];
+  }
+
+  /**
+   * Estimate visible transcript categories next to the provider-anchored
+   * context total. Anything the TUI cannot attribute (system prompt, tool
+   * definitions, injected context) remains in an explicit remainder bucket.
+   */
+  private sidebarContextParts(model: TranscriptModel, used: number | null): WorkbenchSidebarContextPart[] {
+    const categories = new Map<string, number>([
+      ['Conversation', 0],
+      ['Tool calls', 0],
+      ['Tool output', 0],
+    ]);
+    for (const block of model.blocks) {
+      if (block.kind === 'user' || block.kind === 'assistant' || block.kind === 'thinking') {
+        categories.set('Conversation', (categories.get('Conversation') ?? 0) + estimateContextTextTokens(block.text));
+      } else if (block.kind === 'tool') {
+        const callText = block.command ?? block.argumentText ?? '';
+        categories.set('Tool calls', (categories.get('Tool calls') ?? 0) + estimateContextTextTokens(callText));
+        categories.set('Tool output', (categories.get('Tool output') ?? 0) + estimateContextTextTokens(block.result ?? block.outputText ?? ''));
+      }
+    }
+
+    const knownTotal = [...categories.values()].reduce((total, value) => total + value, 0);
+    const scale = used !== null && knownTotal > used && knownTotal > 0 ? used / knownTotal : 1;
+    const parts: WorkbenchSidebarContextPart[] = [...categories].map(([label, tokens]) => ({
+      label,
+      tokens: Math.round(tokens * scale),
+    })).filter((part) => part.tokens > 0);
+    const attributed = parts.reduce((total, part) => total + part.tokens, 0);
+    if (used !== null && used > attributed) parts.push({ label: 'Unattributed', tokens: used - attributed });
+    return parts.sort((a, b) => b.tokens - a.tokens).slice(0, 3);
   }
 
   /** Context occupancy against the window, clamped to 0–100. */
@@ -4296,6 +4789,9 @@ exportHistory(): string[] {
       if (this.interactivePrompt?.kind === 'text') this.movePromptCursor(this.interactivePrompt.cursor - 1);
       else if (this.routeWindowArrow('left')) return;
       else if (this.interactivePrompt === null && this.focus === 'tasks') this.setTaskGroupAtSelection(true);
+      else if (this.canOpenSessionCenter()) {
+        void this.options.onOpenSessionCenter?.();
+      }
       else if (this.interactivePrompt === null) {
         this.editor.moveLeft();
         if (this.focus === 'input') this.refreshInputCompletion();
@@ -5083,32 +5579,41 @@ exportHistory(): string[] {
   /** Render the detail window; output is read on demand (Phase 8). */
   private openTaskDetail(task: BackgroundTaskView): void {
     if (task.kind === 'subagent') {
-      this.watchedSubagentId = this.watchedSubagentId === task.id ? null : task.id;
-      const child = this.subagentTranscripts.get(task.id);
-      if (this.watchedSubagentId !== null && child === undefined) {
-        this.subagentTranscripts.set(task.id, { model: new TranscriptModel(), toolIds: [], revision: 0, loadGeneration: 0 });
-      }
-      if (this.watchedSubagentId !== null && task.status !== 'running') {
-        const state = this.subagentTranscripts.get(task.id);
-        if (state) void this.loadSubagentTranscript(task, state);
-      }
-      const workspace = this.subagentTranscripts.get(task.id);
-      if (this.watchedSubagentId === task.id && workspace?.model.blocks.length === 0) {
-        workspace.model.addNotice(`Subagent · ${task.title}`);
-        workspace.revision += 1;
-      }
-      this.follow = true;
-      this.scrollTop = 0;
-      this.scheduler.requestImmediate();
+      // Keep the task browser's existing Enter behavior. Sidebar rows use
+      // selectAgentTranscript directly, where selecting an already-active row
+      // must stay on that transcript.
+      this.selectAgentTranscript(this.watchedSubagentId === task.id ? null : task);
       return;
     }
     this.options.onBackgroundTaskOpen?.(task);
   }
 
+  private selectAgentTranscript(task: BackgroundTaskView | null): void {
+    if (task === null) {
+      this.watchedSubagentId = null;
+    } else {
+      if (task.kind !== 'subagent') return;
+      this.watchedSubagentId = task.id;
+      let child = this.subagentTranscripts.get(task.id);
+      if (child === undefined) {
+        child = { model: new TranscriptModel(), toolIds: [], revision: 0, loadGeneration: 0, loadInFlight: false, loadAgain: false };
+        this.subagentTranscripts.set(task.id, child);
+      }
+      void this.loadSubagentTranscript(task, child);
+      if (child.model.blocks.length === 0) {
+        child.model.addNotice(`Subagent · ${task.title}`);
+        child.revision += 1;
+      }
+    }
+    this.follow = true;
+    this.scrollTop = 0;
+    this.scheduler.requestImmediate();
+  }
+
   private stopSelectedSubagent(): void {
     const id = this.watchedSubagentId ?? this.selectedTaskId;
     if (id === null || this.options.onSubagentStop === undefined) return;
-    const task = this.backgroundTasks.tasks().find((entry) => entry.id === id && entry.kind === 'subagent');
+    const task = this.sidebarAgentTasks().find((entry) => entry.id === id && entry.kind === 'subagent');
     if (task === undefined || task.status !== 'running') return;
     void this.options.onSubagentStop(task).then((stopped) => {
       if (!stopped) this.printNotice(`Subagent ${task.title} is no longer running.`);
@@ -5553,6 +6058,10 @@ exportHistory(): string[] {
       this.pointer.clear();
       return;
     }
+    if (this.sessionCenter !== null && !this.overlay.isActive) {
+      this.pointer.commit([]);
+      return;
+    }
     const hits: HitRegion[] = [];
     const add = (id: string, region: RegionMetrics | null, row: number, column: number, width: number, activate: HitRegion['activate'], revision?: string | number, height = 1, allowTranscriptSelection = false, hoverId?: string) => {
       if (!region?.laidOut || row < 0 || row >= region.height - region.innerHeight || width <= 0)
@@ -5663,9 +6172,11 @@ exportHistory(): string[] {
         add(`sidebar:${target.id}`, geometry, target.row, layout.column + target.column, target.width, () => {
           if ((this.options.workbenchSessionId?.() ?? '') !== sessionId) return;
           const action = target.action;
-          const invoke = 'task' in action
-            ? () => this.openTaskDetail(action.task)
-            : () => this.options.onWorkbenchCommand?.(action.command);
+          const invoke = 'agent' in action
+            ? () => this.selectAgentTranscript(action.agent)
+            : 'task' in action
+              ? () => this.openTaskDetail(action.task)
+              : () => this.options.onWorkbenchCommand?.(action.command);
           void Promise.resolve().then(invoke).catch((error: unknown) => {
             this.printError(error instanceof Error ? error.message : String(error));
           });
@@ -5714,6 +6225,68 @@ exportHistory(): string[] {
 
 function now(): number {
   return performance.now();
+}
+
+function sessionCenterDateBoundaries(now: Date): {
+  readonly today: number;
+  readonly yesterday: number;
+  readonly lastWeek: number;
+} {
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  return {
+    today,
+    yesterday: new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1).getTime(),
+    lastWeek: new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7).getTime(),
+  };
+}
+
+function sessionCenterDateGroup(
+  timestamp: number,
+  boundaries: ReturnType<typeof sessionCenterDateBoundaries>,
+): 'Today' | 'Yesterday' | 'Last week' | 'Older' {
+  if (timestamp >= boundaries.today) return 'Today';
+  if (timestamp >= boundaries.yesterday) return 'Yesterday';
+  if (timestamp >= boundaries.lastWeek) return 'Last week';
+  return 'Older';
+}
+
+function sessionCenterStatusLabel(status: TuiSessionCenterItem['status']): string {
+  switch (status) {
+    case 'running': return 'Running';
+    case 'completed': return 'Completed';
+    case 'failed': return 'Failed';
+    case 'cancelled': return 'Cancelled';
+    case 'budget_exhausted': return 'Budget exhausted';
+    case 'unknown': return 'Unknown';
+  }
+}
+
+function sessionCenterRelativeTime(timestamp: number, currentTime: number): string {
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return 'time unknown';
+  const elapsed = Math.max(0, currentTime - timestamp);
+  if (elapsed < 60_000) return 'now';
+  if (elapsed < 60 * 60_000) return `${Math.floor(elapsed / 60_000)}m ago`;
+  if (elapsed < 24 * 60 * 60_000) return `${Math.floor(elapsed / (60 * 60_000))}h ago`;
+  if (elapsed < 7 * 24 * 60 * 60_000) return `${Math.floor(elapsed / (24 * 60 * 60_000))}d ago`;
+  return new Date(timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function renderSessionCenterRow(
+  title: string,
+  detail: string,
+  selected: boolean,
+  width: number,
+  tags: ThemeTags,
+  color = tags.accent,
+): string {
+  const prefix = selected ? '❯' : ' ';
+  const targetWidth = Math.max(1, width);
+  const content = truncateToWidth(`${prefix} ${title}  ${detail}`, targetWidth);
+  const padded = content + ' '.repeat(Math.max(0, targetWidth - visibleWidth(content)));
+  const safe = escapeTags(padded);
+  return selected
+    ? `{${tags.toolHoverBg}}{${tags.text}}${safe}{/${tags.text}}{/${tags.toolHoverBg}}`
+    : `{${color}}${safe}{/${color}}`;
 }
 
 /** Human token count: `940`, `12.3k`, `1.2M`. */

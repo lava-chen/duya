@@ -137,10 +137,12 @@ function boxSize(
         height,
       };
     case 'overlay': {
-      const width = Math.min(columns, Math.max(1, Math.floor(columns * percentage(options.overlayWidth, 0.7))));
+      const width = Math.min(columns, Math.max(1, Math.floor(
+        patch?.width ?? columns * percentage(options.overlayWidth, 0.7),
+      )));
       return {
-        left: Math.floor((columns - width) / 2),
-        top: Math.round((rows - height) / 2),
+        left: Math.max(0, Math.min(columns - width, Math.floor(patch?.left ?? (columns - width) / 2))),
+        top: Math.max(0, Math.min(rows - height, Math.floor(patch?.top ?? (rows - height) / 2))),
         width,
         height,
       };

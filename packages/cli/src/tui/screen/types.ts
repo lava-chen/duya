@@ -58,6 +58,11 @@ export interface RegionPatch {
   readonly lines?: readonly SceneLine[];
   /** Total rows the region occupies, its own border rows included. */
   readonly height?: number;
+  /** Optional outer width for a region whose layout is not the default box. */
+  readonly width?: number;
+  /** Optional absolute position for a region, in terminal cells. */
+  readonly left?: number;
+  readonly top?: number;
   /** Rows between the region's bottom edge and the terminal's bottom edge. */
   readonly bottom?: number;
   /** Border colour, as a name the surface's renderer understands. */
