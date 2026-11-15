@@ -38,7 +38,14 @@ import { rewritePluginMentionTokens } from '@duya/input-completion';
 import { describeSpec, findSpec, type CommandLocale } from '@duya/command-catalog';
 import { HostSessionHttpClient } from '@duya/host/http-client';
 import { resolveDataRoot } from '@duya/data';
-import { TUIApp, shouldUseTui, type CompletionSources, type TuiChoice } from './tui/index.js';
+import {
+  TUIApp,
+  shouldUseTui,
+  type CompletionSources,
+  type LegacyFrame,
+  type TuiChoice,
+  type TuiSessionCenterItem,
+} from './tui/index.js';
 import { describeTuiModelStatus } from './tui/model-status.js';
 import {
   appendShellContext,
@@ -757,6 +764,12 @@ export async function chatTui(
     effort = reloaded.effort;
   }
   let activeRunId: RunId | null = null;
+  let activeRunSessionId: SessionId | null = null;
+  let activeRunFrames: {
+    readonly sessionId: SessionId;
+    readonly frames: LegacyFrame[];
+    renderedCount: number;
+  } | null = null;
   let activeStream: AbortController | null = null;
   const pendingCancellations = new Map<RunId, Promise<void>>();
   let busy = false;
@@ -791,6 +804,7 @@ export async function chatTui(
   let turnSuggestionSeq = 0;
   let unsettledRunId: RunId | null = null;
   let sessionTransition = false;
+  let sessionCenterOpen = false;
   let finished = false;
   let finish: () => void = () => {};
   const finishedPromise = new Promise<void>((resolve) => { finish = resolve; });
@@ -798,7 +812,15 @@ export async function chatTui(
   // next normal submission (see `tui/shell-context.ts`).
   let pendingShellContext: { command: string; context: string } | null = null;
 
-  let sessionRows = (await listWorkspaceSessions(client, activeSession)).map(sessionCompletionItem);
+  const visibleRunBusy = (): boolean => busy && activeRunSessionId === activeSession.id;
+  const canPaintRun = (sessionId: SessionId): boolean =>
+    !finished
+    && !sessionCenterOpen
+    && !sessionTransition
+    && activeSession.id === sessionId;
+
+  let workspaceSessions = await listWorkspaceSessions(client, activeSession);
+  let sessionRows = workspaceSessions.map(sessionCompletionItem);
   const sessionSlashRows = (): PopoverItem[] => {
     const commands: readonly (readonly [string, string, string, string])[] = [
       ['/resume', 'resume', 'Search and resume a previous session', '搜索并切换到之前的会话'],
@@ -861,8 +883,10 @@ export async function chatTui(
       const busyChanged = busy !== snapshot.busy;
       const wasBusy = busy;
       busy = snapshot.busy;
+      if (snapshot.busy && activeRunSessionId === null) activeRunSessionId = activeSession.id;
+      else if (!snapshot.busy) activeRunSessionId = null;
       if (!finished) {
-        if (busyChanged) tui.setBusy(busy);
+        if (busyChanged) tui.setBusy(visibleRunBusy());
         tui.refresh();
         // A finished turn is when the pull request may have moved, so the
         // badge is re-read here — never on every frame.
@@ -916,7 +940,7 @@ export async function chatTui(
   }
 
   function interrupt(): void {
-    if (!busy) return;
+    if (!visibleRunBusy()) return;
     cancellationRequested = true;
     queue.pause();
     tui.printNotice('Cancelling run; waiting for Host to stop the worker…');
@@ -1005,7 +1029,7 @@ export async function chatTui(
     const runId = activeRunId;
     // A stopping run never reaches another checkpoint: that draft belongs to
     // the next turn, which is also what `TurnQueue.submit` resumes into.
-    if (!busy || runId === null || cancellationRequested) {
+    if (!visibleRunBusy() || runId === null || cancellationRequested) {
       queue.submit(text, { attachments });
       return;
     }
@@ -1038,7 +1062,7 @@ export async function chatTui(
       interrupt();
       return;
     }
-    if (!busy) {
+    if (!visibleRunBusy()) {
       queue.submit(text, { attachments });
       return;
     }
@@ -1062,7 +1086,7 @@ export async function chatTui(
    */
   async function sendNow(draft: PendingDraft): Promise<void> {
     const runId = activeRunId;
-    if (!busy || runId === null || cancellationRequested) {
+    if (!visibleRunBusy() || runId === null || cancellationRequested) {
       const removed = queue.remove(draft.key);
       if (removed === null) return;
       queue.submit(removed.text, { front: true, echoed: removed.echoed, attachments: removed.attachments });
@@ -1217,7 +1241,7 @@ export async function chatTui(
       try {
         const record = await client.getLatestTurnSuggestion(sessionId);
         if (seq !== turnSuggestionSeq) return;
-        if (record !== null && record.createdAt >= endedAt - 1_500) {
+        if (record !== null && record.createdAt >= endedAt - 1_500 && activeSession.id === sessionId) {
           turnSuggestion = record.suggestion.trim().length > 0 ? record.suggestion : null;
           tui.refresh();
           return;
@@ -1295,7 +1319,7 @@ export async function chatTui(
     inline: effectivePreferences.displayMode === 'inline',
     completionSources,
     echoSubmitted: false,
-    canSubmit: () => !sessionTransition,
+    canSubmit: () => !sessionTransition && (!busy || activeRunSessionId === activeSession.id),
     // Only drafts the user is still WAITING on: a steer is already with the
     // running turn and already echoed into the transcript, so painting it here
     // repeated a sent message under the composer and read as "not sent yet".
@@ -1366,7 +1390,7 @@ export async function chatTui(
     footerRate: effectivePreferences.footerRate,
     maxInputRows: effectivePreferences.inputRows,
     completionRows: effectivePreferences.completionRows,
-    isBusy: () => busy,
+    isBusy: visibleRunBusy,
     turnSuggestion: () => turnSuggestion,
     canAnswerPermissions: () => activeRunId !== null && !cancellationRequested,
     onSubmit: (text, attachments) => { void handleLine(text, attachments); },
@@ -1401,7 +1425,7 @@ export async function chatTui(
   const backgroundPoller = new BackgroundTaskPoller({
     list: (sessionId) => client.listBackgroundTasks(sessionId),
     sessionId: () => (sessionTransition ? null : activeSession.id),
-    isActive: () => busy || tui.isTaskViewOpen() || tui.hasRunningBackgroundTasks(),
+    isActive: () => visibleRunBusy() || tui.isTaskViewOpen() || tui.hasRunningBackgroundTasks(),
     onChange: (snapshot) => {
       if (!finished) tui.setBackgroundTasks(snapshot);
     },
@@ -1503,16 +1527,16 @@ export async function chatTui(
   const remoteWatch = new RemoteSessionWatch({
     client,
     sessionId,
-    isPaused: () => busy || sessionTransition || finished,
+    isPaused: () => visibleRunBusy() || sessionTransition || finished,
     isLocalRun: (runId) => localRunIds.has(runId),
     onFrame: (frame) => {
-      if (!busy && !sessionTransition && !finished) tui.push(frame);
+      if (!visibleRunBusy() && !sessionTransition && !sessionCenterOpen && !finished) tui.push(frame);
     },
     onNotice: (text) => {
       if (!finished) tui.printNotice(text);
     },
     onRunSettled: async () => {
-      if (finished || busy || sessionTransition || watchedSessionId !== activeSession.id) return;
+      if (finished || visibleRunBusy() || sessionTransition || watchedSessionId !== activeSession.id) return;
       try {
         tui.replaceTranscript(await loadSessionMessages(client, activeSession.id));
       } catch (error) {
@@ -1571,6 +1595,7 @@ export async function chatTui(
       return;
     }
     const sessions = await listWorkspaceSessions(client, activeSession);
+    workspaceSessions = sessions;
     sessionRows = sessions.map(sessionCompletionItem);
     const normalized = query.trim().toLowerCase();
     const idMatches = normalized === ''
@@ -1601,41 +1626,152 @@ export async function chatTui(
     void refreshPullRequestBadge(/*allowSync*/ false);
     await resyncEffortForModelChange(previousModel);
     watchSession(selectedId);
-    tui.replaceTranscript(await loadSessionMessages(client, selectedId));
+    tui.activateSessionTranscript(selectedId, await loadSessionMessages(client, selectedId));
     tui.refreshTerminalTitle();
     tui.printNotice(`Resumed "${selected.title || 'Untitled session'}".`);
   }
 
-  /** The empty-composer home screen: create a session or return to a recent one. */
-  async function openSessionCenter(): Promise<void> {
-    if (sessionTransition || refuseSessionSwitch('opening the session center')) return;
-    sessionTransition = true;
-    try {
-      const sessions = await listWorkspaceSessions(client, activeSession);
-      sessionRows = sessions.map(sessionCompletionItem);
-      const newSessionValue = '__duya_new_session__';
-      const choices: TuiChoice[] = [
-        {
-          label: '＋ New session',
-          value: newSessionValue,
-          description: projectDirectory,
-        },
-        ...sessions.map((item) => ({
-          label: `${item.session.id === activeSession.id ? '● Current · ' : ''}${sessionLabel(item)}`,
-          value: item.session.id,
-          description: item.session.id,
-        })),
-      ];
-      const selectedId = await tui.chooseFiltered('Session center', choices, {
-        footer: 'type to filter · ↑↓ choose · Enter open · Esc return',
+  function sessionCenterItemsFromWorkspace(
+    sessions: readonly HostSessionListItem[],
+  ): TuiSessionCenterItem[] {
+    const items = sessions.map(({ session, timelineCount }) => ({
+      id: session.id,
+      title: session.title || 'Untitled session',
+      projectName: session.projectName || 'Session',
+      status: activeRunSessionId === session.id
+        ? 'running' as const
+        : timelineCount > 0 ? 'completed' as const : 'unknown' as const,
+      updatedAt: session.recencyAt ?? session.updatedAt,
+    }));
+    if (!items.some((item) => item.id === activeSession.id)) {
+      items.unshift({
+        id: activeSession.id,
+        title: activeSession.title || 'Untitled session',
+        projectName: activeSession.projectName || 'Session',
+        status: activeRunSessionId === activeSession.id ? 'running' : 'unknown',
+        updatedAt: activeSession.updatedAt,
       });
-      if (selectedId === null) return;
-      if (selectedId === newSessionValue) await startNewSession();
-      else if (selectedId !== activeSession.id) await adoptSession(selectedId);
+    }
+    return items;
+  }
+
+  async function loadSessionCenterItems(
+    onInitialItems?: (items: TuiSessionCenterItem[]) => void,
+  ): Promise<TuiSessionCenterItem[]> {
+    const sessions = await listWorkspaceSessions(client, activeSession);
+    const latestRuns = new Map<string, Awaited<ReturnType<typeof client.listAgentRunsBySession>>[number]>();
+    workspaceSessions = sessions;
+    sessionRows = sessions.map(sessionCompletionItem);
+    const initialItems = sessionCenterItemsFromWorkspace(sessions);
+    onInitialItems?.(initialItems);
+    // Session metadata does not carry Agent Run state. Read the newest run for
+    // the most recent sessions in small batches so one full-screen browse does
+    // not create an unbounded burst of Host requests or delay showing the list.
+    const statusSessions = sessions.slice(0, 60);
+    for (let start = 0; start < statusSessions.length; start += 12) {
+      const batch = statusSessions.slice(start, start + 12);
+      await Promise.all(batch.map(async ({ session }) => {
+        try {
+          const latest = (await client.listAgentRunsBySession(session.id, 1))[0];
+          if (latest !== undefined) latestRuns.set(session.id, latest);
+        } catch {
+          // A stale run status must not prevent opening the session browser.
+        }
+      }));
+    }
+    return sessions.map(({ session, timelineCount }) => {
+      const latest = latestRuns.get(session.id);
+      const status = activeRunSessionId === session.id
+        ? 'running'
+        : latest?.status ?? (timelineCount > 0 ? 'completed' : 'unknown');
+      return {
+        id: session.id,
+        title: session.title || 'Untitled session',
+        projectName: session.projectName || 'Session',
+        status,
+        updatedAt: session.recencyAt ?? session.updatedAt,
+      };
+    });
+  }
+
+  /** Open the full-screen home view; an in-flight Host run keeps streaming. */
+  async function openSessionCenter(): Promise<void> {
+    if (sessionTransition || sessionCenterOpen) return;
+    const originalSessionId = activeSession.id;
+    const wasQueuePaused = queue.snapshot.paused;
+    sessionTransition = true;
+    sessionCenterOpen = true;
+    if (!wasQueuePaused) queue.pause();
+    let refreshing = false;
+    let lastItems: TuiSessionCenterItem[] = [];
+    const refreshItems = async (): Promise<void> => {
+      if (!sessionCenterOpen || refreshing) return;
+      const ownerSessionId = activeSession.id;
+      refreshing = true;
+      try {
+        const items = await loadSessionCenterItems((initialItems) => {
+          lastItems = initialItems;
+          if (sessionCenterOpen && activeSession.id === ownerSessionId) {
+            tui.updateSessionCenter(initialItems);
+          }
+        });
+        lastItems = items;
+        if (sessionCenterOpen && activeSession.id === ownerSessionId) tui.updateSessionCenter(items);
+      } catch {
+        // Keep the last list visible; the next interval can refresh it.
+        if (sessionCenterOpen && activeSession.id === ownerSessionId) {
+          tui.updateSessionCenter(lastItems, 'Could not load sessions. Retrying…');
+        }
+      } finally {
+        refreshing = false;
+      }
+    };
+    const selected = tui.openSessionCenter(
+      sessionCenterItemsFromWorkspace(workspaceSessions),
+      originalSessionId,
+    );
+    const refreshTimer = setInterval(() => { void refreshItems(); }, 5_000);
+    refreshTimer.unref?.();
+    void refreshItems();
+    let restoreError: string | null = null;
+    try {
+      const selection = await selected;
+      if (selection === null) {
+        restoreRunFramesIfActive(originalSessionId);
+        return;
+      }
+      const selectedSessionId = selection.kind === 'resume' ? selection.sessionId : null;
+      if (
+        activeRunSessionId !== null
+        && selectedSessionId !== activeRunSessionId
+        && queue.snapshot.pending.length > 0
+      ) {
+        restoreError = 'Return to the running session before switching with queued prompts.';
+        restoreRunFramesIfActive(originalSessionId);
+        return;
+      }
+      if (selection.kind === 'new') {
+        await beginSessionInDirectory(
+          projectDirectory,
+          (session) => `Started a new session (${session.id.slice(0, 8)}).`,
+        );
+      } else if (selection.sessionId === activeSession.id) {
+        restoreRunFramesIfActive(selection.sessionId);
+      } else {
+        const restoredLiveTranscript = await adoptSession(selection.sessionId);
+        if (restoredLiveTranscript) restoreRunFramesIfActive(activeSession.id);
+      }
     } catch (error) {
-      tui.printError(`Could not open session center: ${error instanceof Error ? error.message : String(error)}`);
+      restoreError = `Could not open session center: ${error instanceof Error ? error.message : String(error)}`;
     } finally {
+      clearInterval(refreshTimer);
+      sessionCenterOpen = false;
       sessionTransition = false;
+      if (activeRunSessionId === null) activeRunFrames = null;
+      if (!wasQueuePaused) queue.resume();
+      tui.setBusy(visibleRunBusy());
+      tui.refresh();
+      if (restoreError !== null) tui.printError(restoreError);
     }
   }
 
@@ -1656,6 +1792,7 @@ export async function chatTui(
     notice: (session: HostSessionRecord) => string,
     preserveDraft = false,
   ): Promise<void> {
+    const previousSessionId = activeSession.id;
     const previousModel = activeSession.model;
     activeSession = await createChatSession(client, options, directory);
     // The badge belonged to the session we just left; the new one has to be
@@ -1675,8 +1812,12 @@ export async function chatTui(
     // the source re-reads the inventory; a session boundary is the cheapest
     // honest moment to do it.
     void pluginCandidates.refresh();
-    sessionRows = (await listWorkspaceSessions(client, activeSession)).map(sessionCompletionItem);
-    tui.clearTranscript(preserveDraft);
+    workspaceSessions = await listWorkspaceSessions(client, activeSession);
+    sessionRows = workspaceSessions.map(sessionCompletionItem);
+    tui.activateSessionTranscript(activeSession.id, [], {
+      cacheCurrent: activeRunSessionId === previousSessionId,
+      clearDraft: !preserveDraft,
+    });
     tui.printNotice(notice(activeSession));
   }
 
@@ -1713,12 +1854,13 @@ export async function chatTui(
    * which lands in a session this loop never saw. Extracted so both paths
    * reload the transcript and refresh the session list the same way.
    */
-  async function adoptSession(sessionId: string): Promise<void> {
+  async function adoptSession(sessionId: string): Promise<boolean> {
     const adopted = await client.get(sessionId, { includeAllSessions: true });
     if (adopted === null) {
       tui.printError(`Session not found: ${sessionId}`);
-      return;
+      return false;
     }
+    const previousSessionId = activeSession.id;
     const previousModel = activeSession.model;
     activeSession = await resolvePlaceholderSession(client, adopted);
     // The adopted session has its own turns; the prediction on screen belongs
@@ -1729,10 +1871,16 @@ export async function chatTui(
     // Same reason as `/new`: the adopted session may be the first moment this
     // TUI has talked to a Host whose plugin set differs from the cache.
     void pluginCandidates.refresh();
-    sessionRows = (await listWorkspaceSessions(client, activeSession)).map(sessionCompletionItem);
-    tui.replaceTranscript(await loadSessionMessages(client, adopted.id));
+    workspaceSessions = await listWorkspaceSessions(client, activeSession);
+    sessionRows = workspaceSessions.map(sessionCompletionItem);
+    const restoredLiveTranscript = tui.activateSessionTranscript(
+      adopted.id,
+      await loadSessionMessages(client, adopted.id),
+      { cacheCurrent: activeRunSessionId === previousSessionId },
+    );
     tui.refreshTerminalTitle();
     tui.printNotice(`Switched to "${adopted.title || 'Untitled session'}" (${adopted.id.slice(0, 8)}).`);
+    return restoredLiveTranscript;
   }
 
 /**
@@ -1749,6 +1897,14 @@ export async function chatTui(
    */
   async function reloadTranscript(sessionId: string): Promise<void> {
     tui.replaceTranscript(await loadSessionMessages(client, sessionId));
+  }
+
+  /** Continue a cached live transcript with frames collected while hidden. */
+  function restoreRunFramesIfActive(sessionId: SessionId): void {
+    const hiddenRun = activeRunFrames;
+    if (hiddenRun?.sessionId !== sessionId) return;
+    for (const frame of hiddenRun.frames.slice(hiddenRun.renderedCount)) tui.push(frame);
+    hiddenRun.renderedCount = hiddenRun.frames.length;
   }
 
   async function runTurn(prompt: string, draft: PendingDraft): Promise<TurnOutcome> {
@@ -1800,6 +1956,9 @@ export async function chatTui(
     const streamAbort = new AbortController();
     activeStream = streamAbort;
     const runSessionId = activeSession.id;
+    activeRunSessionId = runSessionId;
+    const runFrames: LegacyFrame[] = [];
+    activeRunFrames = { sessionId: runSessionId, frames: runFrames, renderedCount: 0 };
     const runStartedAt = Date.now();
     let permissionPollTimer: ReturnType<typeof setInterval> | null = null;
     // Plugin mentions are rewritten for every path that starts a turn — a
@@ -1848,7 +2007,7 @@ export async function chatTui(
       });
       if (!start.accepted) {
         if (cancellationRequested || finished) return 'cancelled';
-        if (!finished) tui.printError('Run refused: ' + start.stage + ' - ' + (start.reason ?? ''));
+        if (canPaintRun(runSessionId)) tui.printError('Run refused: ' + start.stage + ' - ' + (start.reason ?? ''));
         return 'failed';
       }
       activeRunId = start.runId;
@@ -1913,19 +2072,31 @@ export async function chatTui(
       for await (const event of watchRunEventsWithResume(client, start.runId, {
         signal: streamAbort.signal,
         onRecovering: () => {
-          if (!finished) tui.printNotice('The Host connection dropped; reconnecting…');
+          if (canPaintRun(runSessionId)) tui.printNotice('The Host connection dropped; reconnecting…');
         },
         onRecovered: () => {
-          if (!finished) tui.printNotice('Reconnected to the Host.');
+          if (canPaintRun(runSessionId)) tui.printNotice('Reconnected to the Host.');
         },
       })) {
         if (finished) return 'cancelled';
         const frame = stream.push(event);
-        if (frame !== null) tui.push(frame);
+        if (frame !== null) {
+          runFrames.push(frame);
+          if (canPaintRun(runSessionId)) {
+            tui.push(frame);
+            if (activeRunFrames?.sessionId === runSessionId) activeRunFrames.renderedCount = runFrames.length;
+          }
+        }
         runState.apply(event);
         const projection = projectRunSessionView(viewState, runState.getSnapshot());
         viewState = projection.state;
-        for (const gap of projection.frames) tui.push(gap);
+        for (const gap of projection.frames) {
+          runFrames.push(gap);
+          if (canPaintRun(runSessionId)) {
+            tui.push(gap);
+            if (activeRunFrames?.sessionId === runSessionId) activeRunFrames.renderedCount = runFrames.length;
+          }
+        }
       }
       if (cancellationRequested || finished) return 'cancelled';
       const record = await client.getAgentRun(start.runId);
@@ -1939,7 +2110,7 @@ export async function chatTui(
         tui.refreshTerminalTitle();
       }
       if (record === null) {
-        tui.printError('Run stream closed without a settled record. Pending drafts are paused.');
+        if (canPaintRun(runSessionId)) tui.printError('Run stream closed without a settled record. Pending drafts are paused.');
         return 'failed';
       }
       if (record.status === 'failed') {
@@ -1949,7 +2120,7 @@ export async function chatTui(
         // the user to the Host log to find out why.
         const terminal = record.terminal;
         const failure = terminal !== null && terminal.status === 'failed' ? terminal.error : undefined;
-        tui.printError(
+        if (canPaintRun(runSessionId)) tui.printError(
           'Run ' + start.runId + ' failed.'
           + (failure === undefined
             ? ''
@@ -1959,14 +2130,14 @@ export async function chatTui(
       }
       if (cancellationRequested || record.status === 'cancelled') return 'cancelled';
       if (record.status !== 'completed') {
-        tui.printError('Run stopped with status ' + record.status + '. Pending drafts are paused.');
+        if (canPaintRun(runSessionId)) tui.printError('Run stopped with status ' + record.status + '. Pending drafts are paused.');
         return 'failed';
       }
       // The turn is over; the worker predicts the next prompt for it.
       void refreshTurnSuggestion(runSessionId);
       return 'completed';
     } catch (error) {
-      if (!finished && !cancellationRequested) {
+      if (!finished && !cancellationRequested && canPaintRun(runSessionId)) {
         tui.printError(error instanceof Error ? error.message : String(error));
       }
       return cancellationRequested ? 'cancelled' : 'failed';
@@ -1980,9 +2151,14 @@ export async function chatTui(
       if (activeRunId !== null) pendingCancellations.delete(activeRunId);
       activeStream = null;
       activeRunId = null;
+      if (activeRunSessionId === runSessionId) activeRunSessionId = null;
+      if (activeSession.id !== runSessionId) tui.invalidateSessionTranscript(runSessionId);
+      if (activeRunFrames?.sessionId === runSessionId && !sessionCenterOpen) activeRunFrames = null;
+      if (!finished) tui.setBusy(visibleRunBusy());
       if (!finished && !cancellationRequested) {
         try {
-          sessionRows = (await listWorkspaceSessions(client, activeSession)).map(sessionCompletionItem);
+          workspaceSessions = await listWorkspaceSessions(client, activeSession);
+          sessionRows = workspaceSessions.map(sessionCompletionItem);
         } catch {
           // Resume can retry the list when the user opens its submenu.
         }
@@ -2037,7 +2213,7 @@ export async function chatTui(
               // command module.
               actions: {
                 interrupt,
-                adoptSession: adoptSession,
+                adoptSession: async (id) => { await adoptSession(id); },
                 startFreshSession: startNewSession,
                 // `/project` crosses a session boundary in a directory this
                 // loop was not launched in, which only the loop can do.
@@ -2147,7 +2323,7 @@ export async function chatTui(
 
   }
 
-  tui.replaceTranscript(await loadSessionMessages(client, sessionId));
+  tui.activateSessionTranscript(sessionId, await loadSessionMessages(client, sessionId));
   // The banner is a preference because `duya chat` gets piped into other
   // things, and a line the user cannot switch off is a line they have to
   // strip. The log path is not: it is how a stuck run gets diagnosed, and it

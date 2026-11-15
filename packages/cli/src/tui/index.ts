@@ -6,7 +6,13 @@
  * Construct `TUIApp` only after `shouldUseTui()` confirms both streams are TTYs.
  */
 
-export { TUIApp, type TUIAppOptions, type TuiChoice } from './TUIApp.js';
+export {
+  TUIApp,
+  type TUIAppOptions,
+  type TuiChoice,
+  type TuiSessionCenterItem,
+  type TuiSessionCenterSelection,
+} from './TUIApp.js';
 export {
   runProviderLogin,
   type ProviderLoginAction,

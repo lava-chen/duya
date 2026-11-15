@@ -84,3 +84,13 @@
 - Duya 的对应入口是空 composer 的 `← sessions`：有文字、任务焦点、busy、弹窗或筛选器时保留原来的按键语义。打开的筛选窗口提供新建会话与当前工作区的历史会话，Esc 回到原会话。
 - 验证：Linux x64 / Node 26.13.0 / npm 11.20.0；`npm run typecheck:cli`、`npm run architecture:check`、`npm run build:cli-dev`、`npm run dev:tui -- --help`、`git diff --check` 均 exit 0。CLI bundle 4.83 MB；架构门禁 3,209 条全为既有 baseline。构建后恢复了自动生成的 Host worker tracked bundle；没有启动真实 TUI 会话，也没有运行测试套件。
 - 交付：本切片随分支更新 draft PR #637；保持未合并。实机验收仍由用户用 `npm run dev:tui` 完成。
+
+## 后续反馈切片（2026-11-15，全屏 Session Center）
+
+- 用户补充：Session Center 应采用 Codex 的全屏会话管理视图：从聊天视图离开时当前 run 继续后台执行；列表同时展示运行中与已完成会话，按今天、昨天、上周、更早分组。
+- 现状：CLI run 在 Host 执行且事件独立持久化；`chatTui` 目前只有一个前台 TranscriptModel 与串行 TurnQueue。Session Center 必须隔离隐藏会话的流式帧，恢复时重新读取持久化消息，不能把后台 run 的输出混入当前会话。
+- 验收：空输入 Left 打开全屏 Session Center；Esc 回当前会话且不中断 run；运行中状态在中心中可更新；会话按时间分组并能恢复所选会话；新建会话入口只在中心中呈现，不占侧栏。
+- 已实现：全屏 Session Center 支持键盘筛选、上下选择、时间分组、创建新会话与恢复会话；进入时立即用启动缓存绘制列表，再异步刷新 run 状态并每 5 秒更新。当前 run 留在 Host/EventStream 中继续执行，Session Center 暂停新队列项的 admission；隐藏期间的帧按 session 缓存，返回运行中的会话时接回原 TranscriptModel 并补放未渲染帧，切换会话不会串流到错误 transcript。
+- 已验证：Linux x64 / Node 26.13.0 / npm 11.20.0；`npm run typecheck:all`、`npm run architecture:check`、`npm run build:cli-dev`、`git diff --check` 均 exit 0。TUI 使用隔离 `DUYA_DATA_ROOT` 实机烟测：Left 打开全屏中心并立即看到当前会话，Esc 返回，`/exit` 正常结束；最终 CLI bundle 4.85 MB。架构门禁 3,209 条均为已有 baseline；全量类型检查的末尾脚本附带 4 个 agent-core 检查，全部通过。
+- 未验证边界：没有配置真实 provider，也没有真实长时间 run，因此后台流式继续、多个会话间恢复内容与真实 run 状态轮询尚未做模型端实测；不同会话仍共用一个串行 TurnQueue，在一个会话运行时可浏览其他会话，但暂不能同时启动第二个 TUI run。
+- 交付：改动保留在 `codex/tui-agents-context-plugin` 的现有 draft PR #637，不合并。临时运行命令：`cd /home/lavachen/.codex/worktrees/tui-agents-context-plugin/duya && npm run dev:tui`；bundle 由当前 worktree 构建，不改写全局 CLI。
