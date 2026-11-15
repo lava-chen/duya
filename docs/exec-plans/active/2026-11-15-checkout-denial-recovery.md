@@ -25,7 +25,7 @@
 - [x] 核对最近两条会话日志及 Plan 621 的 owner gate 约束。
 - [x] 更新拒绝诊断和 system coding 恢复指引。
 - [x] 执行类型与架构门禁并重建 Host worker bundle。
-- [ ] 提交、确认 bundle freshness，并创建 draft PR。
+- [x] 提交、确认 bundle freshness，并创建 draft PR。
 
 ## 发现与决策
 
@@ -42,10 +42,12 @@
 | dirty worktree / base `53c9537ba` | Linux / 当前 Node | `npm run build:packages -- --target @duya/host` | 0 | 15 个依赖包及 Host 构建通过；worker bundle 已更新 |
 | dirty worktree / base `53c9537ba` | Linux / 当前 Node | `npm run bundle:verify`（提交前） | 1（预期） | 检查到本次源文件仍是未提交修改；提交源与 bundle 后再运行 freshness 检查 |
 | dirty worktree / base `53c9537ba` | Linux / 当前 Node | `git diff --check` | 0 | 无空白错误；只保留提示词与 worker 入口的 bundle 变更。为避免共享依赖 junction 造成 metafile 路径噪声，保留既有 metafile 输入路径；本次未改依赖闭包 |
+| commit `68f94f24b291bc244a5612ae7d914b20460016fb` | Linux / 当前 Node | `npm run bundle:verify`（提交后） | 0 | FRESH；0/1121 inputs changed |
+| PR #638 | GitHub `master` | Draft PR 创建 | 成功 | <https://github.com/lava-chen/duya/pull/638>；未合并 |
 
 ## 接续 / 结果
 
-实现和验证已完成，提交、post-commit bundle freshness 与 PR 未完成。未提交路径：本计划、计划入口、两个 Host 源文件和 worker bundle（system coding 资产与 worker-entry）。外部副作用：分配了独立 managed worktree 并创建了本地 workspace overlay。未合并、未发布。
+实现、验证和 draft PR 已完成。提交：`68f94f24b291bc244a5612ae7d914b20460016fb`；PR：[ #638 ](https://github.com/lava-chen/duya/pull/638)。当前待 review/CI，未合并、未发布。计划记录仍有本次 PR 状态更新待提交。外部副作用：分配了独立 managed worktree 并创建了本地 workspace overlay。
 
 回收：PR 集成前保留 managed worktree。
-下一步：提交本次文件，运行 `npm run bundle:verify` 确认 freshness，再推送分支并创建 draft PR。
+下一步：等待 PR #638 的 review 与必需 CI；按评审反馈更新计划记录并重验。授权集成前保留该 managed worktree。
