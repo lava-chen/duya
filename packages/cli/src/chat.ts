@@ -1283,6 +1283,7 @@ export async function chatTui(
     // is still enough to tell tabs apart.
     sessionTitle: () => activeSession.title || activeSession.id.slice(0, 8),
     workbenchSessionId: () => activeSession.id,
+    onOpenSessionCenter: openSessionCenter,
     onWorkbenchCommand: (command) => handleLine(command, [], true),
     sidebarWidth: effectivePreferences.sidebarWidth,
     onSidebarWidthChange: (columns) => client.setSetting(TUI_SIDEBAR_WIDTH_SETTING, String(columns)),
@@ -1603,6 +1604,39 @@ export async function chatTui(
     tui.replaceTranscript(await loadSessionMessages(client, selectedId));
     tui.refreshTerminalTitle();
     tui.printNotice(`Resumed "${selected.title || 'Untitled session'}".`);
+  }
+
+  /** The empty-composer home screen: create a session or return to a recent one. */
+  async function openSessionCenter(): Promise<void> {
+    if (sessionTransition || refuseSessionSwitch('opening the session center')) return;
+    sessionTransition = true;
+    try {
+      const sessions = await listWorkspaceSessions(client, activeSession);
+      sessionRows = sessions.map(sessionCompletionItem);
+      const newSessionValue = '__duya_new_session__';
+      const choices: TuiChoice[] = [
+        {
+          label: '＋ New session',
+          value: newSessionValue,
+          description: projectDirectory,
+        },
+        ...sessions.map((item) => ({
+          label: `${item.session.id === activeSession.id ? '● Current · ' : ''}${sessionLabel(item)}`,
+          value: item.session.id,
+          description: item.session.id,
+        })),
+      ];
+      const selectedId = await tui.chooseFiltered('Session center', choices, {
+        footer: 'type to filter · ↑↓ choose · Enter open · Esc return',
+      });
+      if (selectedId === null) return;
+      if (selectedId === newSessionValue) await startNewSession();
+      else if (selectedId !== activeSession.id) await adoptSession(selectedId);
+    } catch (error) {
+      tui.printError(`Could not open session center: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      sessionTransition = false;
+    }
   }
 
   /** Refuse a session boundary while a turn owns the session. */

@@ -77,3 +77,10 @@
 | `b41e012a1e3eb73be231e0890eb40a2bcb138226` → 本轮 6 个源文件与计划记录 dirty | Linux x64 / Node 26.13.0 / npm 11.20.0 | `npm run typecheck:all`; `npm run architecture:check`; `npm run build:cli-dev`; `npm run dev:tui -- --help`; `git diff --check` | 全部 exit 0；CLI bundle 4.83 MB；无新增类型或架构问题 | 架构门禁 3,209 项既有 baseline；typecheck 脚本内嵌的 4 个 agent-core 检查通过；构建生成的 Host worker tracked bundle 已恢复 |
 
 - 实机边界：没有在本轮启动真实 TUI provider 会话或运行中的子代理，因此无法从这里证明终端交互里的流式内容；`--help` 只确认构建产物可启动并解析命令。
+
+## 后续反馈切片（2026-11-15，左箭头与 Session center）
+
+- Codex TUI `codex-rs/tui/src/bottom_pane/chat_composer/agents_navigation.rs` 将普通 Left 用作 Agents command center 导航，仅当输入为空、composer 可编辑、无 popup 且 Left 仍是 move-left 默认键位；有文字时不抢走编辑按键。App 在 read-only conversation 上也用 Left 进入 command center。
+- Duya 的对应入口是空 composer 的 `← sessions`：有文字、任务焦点、busy、弹窗或筛选器时保留原来的按键语义。打开的筛选窗口提供新建会话与当前工作区的历史会话，Esc 回到原会话。
+- 验证：Linux x64 / Node 26.13.0 / npm 11.20.0；`npm run typecheck:cli`、`npm run architecture:check`、`npm run build:cli-dev`、`npm run dev:tui -- --help`、`git diff --check` 均 exit 0。CLI bundle 4.83 MB；架构门禁 3,209 条全为既有 baseline。构建后恢复了自动生成的 Host worker tracked bundle；没有启动真实 TUI 会话，也没有运行测试套件。
+- 交付：本切片随分支更新 draft PR #637；保持未合并。实机验收仍由用户用 `npm run dev:tui` 完成。

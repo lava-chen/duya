@@ -405,6 +405,8 @@ export interface TUIAppOptions {
   readonly echoSubmitted?: boolean;
   /** Trusted sidebar controls enter the same slash dispatcher without consuming the draft. */
   readonly onWorkbenchCommand?: (command: string) => void | Promise<void>;
+  /** Open the session center when Left is pressed on an empty composer. */
+  readonly onOpenSessionCenter?: () => void | Promise<void>;
   readonly workbenchSessionId?: () => string;
   readonly sidebarWidth?: number;
   readonly onSidebarWidthChange?: (columns: number) => void | Promise<void>;
@@ -2780,8 +2782,8 @@ export class TUIApp {
       : this.focus === 'tasks'
         ? `tasks ${taskSelection}/${taskRows.length} / arrows select / Enter open/watch / Esc back`
         : this.editor.isEmpty && this.hasTurnSuggestion()
-        ? 'Enter adopt / Tab history / F6 tasks'
-        : `${this.editor.isEmpty ? 'Tab history' : 'Tab indent'} / F6 tasks / arrows prompts`;
+        ? 'Enter adopt / ← sessions / Tab history / F6 tasks'
+        : `${this.editor.isEmpty ? '← sessions / Tab history' : 'Tab indent'} / F6 tasks / arrows prompts`;
     // The status line is chrome, so in inline mode it is a row inside the live
     // area — and a row that wraps moves every row below it, which is how an
     // inline TUI's geometry goes wrong on a narrow terminal. `?7l` is disabled
@@ -2805,8 +2807,8 @@ export class TUIApp {
         : this.completion.isOpen ? context
         : busy ? 'Enter steer · Tab queue · Esc stop'
         : this.editor.isEmpty && this.hasTurnSuggestion()
-        ? 'Enter adopt · / commands · F1 help'
-        : '/ commands · F1 help';
+        ? 'Enter adopt · ← sessions · / commands · F1 help'
+        : this.editor.isEmpty ? '← sessions · / commands · F1 help' : '/ commands · F1 help';
       this.inlineStatusLines = this.footerLines(width, hint + queueSegment);
       return;
     }
@@ -3794,6 +3796,19 @@ export class TUIApp {
     return this.swallowForWindow();
   }
 
+  /** Mirror Codex's empty-composer navigation without stealing text editing. */
+  private canOpenSessionCenter(): boolean {
+    return this.options.onOpenSessionCenter !== undefined
+      && this.editor.isEmpty
+      && this.focus === 'input'
+      && this.interactivePrompt === null
+      && !this.completion.isOpen
+      && !this.windowMgr.isActive
+      && !this.overlay.isActive
+      && (this.options.isBusy?.() ?? this.busy) === false
+      && this.options.canSubmit?.() !== false;
+  }
+
   /**
    * Bind one rebindable action from the effective action table.
    *
@@ -4418,6 +4433,9 @@ exportHistory(): string[] {
       if (this.interactivePrompt?.kind === 'text') this.movePromptCursor(this.interactivePrompt.cursor - 1);
       else if (this.routeWindowArrow('left')) return;
       else if (this.interactivePrompt === null && this.focus === 'tasks') this.setTaskGroupAtSelection(true);
+      else if (this.canOpenSessionCenter()) {
+        void this.options.onOpenSessionCenter?.();
+      }
       else if (this.interactivePrompt === null) {
         this.editor.moveLeft();
         if (this.focus === 'input') this.refreshInputCompletion();
