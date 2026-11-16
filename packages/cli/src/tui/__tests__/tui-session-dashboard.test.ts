@@ -3,23 +3,24 @@ import { PassThrough, Writable } from 'node:stream';
 import { TUIApp } from '../TUIApp.js';
 import { detectTerminalEnvironment } from '../terminal-env.js';
 
-function harness() {
+function harness(inline = true) {
   const chunks: Buffer[] = [];
   const output = new Writable({ write(chunk, _encoding, callback) { chunks.push(Buffer.from(chunk)); callback(); } });
   Object.assign(output, { columns: 80, rows: 24, isTTY: true });
   const input = new PassThrough();
-  const submitted: string[] = [];
+  const commands: string[] = [];
+  const prompts: string[] = [];
   const opened: string[] = [];
   const app = new TUIApp({
     output,
     input,
-    inline: true,
+    inline,
     terminalEnv: detectTerminalEnvironment({ TERM_PROGRAM: 'WezTerm' }),
-    onSubmit: () => {},
-    onSessionDashboardSubmit: (prompt) => { submitted.push(prompt); },
+    onSubmit: (text) => { commands.push(text); },
+    onSessionDashboardSubmit: (prompt) => { prompts.push(prompt); },
     onSessionDashboardOpen: (id) => { opened.push(id); },
   });
-  return { app, input, chunks, submitted, opened };
+  return { app, input, chunks, commands, prompts, opened };
 }
 
 const settle = async () => new Promise((resolve) => setTimeout(resolve, 150));
@@ -44,7 +45,8 @@ describe('sessions dashboard', () => {
     expect(rendered).toContain('Needs input');
     expect(rendered).toContain('Working');
     expect(rendered).toContain('Completed');
-    expect(h.submitted).toEqual(['start another task']);
+    expect(h.prompts).toEqual(['start another task']);
+    expect(h.commands).toEqual([]);
     expect(h.app.renderState.focus).toBe('sessions');
   });
 
@@ -68,8 +70,9 @@ describe('sessions dashboard', () => {
     h.app.openSessionsDashboard();
     await settle();
     const pointer = (h.app as unknown as { pointer: { targetAt(x: number, y: number): { id: string } | undefined } }).pointer;
-    const y = Array.from({ length: 24 }, (_, row) => row).find((row) =>
-      pointer.targetAt(4, row)?.id === 'session-dashboard:session-click');
+    const y = Array.from({ length: 24 }, (_, row) =>
+      pointer.targetAt(4, row)?.id === 'session-dashboard:session-click' ? row : undefined)
+      .find((row) => row !== undefined);
     expect(y).toBeDefined();
     const row = y ?? -1;
     h.input.write(`\x1b[<0;5;${row + 1}M\x1b[<0;5;${row + 1}m`);
@@ -77,5 +80,57 @@ describe('sessions dashboard', () => {
     h.app.stop();
 
     expect(h.opened).toEqual(['session-click']);
+  });
+
+  it('renders in full-screen mode, which is the default display mode', async () => {
+    const h = harness(false);
+    h.app.setSessionDashboardEntries([
+      { id: 's1', title: 'Needs review', status: 'needs_input' },
+      { id: 's2', title: 'Building feature', status: 'working' },
+    ]);
+    h.app.openSessionsDashboard();
+    h.app.start();
+    await settle();
+    h.app.stop();
+
+    const rendered = Buffer.concat(h.chunks).toString('utf8');
+    expect(rendered).toContain('Needs input');
+    expect(rendered).toContain('Needs review');
+    expect(rendered).toContain('Building feature');
+  });
+
+  it('opens a session row on a mouse click in full-screen mode', async () => {
+    const h = harness(false);
+    h.app.setSessionDashboardEntries([{ id: 'session-click', title: 'Clickable session', status: 'working' }]);
+    h.app.start();
+    h.app.openSessionsDashboard();
+    await settle();
+    const pointer = (h.app as unknown as { pointer: { targetAt(x: number, y: number): { id: string } | undefined } }).pointer;
+    const y = Array.from({ length: 24 }, (_, row) =>
+      pointer.targetAt(4, row)?.id === 'session-dashboard:session-click' ? row : undefined)
+      .find((row) => row !== undefined);
+    expect(y).toBeDefined();
+    const row = y ?? -1;
+    h.input.write(`\x1b[<0;5;${row + 1}M\x1b[<0;5;${row + 1}m`);
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    h.app.stop();
+
+    expect(h.opened).toEqual(['session-click']);
+  });
+
+  it('keeps slash commands on the command path while the dashboard is open', async () => {
+    const h = harness();
+    h.app.setSessionDashboardEntries([{ id: 's1', title: 'Working', status: 'working' }]);
+    h.app.openSessionsDashboard();
+    h.app.start();
+    await settle();
+    h.app.insertPrompt('/model');
+    h.input.write('\r');
+    await settle();
+    h.app.stop();
+
+    // A command line is a command, not a prompt for a background session.
+    expect(h.commands).toEqual(['/model']);
+    expect(h.prompts).toEqual([]);
   });
 });

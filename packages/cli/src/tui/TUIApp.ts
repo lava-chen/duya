@@ -1904,7 +1904,7 @@ export class TUIApp {
     // that sits above the composer. Its column is the editor's own column plus
     // the prompt marker's width, because that is what is actually printed.
     const caret =
-      this.focus === 'input' && !this.dockPanelActive()
+      (this.focus === 'input' || this.focus === 'sessions') && !this.dockPanelActive()
         ? {
             row:
               tail.length +
@@ -1923,26 +1923,18 @@ export class TUIApp {
     if (this.focus === 'sessions' && this.mouseReporting && this.mouseMode === 'all') {
       const hits: HitRegion[] = [];
       const firstDashboardRow = this.terminalSize().rows - chrome.length + tail.length;
-      let dashboardRow = 1; // heading line
-      for (const status of ['needs_input', 'working', 'completed'] as const) {
-        const entries = this.sessionDashboardEntries.filter((entry) => entry.status === status);
-        if (entries.length === 0) continue;
-        dashboardRow += 1; // group heading
-        for (const entry of entries) {
-          const row = firstDashboardRow + dashboardRow;
-          hits.push({
-            id: `session-dashboard:${entry.id}`,
-            row,
-            column: 0,
-            width: this.terminalSize().columns,
-            height: 1,
-            activate: () => {
-              this.selectedSessionDashboardId = entry.id;
-              void this.options.onSessionDashboardOpen?.(entry.id);
-            },
-          });
-          dashboardRow += 1;
-        }
+      for (const entry of this.sessionDashboardRows().entries) {
+        hits.push({
+          id: `session-dashboard:${entry.id}`,
+          row: firstDashboardRow + entry.row,
+          column: 0,
+          width: this.terminalSize().columns,
+          height: 1,
+          activate: () => {
+            this.selectedSessionDashboardId = entry.id;
+            void this.options.onSessionDashboardOpen?.(entry.id);
+          },
+        });
       }
       this.pointer.commit(hits);
     } else if (this.focus !== 'sessions') this.pointer.clear();
@@ -2028,7 +2020,7 @@ export class TUIApp {
    * a permanently docked panel.
    */
   private taskViewLines(): string[] {
-    if (this.focus === 'sessions') return this.sessionDashboardLines();
+    if (this.focus === 'sessions') return [...this.sessionDashboardLines()];
     if (this.focus !== 'tasks' || this.inlineSurface === null) return [];
     const width = Math.max(1, this.terminalSize().columns - 1);
     const rows = this.backgroundTaskRows();
@@ -2064,24 +2056,41 @@ export class TUIApp {
     return lines;
   }
 
-  private sessionDashboardLines(): string[] {
+  /**
+   * The dashboard body: a heading, one group per state, and the rows in them.
+   *
+   * The row each entry lands on is returned next to the lines, because the
+   * mouse has to address the row the user SEES: that row is a line of this
+   * list, not a line of the session list, and the two drift apart as soon as a
+   * group heading or an empty state takes a row of its own.
+   */
+  private sessionDashboardRows(): {
+    readonly lines: readonly string[];
+    readonly entries: readonly { readonly id: string; readonly row: number }[];
+  } {
     const width = Math.max(1, this.terminalSize().columns - 1);
-    const lines = [escapeTags(compactActivity('Sessions · ↑↓ select · Enter open · type below to start a separate session · Esc close', width))];
+    const lines: string[] = [escapeTags(compactActivity('Sessions · ↑↓ select · Enter open · type below to start a separate session · Esc close', width))];
+    const entries: { id: string; row: number }[] = [];
     const groups: readonly [SessionDashboardEntry['status'], string][] = [
       ['needs_input', 'Needs input'], ['working', 'Working'], ['completed', 'Completed'],
     ];
     for (const [status, label] of groups) {
-      const entries = this.sessionDashboardEntries.filter((entry) => entry.status === status);
-      if (entries.length === 0) continue;
+      const group = this.sessionDashboardEntries.filter((entry) => entry.status === status);
+      if (group.length === 0) continue;
       lines.push(escapeTags(compactActivity(`  ${label}`, width)));
-      for (const entry of entries) {
+      for (const entry of group) {
         const selected = entry.id === this.selectedSessionDashboardId;
         const marker = selected ? '›' : ' ';
         lines.push(escapeTags(compactActivity(`  ${marker} ${entry.title}${entry.detail ? `  ${entry.detail}` : ''}`, width)));
+        entries.push({ id: entry.id, row: lines.length - 1 });
       }
     }
     if (this.sessionDashboardEntries.length === 0) lines.push(escapeTags(compactActivity('  No sessions yet. Type below to start one.', width)));
-    return lines;
+    return { lines, entries };
+  }
+
+  private sessionDashboardLines(): readonly string[] {
+    return this.sessionDashboardRows().lines;
   }
 
   /**
@@ -2308,6 +2317,20 @@ export class TUIApp {
       return;
     }
     this.sidebarLayout = null;
+    if (this.focus === 'sessions') {
+      // The dashboard is a view of its own, and in full-screen mode the
+      // transcript region is the only one big enough to hold it. The
+      // conversation gives way while the dashboard is open and comes back when
+      // it closes; the composer stays, because the dashboard's own composer is
+      // how a new session is started.
+      const { lines } = this.sessionDashboardRows();
+      const visible = lines.slice(0, this.visibleTranscriptRows());
+      this.fullScreen.update('transcript', { lines: visible, borderColor: 'cyan' });
+      // The dashboard is not a transcript: nothing here is selectable text, and
+      // the selection helpers read this list.
+      this.lastTranscriptRows = [];
+      return;
+    }
     let content: UIComponent = pane;
     // The scrollbar is one HStack column, not an overlay: the pane rewraps by
     // exactly one column while the bar is up, and nothing it paints is hidden
@@ -2727,7 +2750,9 @@ export class TUIApp {
   }
 
   private placeCursor(): void {
-    if (this.focus !== 'input' || this.dockPanelActive()) {
+    // The sessions dashboard keeps the composer: its own text starts a new
+    // background session, so the caret has to stay where the user types.
+    if ((this.focus !== 'input' && this.focus !== 'sessions') || this.dockPanelActive()) {
       this.fullScreen.setCaret(null);
       return;
     }
@@ -5060,7 +5085,7 @@ exportHistory(): string[] {
     // submitted text; edited-away or undone chips drop their attachment here.
     const attachments = this.takeDraftAttachments(text);
     this.refreshCompletion();
-    if (this.focus === 'sessions') {
+    if (this.focus === 'sessions' && !isControllerLine(text)) {
       if (attachments.length > 0) this.printNotice('Attachments are not supported for a new background session yet.');
       void this.options.onSessionDashboardSubmit?.(text);
       return;
@@ -5722,6 +5747,32 @@ exportHistory(): string[] {
           target.activate();
           this.scheduler.requestImmediate();
         }, revision);
+      this.pointer.commit(hits);
+      return;
+    }
+    if (this.focus === 'sessions') {
+      // The dashboard is painted into the transcript region, so its rows are
+      // addressed the same way the transcript's own rows are. The rows are
+      // pushed directly rather than through `add`, because that helper waits
+      // for a laid-out region: the region is measured before the first frame
+      // is composed, and a dashboard nobody can click is not a dashboard.
+      const geometry = this.fullScreen.measure('transcript');
+      if (geometry !== null) {
+        for (const entry of this.sessionDashboardRows().entries) {
+          hits.push({
+            id: `session-dashboard:${entry.id}`,
+            row: geometry.top + geometry.innerTop + entry.row,
+            column: geometry.left + geometry.innerLeft,
+            width: Math.max(0, geometry.width - geometry.innerWidth),
+            height: 1,
+            activate: () => {
+              this.selectedSessionDashboardId = entry.id;
+              void this.options.onSessionDashboardOpen?.(entry.id);
+              this.scheduler.requestImmediate();
+            },
+          });
+        }
+      }
       this.pointer.commit(hits);
       return;
     }
