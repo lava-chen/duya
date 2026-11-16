@@ -577,6 +577,10 @@ export interface TUIAppOptions {
   readonly onSubagentTranscriptLoad?: (task: BackgroundTaskView) => Promise<readonly TranscriptMessage[]>;
   /** Stop a running child by its parent-session task identity. */
   readonly onSubagentStop?: (task: BackgroundTaskView) => Promise<boolean>;
+  /** Open a session from the sessions dashboard. */
+  readonly onSessionDashboardOpen?: (sessionId: string) => void | Promise<void>;
+  /** Start a separate session from the sessions dashboard composer. */
+  readonly onSessionDashboardSubmit?: (prompt: string) => void | Promise<void>;
   /**
    * The permission mode in force, read fresh on every repaint.
    *
@@ -597,6 +601,13 @@ export interface TUIAppOptions {
    * cycling key asks for a mode and the loop writes it.
    */
   readonly onPermissionCycle?: (mode: TuiPermissionMode) => void;
+}
+
+export interface SessionDashboardEntry {
+  readonly id: string;
+  readonly title: string;
+  readonly status: 'needs_input' | 'working' | 'completed';
+  readonly detail?: string;
 }
 
 /**
@@ -757,7 +768,9 @@ export class TUIApp {
    * this one is a ceiling the user sets.
    */
   private maxInputRows: number;
-  private focus: 'input' | 'tasks' = 'input';
+  private focus: 'input' | 'tasks' | 'sessions' = 'input';
+  private sessionDashboardEntries: readonly SessionDashboardEntry[] = [];
+  private selectedSessionDashboardId: string | null = null;
   /** Selected row in the task view, over `backgroundTaskRows()`. */
   private selectedTaskRow = -1;
   /**
@@ -1155,7 +1168,7 @@ export class TUIApp {
   /** Leave the modal buffer without destroying the shared input Program. */
   private suspendAltScreen(): void {
     this.fullScreen.leave();
-    this.setMouseReporting(false);
+    this.setMouseReporting(this.focus === 'sessions' && this.mouseMode === 'all');
     this.pointer.clear();
     this.inlineSurface?.invalidate();
   }
@@ -1338,6 +1351,50 @@ export class TUIApp {
     // request for a current reading while the timer is quiet.
     this.options.onBackgroundTasksRefresh?.();
     this.scheduler.requestImmediate();
+  }
+
+  /** Replace the data shown by the sessions dashboard. */
+  setSessionDashboardEntries(entries: readonly SessionDashboardEntry[]): void {
+    this.sessionDashboardEntries = entries;
+    if (!entries.some((entry) => entry.id === this.selectedSessionDashboardId)) {
+      this.selectedSessionDashboardId = entries[0]?.id ?? null;
+    }
+    this.scheduler.requestImmediate();
+  }
+
+  /** Open the inline sessions dashboard; its composer starts a separate run. */
+  openSessionsDashboard(): void {
+    if (this.disposed) return;
+    this.focus = 'sessions';
+    if (this.inlineSurface !== null) this.setMouseReporting(this.mouseMode !== 'off');
+    this.completion.close();
+    this.selectedSessionDashboardId ??= this.sessionDashboardEntries[0]?.id ?? null;
+    this.scheduler.requestImmediate();
+  }
+
+  isSessionsDashboardOpen(): boolean {
+    return this.focus === 'sessions';
+  }
+
+  closeSessionsDashboard(): void {
+    if (this.focus !== 'sessions') return;
+    this.focus = 'input';
+    if (this.inlineSurface !== null) this.setMouseReporting(false);
+    this.pointer.clear();
+    this.scheduler.requestImmediate();
+  }
+
+  private moveSessionDashboardSelection(delta: number): void {
+    if (this.sessionDashboardEntries.length === 0) return;
+    const current = this.sessionDashboardEntries.findIndex((entry) => entry.id === this.selectedSessionDashboardId);
+    const next = Math.max(0, Math.min(this.sessionDashboardEntries.length - 1, (current < 0 ? 0 : current) + delta));
+    this.selectedSessionDashboardId = this.sessionDashboardEntries[next]?.id ?? null;
+    this.scheduler.requestImmediate();
+  }
+
+  private openSelectedDashboardSession(): void {
+    const entry = this.sessionDashboardEntries.find((item) => item.id === this.selectedSessionDashboardId);
+    if (entry !== undefined) void this.options.onSessionDashboardOpen?.(entry.id);
   }
 
   /** The task id a row belongs to, or null for a group heading. */
@@ -1847,7 +1904,7 @@ export class TUIApp {
     // that sits above the composer. Its column is the editor's own column plus
     // the prompt marker's width, because that is what is actually printed.
     const caret =
-      this.focus === 'input' && !this.dockPanelActive()
+      (this.focus === 'input' || this.focus === 'sessions') && !this.dockPanelActive()
         ? {
             row:
               tail.length +
@@ -1863,6 +1920,24 @@ export class TUIApp {
       chrome,
       caret,
     });
+    if (this.focus === 'sessions' && this.mouseReporting && this.mouseMode === 'all') {
+      const hits: HitRegion[] = [];
+      const firstDashboardRow = this.terminalSize().rows - chrome.length + tail.length;
+      for (const entry of this.sessionDashboardRows().entries) {
+        hits.push({
+          id: `session-dashboard:${entry.id}`,
+          row: firstDashboardRow + entry.row,
+          column: 0,
+          width: this.terminalSize().columns,
+          height: 1,
+          activate: () => {
+            this.selectedSessionDashboardId = entry.id;
+            void this.options.onSessionDashboardOpen?.(entry.id);
+          },
+        });
+      }
+      this.pointer.commit(hits);
+    } else if (this.focus !== 'sessions') this.pointer.clear();
   }
 
   /** True when something needs the full-screen takeover. */
@@ -1945,6 +2020,7 @@ export class TUIApp {
    * a permanently docked panel.
    */
   private taskViewLines(): string[] {
+    if (this.focus === 'sessions') return [...this.sessionDashboardLines()];
     if (this.focus !== 'tasks' || this.inlineSurface === null) return [];
     const width = Math.max(1, this.terminalSize().columns - 1);
     const rows = this.backgroundTaskRows();
@@ -1978,6 +2054,43 @@ export class TUIApp {
     }
     lines.push(...watchRows);
     return lines;
+  }
+
+  /**
+   * The dashboard body: a heading, one group per state, and the rows in them.
+   *
+   * The row each entry lands on is returned next to the lines, because the
+   * mouse has to address the row the user SEES: that row is a line of this
+   * list, not a line of the session list, and the two drift apart as soon as a
+   * group heading or an empty state takes a row of its own.
+   */
+  private sessionDashboardRows(): {
+    readonly lines: readonly string[];
+    readonly entries: readonly { readonly id: string; readonly row: number }[];
+  } {
+    const width = Math.max(1, this.terminalSize().columns - 1);
+    const lines: string[] = [escapeTags(compactActivity('Sessions · ↑↓ select · Enter open · type below to start a separate session · Esc close', width))];
+    const entries: { id: string; row: number }[] = [];
+    const groups: readonly [SessionDashboardEntry['status'], string][] = [
+      ['needs_input', 'Needs input'], ['working', 'Working'], ['completed', 'Completed'],
+    ];
+    for (const [status, label] of groups) {
+      const group = this.sessionDashboardEntries.filter((entry) => entry.status === status);
+      if (group.length === 0) continue;
+      lines.push(escapeTags(compactActivity(`  ${label}`, width)));
+      for (const entry of group) {
+        const selected = entry.id === this.selectedSessionDashboardId;
+        const marker = selected ? '›' : ' ';
+        lines.push(escapeTags(compactActivity(`  ${marker} ${entry.title}${entry.detail ? `  ${entry.detail}` : ''}`, width)));
+        entries.push({ id: entry.id, row: lines.length - 1 });
+      }
+    }
+    if (this.sessionDashboardEntries.length === 0) lines.push(escapeTags(compactActivity('  No sessions yet. Type below to start one.', width)));
+    return { lines, entries };
+  }
+
+  private sessionDashboardLines(): readonly string[] {
+    return this.sessionDashboardRows().lines;
   }
 
   /**
@@ -2204,6 +2317,20 @@ export class TUIApp {
       return;
     }
     this.sidebarLayout = null;
+    if (this.focus === 'sessions') {
+      // The dashboard is a view of its own, and in full-screen mode the
+      // transcript region is the only one big enough to hold it. The
+      // conversation gives way while the dashboard is open and comes back when
+      // it closes; the composer stays, because the dashboard's own composer is
+      // how a new session is started.
+      const { lines } = this.sessionDashboardRows();
+      const visible = lines.slice(0, this.visibleTranscriptRows());
+      this.fullScreen.update('transcript', { lines: visible, borderColor: 'cyan' });
+      // The dashboard is not a transcript: nothing here is selectable text, and
+      // the selection helpers read this list.
+      this.lastTranscriptRows = [];
+      return;
+    }
     let content: UIComponent = pane;
     // The scrollbar is one HStack column, not an overlay: the pane rewraps by
     // exactly one column while the bar is up, and nothing it paints is hidden
@@ -2623,7 +2750,9 @@ export class TUIApp {
   }
 
   private placeCursor(): void {
-    if (this.focus !== 'input' || this.dockPanelActive()) {
+    // The sessions dashboard keeps the composer: its own text starts a new
+    // background session, so the caret has to stay where the user types.
+    if ((this.focus !== 'input' && this.focus !== 'sessions') || this.dockPanelActive()) {
       this.fullScreen.setCaret(null);
       return;
     }
@@ -2772,6 +2901,8 @@ export class TUIApp {
         ? 'Enter steer · Tab queue · Esc stop'
       : this.focus === 'tasks'
         ? `tasks ${taskSelection}/${taskRows.length} / arrows select / Enter open/watch / Esc back`
+        : this.focus === 'sessions'
+          ? 'Sessions / ↑↓ select · Enter open · type to start a new session · Esc close'
         : this.editor.isEmpty && this.hasTurnSuggestion()
         ? 'Enter adopt / Tab history / F6 tasks'
         : `${this.editor.isEmpty ? 'Tab history' : 'Tab indent'} / F6 tasks / arrows prompts`;
@@ -4023,7 +4154,7 @@ exportHistory(): string[] {
   get renderState(): {
     expanded: boolean;
     follow: boolean;
-    focus: 'input' | 'tasks';
+    focus: 'input' | 'tasks' | 'sessions';
     selectedTaskRow: number;
   } {
     return {
@@ -4576,14 +4707,19 @@ exportHistory(): string[] {
     const fallbacks: Record<CompletionKey, () => void> = {
       up: () => {
         if (this.focus === 'tasks') this.moveTaskSelection(-1);
+        else if (this.focus === 'sessions' && this.editor.isEmpty) this.moveSessionDashboardSelection(-1);
         else this.editor.historyPrevious();
       },
       down: () => {
         if (this.focus === 'tasks') this.moveTaskSelection(1);
+        else if (this.focus === 'sessions' && this.editor.isEmpty) this.moveSessionDashboardSelection(1);
         else this.editor.historyNext();
       },
       tab: () => {
-        if (this.focus === 'tasks' || this.editor.isEmpty) this.toggleFocus();
+        // An empty composer in the dashboard means "leave the dashboard"; a
+        // composer with text keeps Tab as the editor's own indent.
+        if (this.focus === 'sessions' && this.editor.isEmpty) this.closeSessionsDashboard();
+        else if (this.focus === 'tasks' || this.editor.isEmpty) this.toggleFocus();
         else if (this.isBusyNow() && this.options.onQueueDraft !== undefined && !isControllerLine(this.editor.text)) {
           // Tab queues only while a turn runs; otherwise it stays the editor's
           // indent, and the completion popup above still owns its accept.
@@ -4599,6 +4735,7 @@ exportHistory(): string[] {
       escape: () => {
         // One step back, not all the way out: panel → list → input.
         if (this.focus === 'tasks') this.backOutOfTaskView();
+        else if (this.focus === 'sessions') this.closeSessionsDashboard();
         else if (this.watchedSubagentId !== null && this.editor.isEmpty) {
           this.watchedSubagentId = null;
           this.follow = true;
@@ -4629,6 +4766,7 @@ exportHistory(): string[] {
       },
       return: () => {
         if (this.focus === 'tasks') this.openSelectedTask();
+        else if (this.focus === 'sessions' && this.editor.isEmpty) this.openSelectedDashboardSession();
         else this.onEnter();
       },
     };
@@ -4950,6 +5088,11 @@ exportHistory(): string[] {
     // submitted text; edited-away or undone chips drop their attachment here.
     const attachments = this.takeDraftAttachments(text);
     this.refreshCompletion();
+    if (this.focus === 'sessions' && !isControllerLine(text)) {
+      if (attachments.length > 0) this.printNotice('Attachments are not supported for a new background session yet.');
+      void this.options.onSessionDashboardSubmit?.(text);
+      return;
+    }
     if (this.options.echoSubmitted !== false) {
       this.model.addUser(text);
       this.noteTranscriptMutation();
@@ -5607,6 +5750,32 @@ exportHistory(): string[] {
           target.activate();
           this.scheduler.requestImmediate();
         }, revision);
+      this.pointer.commit(hits);
+      return;
+    }
+    if (this.focus === 'sessions') {
+      // The dashboard is painted into the transcript region, so its rows are
+      // addressed the same way the transcript's own rows are. The rows are
+      // pushed directly rather than through `add`, because that helper waits
+      // for a laid-out region: the region is measured before the first frame
+      // is composed, and a dashboard nobody can click is not a dashboard.
+      const geometry = this.fullScreen.measure('transcript');
+      if (geometry !== null) {
+        for (const entry of this.sessionDashboardRows().entries) {
+          hits.push({
+            id: `session-dashboard:${entry.id}`,
+            row: geometry.top + geometry.innerTop + entry.row,
+            column: geometry.left + geometry.innerLeft,
+            width: Math.max(0, geometry.width - geometry.innerWidth),
+            height: 1,
+            activate: () => {
+              this.selectedSessionDashboardId = entry.id;
+              void this.options.onSessionDashboardOpen?.(entry.id);
+              this.scheduler.requestImmediate();
+            },
+          });
+        }
+      }
       this.pointer.commit(hits);
       return;
     }

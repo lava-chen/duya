@@ -86,6 +86,10 @@ vi.mock('../tui/index.js', () => ({
     setBackgroundTasks() {}
     hasRunningBackgroundTasks() { return false; }
     isTaskViewOpen() { return false; }
+    isSessionsDashboardOpen(): boolean { return false; }
+    setSessionDashboardEntries(_entries: unknown): void {}
+    openSessionsDashboard(): void {}
+    closeSessionsDashboard(): void {}
     showPanel() {}
   },
 }));

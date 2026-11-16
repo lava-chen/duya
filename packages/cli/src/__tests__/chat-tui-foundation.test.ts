@@ -79,6 +79,10 @@ vi.mock('../tui/index.js', () => ({
     setBackgroundTasks(snapshot: unknown): void { this.snapshots.push(snapshot); }
     hasRunningBackgroundTasks(): boolean { return false; }
     isTaskViewOpen(): boolean { return this.taskViewOpen; }
+    isSessionsDashboardOpen(): boolean { return false; }
+    setSessionDashboardEntries(_entries: unknown): void {}
+    openSessionsDashboard(): void {}
+    closeSessionsDashboard(): void {}
     showPanel(title: string, lines: readonly string[]): void { this.panels.push({ title, lines }); }
     recheckCompletion(): void {}
   },

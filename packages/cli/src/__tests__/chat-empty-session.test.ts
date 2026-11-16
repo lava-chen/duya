@@ -61,6 +61,10 @@ vi.mock('../tui/index.js', () => ({
       this.filteredChoices.push({ title, labels: choices.map((choice) => choice.label) });
       return Promise.resolve(null);
     }
+    isSessionsDashboardOpen(): boolean { return false; }
+    setSessionDashboardEntries(_entries: unknown): void {}
+    openSessionsDashboard(): void {}
+    closeSessionsDashboard(): void {}
   },
   shouldUseTui: () => true,
 }));
