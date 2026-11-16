@@ -1,7 +1,7 @@
 # CLI 后台会话工作台
 
-状态：draft PR #639 · owner：本会话 · 更新：2026-11-16
-分支：`codex/background-sessions-dashboard` · worktree：`/home/lavachen/.codex/worktrees/backend-sessions-dashboard/duya` · base：`53c9537ba` · owner：本会话
+状态：已合并 PR #639 · 更新：2026-11-16
+分支：`codex/background-sessions-dashboard` · 合并提交：`2a37f8fe63c33e76e943c38d7b1310aa92b231e3` · base：`53c9537ba`
 
 ## 目标与边界
 
@@ -24,6 +24,7 @@
 - [x] 接入底部 composer、独立 session 创建与 Host run 启动；刷新运行/等待批准/完成状态；点击其他 session 复用现有 transcript 切换流程。
 - [x] 基线对照、相关 TUI/Host 用例、全仓类型与架构门禁、CLI 开发构建。
 - [x] 创建实现提交并推送到 [draft PR #639](https://github.com/lava-chen/duya/pull/639)；不合并，等待 review/CI。
+- [x] 完成 review 修复并由用户明确授权无 review 合并；PR #639 于 2026-11-16 以 merge commit `2a37f8fe63c33e76e943c38d7b1310aa92b231e3` 合入 `master`。
 
 ## 发现与决策
 
@@ -67,10 +68,11 @@ Reviewer 以 PR head `e47faf3eb` 为基线复核，发现并修复：
 | 同上 | 同上 | `npm run architecture:check` | 0 | 无新增边界违规；baseline 收缩仅提示 |
 | 同上 | 同上 | CI `test` job（PR #639 上一版 head） | 1 | 失败于 `tui.isSessionsDashboardOpen is not a function`；本轮修复后需重跑确认 |
 | review 全部修复后（PR #639 head `39c5ae3cf`） | 同上 | `npx vitest run packages/cli/src` · `npm run typecheck:all` · `npm run architecture:check` | 0 · 0 · 0 | 147 files / 1788 tests pass（1 expected fail）；全仓类型检查与架构门禁通过 |
+| 合并后 `2a37f8fe63c33e76e943c38d7b1310aa92b231e3`（origin/master） | Linux x64 / Node v26.13.0 | `npx vitest run packages/cli/src` · `npm run typecheck:all` · `npm run architecture:check` | 0 · 0 · 0 | 147 files / 1788 tests pass（1 expected fail）；合并后重验全绿 |
 
 ## 接续 / 结果
 
-实现和本地验证已完成；分支 `codex/background-sessions-dashboard`，base `53c9537ba`，当前 SHA 以 PR #639 head 为准；代码与计划已推送到 draft PR #639。Review 修复（CI stub、full-screen 渲染、caret、命令路由、错误去重、`/sessions <id>`）已追加提交到同一分支。
-新检出依赖 junction 是未跟踪的 `node_modules` symlink，属于 worktree 环境，不要暂存。没有真实 Provider run 验收。`Needs input` 中的普通批准请求可从打开的会话作一次/按会话批准/拒绝；AskUserQuestion 仍需回到启动它的客户端回答。
-回收：PR 集成前保留 managed worktree；不合并。
-下一步：等 CI 在修复后的 head 上重跑；由获授权的集成者评估集成。
+实现与验证已完成；PR #639 已合并至 `master`，合并提交 `2a37f8fe63c33e76e943c38d7b1310aa92b231e3`，该 SHA 已从 `origin/master` 确认可达。合并后在该 SHA 上重跑 CLI 测试、全仓类型和架构门禁，均退出码 0。GitHub CI（architecture / build / test / test scope / typecheck）在 PR head `ac18c8984` 全部通过。
+新检出依赖 junction 是未跟踪的 `node_modules` symlink，不要暂存或强制删除。没有真实 Provider run 验收。`Needs input` 中的普通批准请求可从打开的会话作一次/按会话批准/拒绝；AskUserQuestion 仍需回到启动它的客户端回答。
+回收：本环境未提供对应 managed-worktree 回收工具，worktree 暂时保留；当前检出位于 merge commit，唯一未跟踪项为依赖 junction symlinks。
+下一步：合并此文档状态更新 PR 后，使用创建该 worktree 的管理工具安全回收。
