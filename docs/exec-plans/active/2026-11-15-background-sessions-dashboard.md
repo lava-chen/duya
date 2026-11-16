@@ -47,6 +47,7 @@ Reviewer 以 PR head `e47faf3eb` 为基线复核，发现并修复：
 | 中 | 轮询失败每 2 秒打印一次同样的错误 | 同一失败连续只打印一行，恢复后重置 |
 | 小 | `/sessions <id>` 的直接恢复被工作台吞掉 | 带参数仍走 `resumeSession(args)`，裸 `/sessions` 才开工作台 |
 | 小 | `ask_user_question` 的待决项也标成 “waiting for approval”，但它只能回到发起它的客户端回答 | 该模式改标 “question waiting” |
+| 小 | 工作台聚焦时按 Tab 走 `toggleFocus()`，把用户带去 task 视图而不是离开工作台 | composer 为空时 Tab 关闭工作台；有文本时仍缩进 |
 
 未修（记录待办）：工作台每次刷新对每个 session 各查一次 run ledger（N+1 请求，Host 没有批量接口）；inline 模式下为支持点击而开启 mouse reporting，会在该视图内吃掉滚轮（终端 scrollback 不再滚动），关闭工作台即恢复。
 
@@ -65,6 +66,7 @@ Reviewer 以 PR head `e47faf3eb` 为基线复核，发现并修复：
 | 同上 | 同上 | `npm run typecheck:all` | 0 | 全仓类型检查通过（首轮 `taskViewLines` 只读数组赋给可变数组报错，已改为拷贝） |
 | 同上 | 同上 | `npm run architecture:check` | 0 | 无新增边界违规；baseline 收缩仅提示 |
 | 同上 | 同上 | CI `test` job（PR #639 上一版 head） | 1 | 失败于 `tui.isSessionsDashboardOpen is not a function`；本轮修复后需重跑确认 |
+| review 全部修复后（PR #639 head `39c5ae3cf`） | 同上 | `npx vitest run packages/cli/src` · `npm run typecheck:all` · `npm run architecture:check` | 0 · 0 · 0 | 147 files / 1788 tests pass（1 expected fail）；全仓类型检查与架构门禁通过 |
 
 ## 接续 / 结果
 
