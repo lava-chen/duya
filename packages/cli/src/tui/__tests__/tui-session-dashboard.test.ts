@@ -118,6 +118,20 @@ describe('sessions dashboard', () => {
     expect(h.opened).toEqual(['session-click']);
   });
 
+  it('closes the dashboard on Tab when the composer is empty', async () => {
+    const h = harness();
+    h.app.setSessionDashboardEntries([{ id: 's1', title: 'Working', status: 'working' }]);
+    h.app.openSessionsDashboard();
+    h.app.start();
+    await settle();
+    h.input.write('\t');
+    await settle();
+    h.app.stop();
+
+    expect(h.app.renderState.focus).toBe('input');
+    expect(h.opened).toEqual([]);
+  });
+
   it('keeps slash commands on the command path while the dashboard is open', async () => {
     const h = harness();
     h.app.setSessionDashboardEntries([{ id: 's1', title: 'Working', status: 'working' }]);

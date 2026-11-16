@@ -4716,7 +4716,10 @@ exportHistory(): string[] {
         else this.editor.historyNext();
       },
       tab: () => {
-        if (this.focus === 'tasks' || this.editor.isEmpty) this.toggleFocus();
+        // An empty composer in the dashboard means "leave the dashboard"; a
+        // composer with text keeps Tab as the editor's own indent.
+        if (this.focus === 'sessions' && this.editor.isEmpty) this.closeSessionsDashboard();
+        else if (this.focus === 'tasks' || this.editor.isEmpty) this.toggleFocus();
         else if (this.isBusyNow() && this.options.onQueueDraft !== undefined && !isControllerLine(this.editor.text)) {
           // Tab queues only while a turn runs; otherwise it stays the editor's
           // indent, and the completion popup above still owns its accept.
