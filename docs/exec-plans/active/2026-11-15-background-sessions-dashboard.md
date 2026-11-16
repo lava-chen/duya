@@ -1,6 +1,6 @@
 # CLI 后台会话工作台
 
-状态：draft PR #639 · owner：本会话 · 更新：2026-11-15
+状态：draft PR #639 · owner：本会话 · 更新：2026-11-16
 分支：`codex/background-sessions-dashboard` · worktree：`/home/lavachen/.codex/worktrees/backend-sessions-dashboard/duya` · base：`53c9537ba` · owner：本会话
 
 ## 目标与边界
@@ -31,6 +31,24 @@
 - `/tasks` 已管理 bash/subagent 的观察视图，不替代 root session 浏览；保留其 `/tasks`、F6 和 `Ctrl+K` 语义。
 - Host 已提供 `create` / `startAgentRun` / session transcript / run ledger HTTP 客户端，因此新增任务应建立独立的普通 session；不借用 parent-bound `session_spawn` 权限模型。
 - 用户明确选择“后台独立运行”，所以任务提交不切换当前 session。会话行打开时沿用现有闲置期切换保护。
+- Review 发现：实现只覆盖了 inline 布局，而 `displayMode` 默认已是 `fullscreen`（plan 2026-11-11-tui-fullscreen-framework S4）。工作台改为两种模式都渲染：inline 走 composer 上方的 chrome 带，full-screen 走 transcript 区域（会话列表取代对话视图，Esc 后复原）。
+- Review 发现：F6 task 视图在 full-screen 同样不可见（`taskViewLines()` 在 `inlineSurface === null` 时返回空），属上游既有缺陷，不在本 PR 范围内，已在 review 记录。
+
+## Review（PR #639，2026-11-16）
+
+Reviewer 以 PR head `e47faf3eb` 为基线复核，发现并修复：
+
+| 级别 | 问题 | 处理 |
+| --- | --- | --- |
+| 阻断 | CI `test` 失败：chat 测试里的 TUIApp stub 没有 `isSessionsDashboardOpen`，2 秒轮询定时器在 stub 上抛未捕获异常 | 7 个 stub 补齐 `isSessionsDashboardOpen` / `setSessionDashboardEntries` / `openSessionsDashboard` / `closeSessionsDashboard` |
+| 阻断 | 默认 full-screen 模式下工作台不渲染：`taskViewLines()` 只在 inline 出图，`/sessions` 只改 footer | full-screen 下把工作台画进 transcript 区域，并补齐该区域的点击区域 |
+| 重大 | 工作台聚焦时 composer 光标被隐藏（inline caret 与 `placeCursor` 都要求 focus=`input`），但工作台的 composer 正是输入新任务的地方 | 两种模式的 caret 在 `focus === 'sessions'` 时都留在 composer |
+| 中 | 工作台打开时输入 `/model` 等命令会被当成后台会话 prompt（`submitText` 在 sessions 分支直接截走） | 命令行按 `isControllerLine` 走原有命令路径，只有普通文本才进后台会话 |
+| 中 | 轮询失败每 2 秒打印一次同样的错误 | 同一失败连续只打印一行，恢复后重置 |
+| 小 | `/sessions <id>` 的直接恢复被工作台吞掉 | 带参数仍走 `resumeSession(args)`，裸 `/sessions` 才开工作台 |
+| 小 | `ask_user_question` 的待决项也标成 “waiting for approval”，但它只能回到发起它的客户端回答 | 该模式改标 “question waiting” |
+
+未修（记录待办）：工作台每次刷新对每个 session 各查一次 run ledger（N+1 请求，Host 没有批量接口）；inline 模式下为支持点击而开启 mouse reporting，会在该视图内吃掉滚轮（终端 scrollback 不再滚动），关闭工作台即恢复。
 
 ## 验证记录
 
@@ -43,9 +61,14 @@
 | 同上 | 同上 | `npm run -w @duya/cli typecheck` | 0 | 最终代码的 CLI 类型检查通过 |
 | 同上 | 同上 | `npm run build:cli-dev` | 0 | CLI、worker 与 bundle 生成成功；还原了本任务无关的 Host bundle 生成文件 |
 | 同上 | 同上 | 实际 TUI 集成 | 未做 | 自动化终端 harness 验证了状态分组、composer 路由和鼠标；未接真实 Provider/Host 完成一轮模型运行 |
+| review 修复后（PR #639 head + review 提交） | Linux x64 / Node v26.13.0 | `npx vitest run packages/cli/src` | 0 | 147 files / 1787 tests pass（1 expected fail）；新增 full-screen 渲染、full-screen 点击与命令路由用例 |
+| 同上 | 同上 | `npm run typecheck:all` | 0 | 全仓类型检查通过（首轮 `taskViewLines` 只读数组赋给可变数组报错，已改为拷贝） |
+| 同上 | 同上 | `npm run architecture:check` | 0 | 无新增边界违规；baseline 收缩仅提示 |
+| 同上 | 同上 | CI `test` job（PR #639 上一版 head） | 1 | 失败于 `tui.isSessionsDashboardOpen is not a function`；本轮修复后需重跑确认 |
 
 ## 接续 / 结果
 
-实现和本地验证已完成；分支 `codex/background-sessions-dashboard`，base `53c9537ba`，当前 SHA 以 PR #639 head 为准；代码与计划已推送到 draft PR #639。新检出依赖 junction 是未跟踪的 `node_modules` symlink，属于 worktree 环境，不要暂存。没有真实 Provider run 验收。`Needs input` 中的普通批准请求可从打开的会话作一次/按会话批准/拒绝；AskUserQuestion 仍需回到启动它的客户端回答。
+实现和本地验证已完成；分支 `codex/background-sessions-dashboard`，base `53c9537ba`，当前 SHA 以 PR #639 head 为准；代码与计划已推送到 draft PR #639。Review 修复（CI stub、full-screen 渲染、caret、命令路由、错误去重、`/sessions <id>`）已追加提交到同一分支。
+新检出依赖 junction 是未跟踪的 `node_modules` symlink，属于 worktree 环境，不要暂存。没有真实 Provider run 验收。`Needs input` 中的普通批准请求可从打开的会话作一次/按会话批准/拒绝；AskUserQuestion 仍需回到启动它的客户端回答。
 回收：PR 集成前保留 managed worktree；不合并。
-下一步：等待 PR review 与 CI；修复必需检查发现的问题，再由获授权的集成者评估集成。
+下一步：等 CI 在修复后的 head 上重跑；由获授权的集成者评估集成。
