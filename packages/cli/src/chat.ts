@@ -777,6 +777,7 @@ export async function chatTui(
   let workspaceStatusTimer: ReturnType<typeof setInterval> | null = null;
   let sessionDashboardTimer: ReturnType<typeof setInterval> | null = null;
   let dashboardRefreshInFlight = false;
+  let dashboardRefreshFailed = false;
   let prSyncedSessionId: string | null = null;
   let cancellationRequested = false;
   /**
@@ -1605,18 +1606,27 @@ export async function chatTui(
       const permissions = await client.listPendingPermissionRequests();
       const entries: SessionDashboardEntry[] = await Promise.all(sessions.map(async ({ session }) => {
         const [latest] = await client.listAgentRunsBySession(session.id, 1);
-        const needsInput = permissions.some((request) => request.sessionId === session.id && request.status === 'pending');
+        const pending = permissions.find((request) => request.sessionId === session.id && request.status === 'pending');
+        const needsInput = pending !== undefined;
         return {
           id: session.id,
           title: session.title || `Session ${session.id.slice(0, 8)}`,
           status: needsInput ? 'needs_input' : latest?.status === 'running' ? 'working' : 'completed',
-          ...(needsInput ? { detail: 'waiting for approval' }
+          // A question cannot be answered from this surface, so it says so
+          // instead of claiming an approval is waiting.
+          ...(needsInput ? { detail: pending?.mode === 'ask_user_question' ? 'question waiting' : 'waiting for approval' }
             : latest?.status === 'running' ? { detail: session.model } : {}),
         };
       }));
       tui.setSessionDashboardEntries(entries);
+      dashboardRefreshFailed = false;
     } catch (error) {
-      if (!finished) tui.printError('Could not refresh sessions: ' + errorText(error));
+      // The dashboard polls on a timer, so the same failure would print the
+      // same line every couple of seconds. One line per failure streak.
+      if (!finished && !dashboardRefreshFailed) {
+        dashboardRefreshFailed = true;
+        tui.printError('Could not refresh sessions: ' + errorText(error));
+      }
     } finally {
       dashboardRefreshInFlight = false;
     }
@@ -2055,8 +2065,13 @@ export async function chatTui(
           try {
             if (name === 'new') await startNewSession(preserveDraft);
             else if (name === 'sessions') {
-              await refreshSessionDashboard();
-              tui.openSessionsDashboard();
+              // `/sessions <id>` keeps the direct resume it always had; the
+              // dashboard is what a bare `/sessions` opens.
+              if (args !== '') await resumeSession(args);
+              else {
+                await refreshSessionDashboard();
+                tui.openSessionsDashboard();
+              }
             } else await resumeSession(args);
           } finally {
             sessionTransition = false;

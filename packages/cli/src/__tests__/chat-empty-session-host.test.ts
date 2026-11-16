@@ -59,6 +59,10 @@ vi.mock('../tui/index.js', () => ({
       return Promise.resolve(null);
     }
     choose() { return Promise.resolve(null); }
+    isSessionsDashboardOpen() { return false; }
+    setSessionDashboardEntries(_entries: unknown) {}
+    openSessionsDashboard() {}
+    closeSessionsDashboard() {}
   },
 }));
 
