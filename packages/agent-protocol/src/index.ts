@@ -28,6 +28,9 @@ export * from './hash.js';
 export * from './primitives.js';
 export * from './tasks.js';
 export * from './projects.js';
+// Project Channel: neutral DTOs, control plane, transport port and error
+// semantics for external Project identities. No storage, no transport.
+export * from './project-channels.js';
 export * from './session-api.js';
 export * from './session-fork.js';
 // Session-level exits that create no run: manual compaction and side questions.

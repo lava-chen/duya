@@ -63,6 +63,10 @@
       "types": "./dist/projects.d.ts",
       "import": "./dist/projects.js"
     },
+    "./project-channels": {
+      "types": "./dist/project-channels.d.ts",
+      "import": "./dist/project-channels.js"
+    },
     "./locks": {
       "types": "./dist/locks.d.ts",
       "import": "./dist/locks.js"

@@ -52,6 +52,7 @@ export type { ModeStateRow } from '@duya/agent-protocol/mode-state';
 import { SessionStore } from './session-store.js';
 import { Mailbox } from './mailbox.js';
 import { ProjectStore } from './project-store.js';
+import { PROJECT_CHANNEL_MIGRATIONS } from './project-channel-store.js';
 import { ResearchStore } from './research-store.js';
 import { PendingWakeStore } from './pending-wakes.js';
 import {
@@ -1321,6 +1322,7 @@ export function collectCoreDataMigrations(): Migration[] {
     ...PluginAppGrantStore.migrations,
     ...SESSION_INPUT_MIGRATIONS,
     ...SESSION_CONTROL_LEASE_MIGRATIONS,
+    ...PROJECT_CHANNEL_MIGRATIONS,
   ].sort((a, b) => a.id - b.id);
 }
 
