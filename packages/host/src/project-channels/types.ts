@@ -56,7 +56,7 @@ export interface ProjectChannelExecutionPort {
    * alone would still succeed. The Host answers from its run records — the same
    * source the plugin-app and checkout paths already use.
    */
-  isCurrentAttempt(sessionId: string, runId: string, epoch: number): boolean;
+  isCurrentAttempt(sessionId: string, runId: string, epoch: number): boolean | Promise<boolean>;
   startRun(input: {
     readonly sessionId: string;
     readonly prompt: string;

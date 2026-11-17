@@ -82,7 +82,11 @@ export function createProjectChannelOutbound(context: ProjectChannelContext): Pr
    * superseded epoch cannot send. The tool layer cannot supply any of these
    * facts; they are all derived from rows.
    */
-  function replyTarget(caller: ProjectChannelCaller, binding: ProjectChannelBinding, inboundId: string): string {
+  async function replyTarget(
+    caller: ProjectChannelCaller,
+    binding: ProjectChannelBinding,
+    inboundId: string,
+  ): Promise<string> {
     if (caller.runId === null || caller.epoch === null) {
       throw projectChannelServiceError('reply_scope_invalid', 'a reply requires a live run, not a client session');
     }
@@ -102,7 +106,7 @@ export function createProjectChannelOutbound(context: ProjectChannelContext): Pr
       // different one. Either way this caller holds no reply scope for it.
       throw projectChannelServiceError('reply_scope_invalid', 'this run was not granted this inbound');
     }
-    if (!context.execution.isCurrentAttempt(caller.sessionId, caller.runId, caller.epoch)) {
+    if (!(await context.execution.isCurrentAttempt(caller.sessionId, caller.runId, caller.epoch))) {
       throw projectChannelServiceError('reply_scope_invalid', 'the run that received this inbound is no longer current');
     }
     return inbound.platformMessageId;
@@ -116,7 +120,7 @@ export function createProjectChannelOutbound(context: ProjectChannelContext): Pr
     }
   }
 
-  function requireProactive(caller: ProjectChannelCaller, binding: ProjectChannelBinding): void {
+  async function requireProactive(caller: ProjectChannelCaller, binding: ProjectChannelBinding): Promise<void> {
     if (!binding.allowProactive) {
       throw projectChannelServiceError('proactive_not_allowed', 'this binding does not allow unsolicited sends');
     }
@@ -128,7 +132,7 @@ export function createProjectChannelOutbound(context: ProjectChannelContext): Pr
     if (caller.runId === null || caller.epoch === null) {
       throw projectChannelServiceError('proactive_not_allowed', 'proactive sends require a live run');
     }
-    if (!context.execution.isCurrentAttempt(caller.sessionId, caller.runId, caller.epoch)) {
+    if (!(await context.execution.isCurrentAttempt(caller.sessionId, caller.runId, caller.epoch))) {
       throw projectChannelServiceError('proactive_not_allowed', 'the calling run is no longer current');
     }
   }
@@ -271,8 +275,8 @@ export function createProjectChannelOutbound(context: ProjectChannelContext): Pr
       const replyToInboundId = request.replyToInboundId?.trim() ?? '';
       const replyToPlatformMessageId = replyToInboundId === ''
         ? undefined
-        : replyTarget(caller, binding, replyToInboundId);
-      if (replyToPlatformMessageId === undefined) requireProactive(caller, binding);
+        : await replyTarget(caller, binding, replyToInboundId);
+      if (replyToPlatformMessageId === undefined) await requireProactive(caller, binding);
 
       const fingerprint = deliveryBodyFingerprint({
         bindingId: binding.bindingId,
