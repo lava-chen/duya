@@ -29,6 +29,18 @@ import { runChatCommand, type ChatCommandOptions } from './chat.js';
 // to `chat.ts`. Keeping it out of the client entry is what lets gate G11-1
 // hold `chat.ts` free of the execution engine.
 import { runTuiCommand, type TuiCommandOptions } from './tui-command.js';
+import { parseFormat } from './api/format.js';
+import {
+  PROJECT_CHANNEL_TOKEN_ENV,
+  runProjectChannelBind,
+  runProjectChannelConnect,
+  runProjectChannelDisconnect,
+  runProjectChannelList,
+  runProjectChannelStatus,
+  runProjectChannelUnbind,
+  runProjectChannelUpdate,
+  type ProjectChannelCommandOptions,
+} from './commands/project-channel.js';
 import { resolveHostWorkerPath } from './worker-path.js';
 
 export { CLI_DESCRIPTORS } from './program/descriptors.js';
@@ -157,7 +169,7 @@ export function buildProgram(): Command {
     process.exitCode = await runTuiCommand(readTuiOptions(tui));
   });
 
-  const project = program.command('project').description('Open a Project Coordinator TUI');
+  const project = program.command('project').description('Open a Project Coordinator TUI (or manage its channel bot)');
   addTuiOptions(project, { includeProject: true, includePort: true });
   project.action(async () => {
     process.exitCode = await runTuiCommand({
@@ -166,8 +178,175 @@ export function buildProgram(): Command {
       projectId: asString(optionValue(project, 'project')),
     });
   });
+  addProjectChannelCommands(project);
 
   return program;
+}
+
+/**
+ * `duya project channel …` — a local operator surface, not a model surface.
+ *
+ * These are registered on the commander tree only. The `duya_cli` tool resolves
+ * commands through `program/descriptors.ts`, so by never adding this path there
+ * the credential-carrying subcommands are structurally unreachable from a model
+ * turn — not merely discouraged in a prompt.
+ *
+ * `duya project` on its own keeps opening the Coordinator TUI: the subcommands
+ * do not change the parent's action.
+ */
+function addProjectChannelCommands(project: Command): void {
+  const channel = project.command('channel').description("Manage this Project's own Discord bot: connect, bind channels, revoke, disconnect");
+
+  const withFormat = (command: Command): Command =>
+    command.option('--format <format>', 'Output format: text | json', 'text');
+
+  /** `--member` may be repeated or comma-separated; both mean the same list. */
+  const memberOption = (command: Command): Command =>
+    command.option('--member <userId>', 'Allowed Discord user id; repeat the flag or comma-separate', collectOption, [] as string[]);
+
+  const list = withFormat(
+    channel.command('list')
+      .description("List this Project's channel bindings, their members and send permissions")
+      .option('--project <id>', 'Project id'),
+  );
+  list.action(async (): Promise<void> => {
+    process.exitCode = await runProjectChannelList(readChannelOptions(list));
+  });
+
+  const status = withFormat(
+    channel.command('status')
+      .description('Show the connection, transport state and recent deliveries')
+      .option('--project <id>', 'Project id'),
+  );
+  status.action(async (): Promise<void> => {
+    process.exitCode = await runProjectChannelStatus(readChannelOptions(status));
+  });
+
+  const connect = withFormat(
+    channel.command('connect')
+      .description(`Configure or rotate the Project's Discord bot (credential from ${PROJECT_CHANNEL_TOKEN_ENV} or stdin)`)
+      .option('--project <id>', 'Project id')
+      .option('--label <label>', 'Operator-facing label for the connection')
+      .option('--revision <n>', 'Current revision; required to rotate an existing connection', (value) => Number(value))
+      // Declared only to be refused with instructions; never read as a value.
+      .option('--token <token>', 'Refused: credentials must not appear on the command line'),
+  );
+  connect.action(async (): Promise<void> => {
+    process.exitCode = await runProjectChannelConnect(readChannelOptions(connect));
+  });
+
+  const bind = memberOption(withFormat(
+    channel.command('bind')
+      .description('Authorize one guild channel and a non-empty member allowlist')
+      .option('--project <id>', 'Project id')
+      .option('--connection <id>', 'Connection id from `channel status`')
+      .option('--guild <id>', 'Discord guild (server) id')
+      .option('--channel <id>', 'Discord text channel id')
+      .option('--allow-proactive', 'Let the Coordinator send without a triggering message (default off)')
+      .option('--label <label>', 'Operator-facing label for the binding'),
+  ));
+  bind.action(async (): Promise<void> => {
+    process.exitCode = await runProjectChannelBind(readChannelOptions(bind));
+  });
+
+  const update = memberOption(withFormat(
+    channel.command('update')
+      .description('Change members, proactive permission or enabled state (compare-and-set)')
+      .option('--project <id>', 'Project id')
+      .option('--binding <id>', 'Binding id')
+      .option('--revision <n>', 'Expected revision; the write fails if it moved', (value) => Number(value))
+      .option('--proactive <on|off>', 'Set the proactive permission explicitly')
+      .option('--state <enabled|disabled>', 'Enable or stop the binding'),
+  ));
+  update.action(async (): Promise<void> => {
+    process.exitCode = await runProjectChannelUpdate(readChannelOptions(update));
+  });
+
+  const unbind = withFormat(
+    channel.command('unbind')
+      .description('Revoke a binding (the bot credential is kept)')
+      .option('--project <id>', 'Project id')
+      .option('--binding <id>', 'Binding id')
+      .option('--revision <n>', 'Expected revision', (value) => Number(value)),
+  );
+  unbind.action(async (): Promise<void> => {
+    process.exitCode = await runProjectChannelUnbind(readChannelOptions(unbind));
+  });
+
+  const disconnect = withFormat(
+    channel.command('disconnect')
+      .description('Disable the connection locally; the Discord application is not deleted')
+      .option('--project <id>', 'Project id')
+      .option('--connection <id>', 'Connection id')
+      .option('--revision <n>', 'Expected revision', (value) => Number(value)),
+  );
+  disconnect.action(async (): Promise<void> => {
+    process.exitCode = await runProjectChannelDisconnect(readChannelOptions(disconnect));
+  });
+}
+
+/** Collect repeated `--member` values, splitting any comma-separated ones. */
+function collectOption(value: string, previous: string[]): string[] {
+  return [...previous, ...value.split(',').map((part) => part.trim()).filter((part) => part !== '')];
+}
+
+/**
+ * Read a channel subcommand's own flags.
+ *
+ * Each subcommand declares `--project` itself rather than inheriting it: the
+ * parent also carries `--project` for the TUI, and commander would otherwise
+ * parse the value in one shape and look for it in another.
+ */
+/**
+ * Read an option from a command or any of its ancestors.
+ *
+ * `--project` exists on both `duya project` (for the TUI) and the channel
+ * subcommands, and Commander resolves the flag against the nearest ancestor
+ * that declares it — so the value the operator typed after the subcommand
+ * still lands on `project`. Reading only the leaf command would see
+ * `undefined` and silently target no project at all.
+ */
+function ancestorOption(command: Command, name: string): unknown {
+  let current: Command | null = command;
+  while (current !== null) {
+    const value = current.getOptionValue(name);
+    if (value !== undefined) return value;
+    // Commander types `parent` as the untyped base class; the walk only needs
+    // `getOptionValue`, which every command has.
+    current = (current.parent ?? null) as Command | null;
+  }
+  return undefined;
+}
+
+function readChannelOptions(command: Command): ProjectChannelCommandOptions {
+  const proactive = asString(ancestorOption(command, 'proactive'));
+  const state = asString(ancestorOption(command, 'state'));
+  const members = ancestorOption(command, 'member');
+  // Two shapes for the same permission: `bind --allow-proactive` (one-way) and
+  // `update --proactive on|off` (explicit). Absent from both means "leave the
+  // binding's own setting alone", so the key must stay out of the patch.
+  const allowProactive = ancestorOption(command, 'allowProactive') === true
+    ? true
+    : proactive === undefined ? undefined : proactive === 'on' || proactive === 'true';
+  return {
+    projectId: asString(ancestorOption(command, 'project')),
+    connectionId: asString(ancestorOption(command, 'connection')),
+    bindingId: asString(ancestorOption(command, 'binding')),
+    guildId: asString(ancestorOption(command, 'guild')),
+    channelId: asString(ancestorOption(command, 'channel')),
+    members: Array.isArray(members)
+      ? members.filter((value): value is string => typeof value === 'string')
+      : typeof members === 'string' ? [members] : [],
+    // One flag name for every compare-and-set write: `--revision`.
+    expectedRevision: typeof ancestorOption(command, 'revision') === 'number'
+      ? ancestorOption(command, 'revision') as number
+      : undefined,
+    ...(allowProactive === undefined ? {} : { allowProactive }),
+    ...(state === undefined ? {} : { enabled: state === 'enabled' }),
+    label: asString(ancestorOption(command, 'label')),
+    plaintextToken: asString(ancestorOption(command, 'token')),
+    format: parseFormat(asString(ancestorOption(command, 'format'))),
+  };
 }
 
 function addTuiOptions(

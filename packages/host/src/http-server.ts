@@ -3576,9 +3576,25 @@ export class HostSessionHttpServer {
           return;
         }
         if (req.method === 'DELETE') {
-          const body = await this.#readJson(req, res);
-          if (body === null) return;
-          const input = this.#parseChannelBindingRevoke(projectId, bindingId, body);
+          // A revoke is still a compare-and-set. The precondition may arrive in
+          // a JSON body or as query parameters: the shared CLI client's DELETE
+          // carries no body, and a body-carrying DELETE is exactly the kind of
+          // request an intermediary is entitled to strip.
+          const contentType = req.headers['content-type'];
+          let input: RevokeProjectChannelBindingInput | null;
+          if (typeof contentType === 'string' && /^application\/json(?:\s*;|$)/i.test(contentType)) {
+            const body = await this.#readJson(req, res);
+            if (body === null) return;
+            input = this.#parseChannelBindingRevoke(projectId, bindingId, body);
+          } else {
+            const revision = Number(url.searchParams.get('expectedRevision'));
+            input = this.#parseChannelBindingRevoke(projectId, bindingId, {
+              requestId: url.searchParams.get('requestId') ?? undefined,
+              // A missing or non-numeric value must fail the shape check, not
+              // coerce to 0 and then be reported as a stale revision.
+              expectedRevision: Number.isInteger(revision) ? revision : undefined,
+            });
+          }
           if (!input) {
             this.#sendJson(res, 400, { error: { code: 'invalid_request' } });
             return;
