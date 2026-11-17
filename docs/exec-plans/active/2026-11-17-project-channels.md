@@ -343,11 +343,12 @@ owner：本轮会话（D：工具与客户端，E：公共装配与整体验收�
 
 #### 尚未完成（明确未完成，不得当作已实现）
 
-1. **Gap 2（Gateway 显式架构依赖）**：B 的 8 条 `gateway → agent-protocol` 新边不在本检出（未并入 B），无法在此修改 `architecture-policy.yaml`/包元数据并复现。需要先并入 B。
-2. **D 的工具面**：Coordinator 窄 `send_message`（唯一 canonical 注册、窄 schema、无 actor/projectId/sessionId/runId/epoch/credential/原始 Discord 目标）、`project.list_channels`、来源感知回复义务与有界 `delivery_missing`、旧 Bot 工具兼容——均未实现。
-3. **D 的 CLI**：`duya project channel connect/bind/list/status/unbind/disconnect`——未实现；凭据 env/stdin 入口与投影排除未实现。
-4. **E 的公共装配**：`local-host.ts` 注入 transport/启动恢复/`close()`、控制面 HTTP 路由、受信 Worker → Host 发送通路、Session idle/Run settle 的 `drainSession` 挂载、非 client-scoped 启动恢复、Desktop 挂载、架构政策与包元数据——均未实现。
-5. **无人值守完成通知**：未接通（依赖 E 的 drain/唤醒装配）。
+1. ~~Gap 2（Gateway 显式架构依赖）~~ 已完成：`architecture-policy.yaml` 声明 `legacy-gateway requires: [agent-protocol]`，`architecture:check` 恢复 `OK — no new boundary violations`；B 的 22 项 transport 用例在本检出通过。
+2. ~~`project.list_channels`~~ 已实现并接通 Host 工具服务与 `local-host` 装配；Coordinator 发现 binding 的动作可用。
+3. **D 的工具面（剩余）**：Coordinator 窄 `send_message`（唯一 canonical 注册、窄 schema、无 actor/projectId/sessionId/runId/epoch/credential/原始 Discord 目标）、来源感知回复义务与有界 `delivery_missing`、旧 Bot 工具兼容——未实现。
+4. **D 的 CLI**：`duya project channel connect/bind/list/status/unbind/disconnect`——未实现；凭据 env/stdin 入口与 in-process 投影排除未实现。
+5. **E 的公共装配（剩余）**：控制面 HTTP 路由（`HostProjectChannelApiV1`）、受信 Worker → Host 发送通路、Session idle/Run settle 的 `drainSession` 挂载、CLI/Desktop composition 注入 transport、Desktop 挂载——未实现。本检出已具备注入点（`StartLocalHostOptions.projectChannelTransport`），但**当前没有任何调用方注入**，因此生产路径仍未启用 channel。
+6. **无人值守完成通知**：未接通（依赖 5 的 drain/唤醒装配）。
 
 #### 本轮验证记录
 
@@ -358,12 +359,22 @@ owner：本轮会话（D：工具与客户端，E：公共装配与整体验收�
 | 同上 | 同上 | `npx tsc -b packages/host/tsconfig.json` | 退出 0；项目引用从源码编译 host 及其依赖（capabilities 资产复制例外） |
 | 同上 | 同上 | `npm run architecture:check`；`architecture:worker-module-state`；`check:no-ts-suppress`；`check:encoding` | 全部退出 0；架构 `OK — no new boundary violations`；worker module state PASS |
 | 同上 | 同上 | `npm run build:packages` | 退出 1（**环境限制，非本切片**）：本机安全策略拒绝对 `packages/capabilities/src/AppConnectionTool/approval-templates.json` 的 `copyFile`（EPERM），与 A 交接记录的同一根因；因此未取得能力包/CLI 产物，也未跑 `build:cli-dev`、`typecheck:all`、`electron:build` |
+| 并入 B 后（`20da1c256`）+ 后续切片 | 同上 | `vitest run packages/gateway/src/project-channels/project-discord-runtime.test.ts` | 退出 0；22/22 |
+| 同上 | 同上 | `vitest run packages/host/tests/project-tool-service.test.ts` | 退出 0；12/12（含 4 条 `list_channels`：权限投影、连接停用、未装配时拒绝、非 Coordinator 拒绝） |
+| 同上 | 同上 | `vitest run packages/host/tests/project-channels-local-host.test.ts` | 退出 0；2/2（真实 `startLocalHost` + 真实 core SQLite + 假 transport：无 transport 时不组装、有 transport 时配置/绑定/读投影可往返且输出不含 token；启动日志显示 `start()` 真实执行） |
+| 同上 | 同上 | `npx tsc -b packages/host/tsconfig.json` | 退出 0 |
+| 同上 | 同上 | `architecture:check` / `architecture:worker-module-state` / `check:no-ts-suppress` / `check:encoding` | 全部退出 0；架构 OK（显式依赖替代 baseline） |
+| 同上 | 同上 | `vitest run packages/host/tests/local-host.test.ts` | 1 项失败：`migratePreviousDefaultDatabases` 的 `copyFileSync` 被本机安全策略拒绝（EPERM），与 `build:packages` 同一环境限制；该用例不经过本切片改动，未宣称 host 全量绿 |
 
-#### 下一动作（需用户授权）
+#### 下一动作
 
-1. 授权把 `refs/heads/codex/project-channels-discord-runtime`（`8fe633618`）合入 `codex/project-channels-de`，以便修 Gap 2 并在 E 注入真实 transport。
-2. 授权在本分支 commit（Conventional Commits，按切片分开），以及是否允许 push/PR。
-3. 授权后继续：D 工具面 → CLI → E 装配 → 本地真实链路验收（生产 Worker + 真实 Host HTTP/SQLite + 本地脚本 provider + B 的受控 REST/WebSocket 端点）。
+已获用户授权并完成（2026-11-17）：并入 B、在本分支提交并 push、开 Draft PR。实际结果：
+
+- 合入：`8fe633618` → `codex/project-channels-de`（merge commit `20da1c256`），A/B/C 原分支未改动。
+- 提交：`509e6d2aa`（task lifecycle 门禁）、`c52586edc`（run 级回复范围）、`5427f6ad7`（pending 查询下沉）、`eb11125ed`/`20da1c256`（计划与合并记录）、`045f720f2`（Gateway 显式依赖）、`7f78903e8`（端口支持异步 attempt 校验）、`b8b3f34d7`（`list_channels`）、`e87036631`（Host 装配）。
+- Draft PR：[#641](https://github.com/lava-chen/duya/pull/641)，base `master`，**不可合并**（见上「尚未完成」）。
+
+仍待用户单独授权的动作：矩阵级真实链路验收、真实 Discord 外部验收、最终集成。
 
 ### B 交接（多实例 Discord transport，供 C/E 依赖）
 
