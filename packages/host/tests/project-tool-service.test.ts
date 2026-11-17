@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { HostProjectApiV1, ProjectContinuitySnapshot } from '@duya/agent-protocol/projects';
+import type {
+  HostProjectChannelApiV1,
+  ProjectChannelBinding,
+  ProjectChannelConnection,
+} from '@duya/agent-protocol/project-channels';
 import { createProjectToolService } from '../src/project/tool-service.js';
 
 const PROJECT_ID = 'project-1';
@@ -54,7 +59,11 @@ function snapshot(): ProjectContinuitySnapshot {
   };
 }
 
-function harness(options: { coordinator?: string | null; updateState?: 'ok' | 'conflict' } = {}) {
+function harness(options: {
+  coordinator?: string | null;
+  updateState?: 'ok' | 'conflict';
+  channels?: Pick<HostProjectChannelApiV1, 'getProjectChannels'>;
+} = {}) {
   const projectApi = {
     getProjectContinuity: vi.fn(async () => snapshot()),
     getProjectContext: vi.fn(async () => ({
@@ -100,6 +109,7 @@ function harness(options: { coordinator?: string | null; updateState?: 'ok' | 'c
       | 'createProjectTask'
       | 'updateProjectTask'
     >,
+    ...(options.channels === undefined ? {} : { channels: options.channels }),
   });
   return { service, projectApi };
 }
@@ -233,5 +243,84 @@ describe('project tool service', () => {
 
     expect(result).toEqual({ ok: false, reason: 'unsupported_action:accept_task' });
     expect(projectApi.getProjectContinuity).not.toHaveBeenCalled();
+  });
+});
+
+describe('project tool list_channels', () => {
+  const connection: ProjectChannelConnection = {
+    connectionId: 'conn-1', projectId: PROJECT_ID, platform: 'discord', botUserId: 'bot-1',
+    label: 'Alpha Bot', enabled: true, revision: 2, generation: 3, credentialConfigured: true,
+    createdAt: 1, updatedAt: 2,
+  };
+
+  function binding(overrides: Partial<ProjectChannelBinding> = {}): ProjectChannelBinding {
+    return {
+      bindingId: 'binding-1', projectId: PROJECT_ID, connectionId: 'conn-1',
+      guildId: 'guild-1', channelId: 'channel-1', allowedUserIds: ['member-1'],
+      allowProactive: false, enabled: true, revision: 1, label: 'ops', createdAt: 1, updatedAt: 2,
+      ...overrides,
+    };
+  }
+
+  function withChannels(bindings: readonly ProjectChannelBinding[], activeConnection = connection) {
+    const getProjectChannels = vi.fn(async () => ({
+      projectId: PROJECT_ID,
+      connection: activeConnection,
+      bindings,
+      observation: null,
+      deliveries: { deliveries: [], nextCursor: null },
+    }));
+    return { channels: { getProjectChannels } as Pick<HostProjectChannelApiV1, 'getProjectChannels'>, getProjectChannels };
+  }
+
+  it('lists enabled bindings with the permissions the model needs, and nothing else', async () => {
+    const { channels } = withChannels([
+      binding(),
+      binding({ bindingId: 'binding-2', label: 'releases', allowProactive: true, revision: 3 }),
+      binding({ bindingId: 'binding-revoked', enabled: false }),
+    ]);
+    const { service } = harness({ channels });
+
+    const result = await service.dispatch({ action: 'list_channels', payload: {}, callerSessionId: COORDINATOR_ID });
+
+    expect(result.ok).toBe(true);
+    expect(result).toMatchObject({
+      channels: [
+        { bindingId: 'binding-1', label: 'ops', canReply: true, canProactive: false },
+        { bindingId: 'binding-2', label: 'releases', canReply: true, canProactive: true },
+      ],
+    });
+    // Raw platform targets never leave the Host, even though the store has them.
+    expect(JSON.stringify(result)).not.toContain('channel-1');
+    expect(JSON.stringify(result)).not.toContain('guild-1');
+  });
+
+  it('reports no sendable permission while the connection is disabled', async () => {
+    const { channels } = withChannels([binding({ allowProactive: true })], { ...connection, enabled: false });
+    const { service } = harness({ channels });
+
+    const result = await service.dispatch({ action: 'list_channels', payload: {}, callerSessionId: COORDINATOR_ID });
+
+    expect(result).toMatchObject({
+      channels: [{ bindingId: 'binding-1', canReply: false, canProactive: false }],
+    });
+  });
+
+  it('refuses instead of inventing an empty list when channel support is not composed', async () => {
+    const { service } = harness();
+
+    const result = await service.dispatch({ action: 'list_channels', payload: {}, callerSessionId: COORDINATOR_ID });
+
+    expect(result).toEqual({ ok: false, reason: 'channel_support_unavailable' });
+  });
+
+  it('still refuses callers that are not the bound Coordinator', async () => {
+    const { channels, getProjectChannels } = withChannels([binding()]);
+    const { service } = harness({ coordinator: null, channels });
+
+    const result = await service.dispatch({ action: 'list_channels', payload: {}, callerSessionId: 'someone-else' });
+
+    expect(result).toEqual({ ok: false, reason: 'not_project_coordinator' });
+    expect(getProjectChannels).not.toHaveBeenCalled();
   });
 });

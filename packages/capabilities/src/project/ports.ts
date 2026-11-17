@@ -14,7 +14,8 @@ export type ProjectToolAction =
   | 'record_decision'
   | 'create_task'
   | 'update_task'
-  | 'record_memory';
+  | 'record_memory'
+  | 'list_channels';
 
 export interface ProjectToolSource {
   readonly type: string;
@@ -93,6 +94,20 @@ export interface ProjectToolContext {
   readonly sourceRefs: readonly ProjectToolSource[];
 }
 
+/**
+ * One channel this Project may speak in. Deliberately carries the Host-minted
+ * binding id and the two permissions, never a guild/channel id, a token, or any
+ * other Project's rows: the model picks a binding, it never names a target.
+ */
+export interface ProjectToolChannel {
+  readonly bindingId: string;
+  readonly label: string;
+  /** The binding is enabled, so a reply to an inbound of it is allowed. */
+  readonly canReply: boolean;
+  /** Unsolicited sends are allowed for this binding. */
+  readonly canProactive: boolean;
+}
+
 export interface ProjectToolPayload {
   readonly task?: ProjectToolTask;
   readonly snapshot?: ProjectToolSnapshot;
@@ -100,6 +115,7 @@ export interface ProjectToolPayload {
   readonly state?: ProjectToolState;
   readonly decision?: ProjectToolDecision;
   readonly memory?: ProjectToolMemory;
+  readonly channels?: readonly ProjectToolChannel[];
 }
 
 export type ProjectToolOperation<T> =

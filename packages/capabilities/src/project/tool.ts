@@ -23,6 +23,7 @@ import type {
   ProjectToolSnapshot,
   ProjectToolState,
   ProjectToolTask,
+  ProjectToolChannel,
 } from './ports.js';
 
 export const PROJECT_TOOL_NAME = 'project';
@@ -37,10 +38,10 @@ const PROJECT_SCHEMA: Record<string, unknown> = {
   properties: {
     action: {
       type: 'string',
-      enum: ['get', 'context', 'create_task', 'update_task', 'update_state', 'record_decision', 'record_memory'],
+      enum: ['get', 'context', 'create_task', 'update_task', 'update_state', 'record_decision', 'record_memory', 'list_channels'],
       default: 'get',
       description:
-        'get: read state, tasks, decisions, memories and activity. context: build bounded prompt-ready context, optionally for one task. create_task: create an idempotent Task without launching work. update_task: edit or reopen a non-accepted Task with a revision check. update_state: replace current state and next step with a revision check. record_decision: propose or supersede a durable decision. record_memory: record a memory candidate, or supersede/retire an existing memory.',
+        'get: read state, tasks, decisions, memories and activity. context: build bounded prompt-ready context, optionally for one task. create_task: create an idempotent Task without launching work. update_task: edit or reopen a non-accepted Task with a revision check. update_state: replace current state and next step with a revision check. record_decision: propose or supersede a durable decision. record_memory: record a memory candidate, or supersede/retire an existing memory. list_channels: read the external channel bindings this project may answer in. Use it before send_message when you do not know the channelBindingId.',
     },
     requestId: { type: 'string', minLength: 1, maxLength: 160, description: 'For create_task: stable idempotency key. Reuse the same key after a lost response, not for a different task.' },
     subject: { type: 'string', minLength: 1, maxLength: 160, description: 'For create_task/update_task: concise task title.' },
@@ -115,6 +116,7 @@ export class ProjectTool extends BaseTool {
 - A terminal successful work Run marks the Task completed but leaves acceptance pending. Only the user control-plane action can accept/reject it.
 - Keep the durable "current state" and "next step" current after meaningful progress with "update_state". Read the current revision first; a stale revision is refused.
 - Record a decision the user made, or a memory candidate you observed, with "record_decision"/"record_memory". Proposals and candidates carry this session as their source and keep their revision history.
+- Read the project's external channel bindings with "list_channels" before answering on one. The list carries the binding id and whether proactive sends are allowed; it never carries a raw platform target.
 
 ## Rules
 - Only the user can accept a decision, activate a memory candidate, or accept a Task. This tool refuses those statuses; record them as proposed/candidate and ask the user.
@@ -283,6 +285,18 @@ export class ProjectTool extends BaseTool {
           };
         }
 
+        case 'list_channels': {
+          const allowed = ['action'];
+          if (Object.keys(input).some((key) => !allowed.includes(key))) return err('list_channels takes no other fields.');
+          const result = await this.port.dispatch({ action, payload: {} });
+          if (!result.ok) return err(describeRefusal(result.reason));
+          return {
+            id: randomUUID(),
+            name: this.name,
+            result: formatChannels(result.channels ?? []),
+          };
+        }
+
         default:
           return err(`action "${String(action)}" is not supported.`);
       }
@@ -389,6 +403,26 @@ function formatSource(source: { type: string; id: string }): string {
   return `${source.type}:${source.id}`;
 }
 
+/**
+ * Channel bindings are the only opaque ids the model gets to choose from, so
+ * the list states the two permissions instead of leaving the model to guess
+ * whether an unsolicited send will be refused.
+ */
+function formatChannels(channels: readonly ProjectToolChannel[]): string {
+  if (channels.length === 0) {
+    return 'This project has no external channel bindings. Ask the user to bind one before sending.';
+  }
+  const lines = [`Channel bindings (${channels.length}):`];
+  for (const channel of channels) {
+    const permission = channel.canProactive ? 'reply + proactive' : 'reply only';
+    lines.push(`- ${channel.bindingId} — ${channel.label || '(unnamed)'} · ${permission}`);
+  }
+  lines.push('');
+  lines.push('Send with send_message using channelBindingId. Reply to a channel message with its replyToInboundId; '
+    + 'an unsolicited send needs a binding that allows proactive sends.');
+  return lines.join('\n');
+}
+
 function formatTime(value: number): string {
   if (!Number.isFinite(value) || value <= 0) return 'unknown';
   return new Date(value).toISOString();
@@ -425,4 +459,4 @@ function readBoundedInteger(
     : 'invalid';
 }
 
-export type { ProjectToolAction, ProjectToolOperation, ProjectToolPort, ProjectToolPayload };
+export type { ProjectToolAction, ProjectToolChannel, ProjectToolOperation, ProjectToolPort, ProjectToolPayload };

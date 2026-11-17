@@ -20,6 +20,7 @@ import type {
   ProjectDecision,
   ProjectMemory,
 } from '@duya/agent-protocol/projects';
+import type { HostProjectChannelApiV1 } from '@duya/agent-protocol/project-channels';
 import type { ProjectStore } from '@duya/data/project-store';
 import type {
   ProjectToolAction,
@@ -43,6 +44,7 @@ const PROJECT_TOOL_ACTIONS: ReadonlySet<string> = new Set([
   'record_memory',
   'create_task',
   'update_task',
+  'list_channels',
 ]);
 
 const DEFAULT_ACTIVITY_LIMIT = 50;
@@ -66,6 +68,12 @@ export interface ProjectToolServiceOptions {
     | 'createProjectTask'
     | 'updateProjectTask'
   >;
+  /**
+   * The project's external channel bindings, already scoped to the project by
+   * the Host. Absent when channel support is not composed: the action then
+   * refuses instead of inventing an empty list that reads as "no channels".
+   */
+  readonly channels?: Pick<HostProjectChannelApiV1, 'getProjectChannels'>;
 }
 
 export interface ProjectToolService {
@@ -155,6 +163,26 @@ export function createProjectToolService(options: ProjectToolServiceOptions): Pr
           return {
             ok: true,
             context: toToolContext(context),
+          };
+        }
+
+        case 'list_channels': {
+          if (Object.keys(payload).length > 0) return refuse('invalid_channels_payload');
+          if (options.channels === undefined) return refuse('channel_support_unavailable');
+          const overview = await options.channels.getProjectChannels(projectId, undefined, 1);
+          if (overview === null) return refuse('project_not_found');
+          return {
+            ok: true,
+            channels: overview.bindings
+              .filter((binding) => binding.enabled)
+              .map((binding) => ({
+                bindingId: binding.bindingId,
+                label: binding.label,
+                // A disabled connection cannot send at all, so neither
+                // permission is honest while the transport is down.
+                canReply: overview.connection?.enabled === true,
+                canProactive: overview.connection?.enabled === true && binding.allowProactive,
+              })),
           };
         }
 
