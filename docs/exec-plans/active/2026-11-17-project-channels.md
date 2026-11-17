@@ -1,6 +1,7 @@
 # Project Channel：独立 Discord 身份与受限 send_message
 
-状态：active，A 合同与存储、B transport、C Host 领域与恢复已实现，D/E 未开工 · 负责人：用户分派，集成 owner 待指定 · 更新：2026-11-17。
+状态：active，A 合同与存储、B transport、C Host 领域与恢复已实现；D/E 由 `codex/project-channels-de` 承接，已修复继承门禁与两个合同缺口，D 的工具面与 E 的公共装配尚未接线 · 负责人：D/E owner = 本轮会话 · 更新：2026-11-17。
+D/E 实施检出：`codex/project-channels-de`，worktree `.claude/worktrees/project-channels-de`；base：`4bbb9ab3524b88271a3b7e08949526fc243dffb8`（C 的 head，含 A 的 `57610fc0c`）；**B 尚未并入本检出**，故 E 的真实 transport 装配与 Gap 2 无法在本检出完成，需用户授权后合入 `refs/heads/codex/project-channels-discord-runtime`（`8fe633618d016b5bbf843a62b5ada91acfa97ac6`）。
 设计检出：`claude/lucid-mestorf-72bac0`，worktree `.claude/worktrees/lucid-mestorf-72bac0`；代码基线：`5e5256decc4a915872add152b122a97ad71e55c1`；设计 owner：本会话。
 A 实施检出：`codex/project-channels-protocol-store`，worktree `.claude/worktrees/project-channels-a`；base：`5e5256decc4a915872add152b122a97ad71e55c1`；独占路径：`packages/agent-protocol/src/project-channels.ts` 与协议 exports、`packages/data/src/project-channel-store.ts`、迁移 69 装配、`packages/data/tests/project-channel-store.test.ts`；未合并。
 C 实施检出：`codex/project-channels-host-domain`，worktree `.claude/worktrees/project-channels-c`；base：`57610fc0c`（A 的 head）；独占路径：`packages/host/src/project-channels/**`、`packages/host/tests/project-channels-*.test.ts`（未改 `session-input-api/service`、`local-host`、HTTP）；未推送、未合入。
@@ -320,3 +321,41 @@ createProjectChannelHostService({
 **已知未覆盖**：真实 Discord 未验证；无 HTTP/CLI/Desktop 接线；无 standalone idle 唤醒（E 负责，C 只提供 `drainSession`）；
 Coordinator 替换后**已绑定旧目标**的排队行需由该 Session 的 settle/idle 钩子 drain（E 挂载点需覆盖所有 Session，
 不只是当前 Coordinator）；`recovery_required` 行需人工/后续显式对账；host 全量测试未跑（沙箱资源限制）。分支已本地提交，未推送、未开 PR。
+
+### D/E 交接（进行中，未提交）
+
+owner：本轮会话（D：工具与客户端，E：公共装配与整体验收）。worktree `.claude/worktrees/project-channels-de`，
+分支 `codex/project-channels-de`，base `4bbb9ab3524b88271a3b7e08949526fc243dffb8`（= C head，含 A）。
+**未 commit、未 push、未开 PR**；所有改动仅为工作区修改。
+
+#### 已完成的合同缺口修复
+
+| 缺口 | 处理 | 证据 |
+| --- | --- | --- |
+| 继承的 `architecture:worker-module-state` 失败（`packages/host/src/project/task-lifecycle.ts#OPEN`） | 删除模块级 `new Set(...)`，改为纯谓词 `isOpenAttempt(status)`（三处调用点同义替换），未加 baseline、未放宽扫描、未用只读类型声明掩盖 | 改动前 FAIL（1 new declaration / 235 declarations / 1122 sources）；改动后 PASS（234 declarations）。语义未变，`task_execution_active` 等判据仍是 starting/running/unknown 三态 |
+| 回复权限未绑定当前 Run（C 的 `outbound.ts#replyTarget` 只校验 connection/binding/targetSessionId） | 回复范围改为从 `session_inputs` receipt 读取「本 Session 上该 inbound 的投递 Run」，要求 `stage ∈ delivered/consumed` 且 `receipt.runId === caller.runId`；新增当前 Coordinator 裁决（`projects.coordinator_session_id`）与 `execution.isCurrentAttempt(sessionId, runId, epoch)` 实时 Run/epoch 栅栏；proactive 路径同样要求当前 Coordinator + live attempt。`ProjectChannelExecutionPort` 新增必需方法 `isCurrentAttempt`，由 E 映射到 `runExecution.isCurrentSessionAttempt` | 新增 6 条用例覆盖：本 Run 正常回复、同 Session 后续 Run 借历史入站、普通本地回合冒充回复、已 settle 的 Run、被替换的 epoch、Coordinator 替换、失效 Run 的 proactive。`project-channels-service.test.ts` 36/36 通过（原 30 + 新 6） |
+| `pending.ts` 在 Host 侧直接查询 A 的表（边界偏差） | 四个只读查询（未提交入站 / sending 投递 / claimed 输入 / 回复义务）下沉为 `ProjectChannelStore` 的 `listUnsubmittedInboundIds`、`listSendingDeliveryIds`、`listQueuedInboundInputs`、`hasReplyDelivery`；Host 的 `pending.ts` 变成对的窄投影，不再包含 SQL 或表名 | 恢复/服务/密钥 50/50 通过；A 的 `project-channel-store.test.ts` 21/21 通过；`check:no-ts-suppress`、`check:encoding`、`architecture:check` 均通过 |
+
+#### 尚未完成（明确未完成，不得当作已实现）
+
+1. **Gap 2（Gateway 显式架构依赖）**：B 的 8 条 `gateway → agent-protocol` 新边不在本检出（未并入 B），无法在此修改 `architecture-policy.yaml`/包元数据并复现。需要先并入 B。
+2. **D 的工具面**：Coordinator 窄 `send_message`（唯一 canonical 注册、窄 schema、无 actor/projectId/sessionId/runId/epoch/credential/原始 Discord 目标）、`project.list_channels`、来源感知回复义务与有界 `delivery_missing`、旧 Bot 工具兼容——均未实现。
+3. **D 的 CLI**：`duya project channel connect/bind/list/status/unbind/disconnect`——未实现；凭据 env/stdin 入口与投影排除未实现。
+4. **E 的公共装配**：`local-host.ts` 注入 transport/启动恢复/`close()`、控制面 HTTP 路由、受信 Worker → Host 发送通路、Session idle/Run settle 的 `drainSession` 挂载、非 client-scoped 启动恢复、Desktop 挂载、架构政策与包元数据——均未实现。
+5. **无人值守完成通知**：未接通（依赖 E 的 drain/唤醒装配）。
+
+#### 本轮验证记录
+
+| SHA / dirty 范围 | 环境 | 命令 | 退出码 / 结果 |
+| --- | --- | --- | --- |
+| base `4bbb9ab35` + 本表改动，工作区 dirty | Linux，Node v22.22.2，vitest 5.0.5，better-sqlite3 真实库 | `vitest run packages/host/tests/project-channels-{service,recovery,secrets}.test.ts` | 退出 0；50/50（服务 36 含新增 6、恢复 8、密钥 6） |
+| 同上 | 同上 | `vitest run packages/data/tests/project-channel-store.test.ts` | 退出 0；21/21 |
+| 同上 | 同上 | `npx tsc -b packages/host/tsconfig.json` | 退出 0；项目引用从源码编译 host 及其依赖（capabilities 资产复制例外） |
+| 同上 | 同上 | `npm run architecture:check`；`architecture:worker-module-state`；`check:no-ts-suppress`；`check:encoding` | 全部退出 0；架构 `OK — no new boundary violations`；worker module state PASS |
+| 同上 | 同上 | `npm run build:packages` | 退出 1（**环境限制，非本切片**）：本机安全策略拒绝对 `packages/capabilities/src/AppConnectionTool/approval-templates.json` 的 `copyFile`（EPERM），与 A 交接记录的同一根因；因此未取得能力包/CLI 产物，也未跑 `build:cli-dev`、`typecheck:all`、`electron:build` |
+
+#### 下一动作（需用户授权）
+
+1. 授权把 `refs/heads/codex/project-channels-discord-runtime`（`8fe633618`）合入 `codex/project-channels-de`，以便修 Gap 2 并在 E 注入真实 transport。
+2. 授权在本分支 commit（Conventional Commits，按切片分开），以及是否允许 push/PR。
+3. 授权后继续：D 工具面 → CLI → E 装配 → 本地真实链路验收（生产 Worker + 真实 Host HTTP/SQLite + 本地脚本 provider + B 的受控 REST/WebSocket 端点）。
