@@ -1,7 +1,7 @@
 # Project Channel：独立 Discord 身份与受限 send_message
 
-状态：active，A 合同与存储、B transport、C Host 领域与恢复已实现；D/E 由 `codex/project-channels-de` 承接，已修复继承门禁与两个合同缺口，D 的工具面与 E 的公共装配尚未接线 · 负责人：D/E owner = 本轮会话 · 更新：2026-11-17。
-D/E 实施检出：`codex/project-channels-de`，worktree `.claude/worktrees/project-channels-de`；base：`4bbb9ab3524b88271a3b7e08949526fc243dffb8`（C 的 head，含 A 的 `57610fc0c`）；**B 尚未并入本检出**，故 E 的真实 transport 装配与 Gap 2 无法在本检出完成，需用户授权后合入 `refs/heads/codex/project-channels-discord-runtime`（`8fe633618d016b5bbf843a62b5ada91acfa97ac6`）。
+状态：active，A/B/C 已实现并在 D/E 检出合流；D/E 由 `codex/project-channels-de` 承接，已修复继承门禁与两个合同缺口，D 的工具面与 E 的公共装配尚未接线 · 负责人：D/E owner = 本轮会话 · 更新：2026-11-17。
+D/E 实施检出：`codex/project-channels-de`，worktree `.claude/worktrees/project-channels-de`；base：`4bbb9ab3524b88271a3b7e08949526fc243dffb8`（C 的 head，含 A 的 `57610fc0c`）；用户已授权以 `git merge --no-ff` 合入 `refs/heads/codex/project-channels-discord-runtime`（`8fe633618d016b5bbf843a62b5ada91acfa97ac6`）作为 E 的真实 transport 来源；A/B/C 原分支未被修改或推送。
 设计检出：`claude/lucid-mestorf-72bac0`，worktree `.claude/worktrees/lucid-mestorf-72bac0`；代码基线：`5e5256decc4a915872add152b122a97ad71e55c1`；设计 owner：本会话。
 A 实施检出：`codex/project-channels-protocol-store`，worktree `.claude/worktrees/project-channels-a`；base：`5e5256decc4a915872add152b122a97ad71e55c1`；独占路径：`packages/agent-protocol/src/project-channels.ts` 与协议 exports、`packages/data/src/project-channel-store.ts`、迁移 69 装配、`packages/data/tests/project-channel-store.test.ts`；未合并。
 C 实施检出：`codex/project-channels-host-domain`，worktree `.claude/worktrees/project-channels-c`；base：`57610fc0c`（A 的 head）；独占路径：`packages/host/src/project-channels/**`、`packages/host/tests/project-channels-*.test.ts`（未改 `session-input-api/service`、`local-host`、HTTP）；未推送、未合入。
@@ -224,7 +224,7 @@ E 的真实本地验收必须包含：同检出生产 Worker、真实 Host HTTP/
 - [x] 用户确认独立项目身份，首版产品和权限边界明确。
 - [x] 核对 Gateway、输入/发送、生命周期和架构限制；给出合同、路径 owner 和可转发任务说明。
 - [x] A：协议与持久化（合同/API/port/错误码/幂等键 + 迁移 69 真实 SQLite 存储；21 项专属用例通过）。
-- [ ] B：多实例 Discord transport。
+- [x] B：多实例 Discord transport（`packages/gateway/src/project-channels/**`：工厂 + 连接运行层 + REST/WS；22 项专属用例通过）。
 - [x] C：Host 领域、持久收发及恢复（`packages/host/src/project-channels/**`：控制面 + 连接生命周期 + 入站鉴权/持久排队/串行 drain + 出站 outbox + 启动恢复；44 项专属用例通过）。
 - [ ] D：工具投影与 CLI handler。
 - [ ] E：公共装配、实际链路及门禁。
@@ -238,6 +238,11 @@ E 的真实本地验收必须包含：同检出生产 Worker、真实 Host HTTP/
 | 同上 | 同上 | `vitest run packages/agent-protocol/test`（基线 29 文件/465 项）；`vitest run packages/data/tests`（基线 22 文件/150 项，5 失败） | 协议 465/465 通过；数据 145/150，5 项 `migratePreviousDefaultDatabases` fs-copy 基线失败保持不变 | 新增测试文件全绿；5 项失败在改动前已存在，错误签名一致（`database-migration.test.ts:86` EPERM/copyfile），非本切片引入 |
 | 同上 | 同上 | `tsc --noEmit -p packages/agent-protocol/tsconfig.json`；`tsc --noEmit -p packages/data/tsconfig.json`；`npm run typecheck:protocol`；`npm run architecture:check`；五项 `check:*` | 全部退出 0 | 协议零依赖不变量经 01/02 漂移测试；架构无新增违规（tolerated 3228/3228）|
 | 同上 | 同上 | `npm run build:packages` | 退出 1（非本切片） | `@duya/capabilities` 资产复制在 worktree 中 EPERM（沙箱 fs shim 拒绝 copyfile）；与 5 项基线测试同因，protocol/data 单独 tsc 通过 |
+| B 基线 `57610fc0c`（含 A 合同），B 新增 `packages/gateway/src/project-channels/**`、网关 `package.json` 子路径导出与依赖、Discord 消息类型补 `guild_id`/`webhook_id`/`mentions` | Linux，Node v22.22.2，vitest 5.0.5，受控本地 REST/WebSocket 端点 | `vitest run packages/gateway/src/project-channels/project-discord-runtime.test.ts` | 退出 0；22/22 通过 | 双 Bot 同频道只答被 @ 者、回声/webhook/DM/无原生 @/重复 全部丢弃、旧 generation 不复活、allowed_mentions 关闭、403/5xx/断网分类、429 短限流内联重试 / 长限流交回、重连走 RESUME、心跳无 ACK 不 RESUME、轮换身份冲突、握手失败返回 disconnected |
+| 同上 | 同上 | `tsc --noEmit -p packages/gateway/tsconfig.json`；`npm run -w @duya/gateway build` | 均退出 0 | 产物 `dist/project-channels/index.js` 存在，包根入口未新增副作用导入 |
+| 同上 | 同上 | `vitest run packages/gateway`（基线 20 文件/185 项） | 205/207 通过；2 项失败 | 失败为 `feishu/__tests__/media-download` 与 `outbound-media-upload`，同检出 stash 掉本切片改动后同样失败（沙箱 fs shim），非本切片引入 |
+| 同上 | 同上 | `node scripts/architecture/architecture-check.mjs` | 退出 1；8 条 `module-dependency`（`pkg:gateway -> pkg:agent-protocol`）不在 baseline | 预期：E 需在 `architecture-policy.yaml` 的 `legacy-gateway` 显式声明 `requires: [agent-protocol]`。已临时验证该一行改动后检查退出 0（`OK — no new boundary violations`），随后还原，未代 E 修改策略文件 |
+| 同上 | 同上 | `check:test-coverage`、`check:encoding`、`check:no-ts-suppress` | 全部退出 0 | 新测试文件已被 vitest include 收集 |
 
 | C base `57610fc0c`，新增 `packages/host/src/project-channels/**` 与三个专属测试文件 | Linux，Node v22.22.2，vitest 5.0.5，better-sqlite3 内存真实库（真实迁移 2/49/50/69） | `vitest run packages/host/tests/project-channels-{service,recovery,secrets}.test.ts` | 退出 0；44/44 通过（30 + 8 + 6） | 配置前先验身份、Bot 身份跨项目唯一、空 allowlist/thread/未核验频道拒绝；原生 @ + 白名单 + generation fencing；重复事件同 id 不二次执行；同 messageId 异正文 `inbound_fingerprint_conflict`；busy/control lease 持久等待后 drain；撤销 binding/断连后不执行旧授权；reply scope 与 allowProactive；`queued` 不等于 `sent`；429 有界重试一次、长限流不重发、无证据落 `unknown`；`sending` → `unknown`、claimed → `recovery_required` 不盲重启、未提交事件按当前 Coordinator 恢复、跨 Host 重启队列存活 |
 | 同上 | 同上 | `tsc --noEmit -p packages/host/tsconfig.json`；`tsc -b packages/host/tsconfig.json`；`npm run architecture:check` | 全部退出 0 | 产物 `packages/host/dist/project-channels/index.js` 生成；架构 `OK — no new boundary violations`（host 只依赖 data/agent-protocol，未引入 Gateway） |
@@ -359,3 +364,22 @@ owner：本轮会话（D：工具与客户端，E：公共装配与整体验收�
 1. 授权把 `refs/heads/codex/project-channels-discord-runtime`（`8fe633618`）合入 `codex/project-channels-de`，以便修 Gap 2 并在 E 注入真实 transport。
 2. 授权在本分支 commit（Conventional Commits，按切片分开），以及是否允许 push/PR。
 3. 授权后继续：D 工具面 → CLI → E 装配 → 本地真实链路验收（生产 Worker + 真实 Host HTTP/SQLite + 本地脚本 provider + B 的受控 REST/WebSocket 端点）。
+
+### B 交接（多实例 Discord transport，供 C/E 依赖）
+
+B 分支 `codex/project-channels-discord-runtime`（base `57610fc0c`，即 A 的 head）。独占路径内新增 `packages/gateway/src/project-channels/**`（`transport.ts` 端口实现 + 工厂、`connection.ts` 单连接过滤/收发、`socket.ts` 网关会话与重连、`rest.ts` 结果可分类的 REST 客户端、`errors.ts`、`timers.ts`、`types.ts`、专属测试），并改 `packages/gateway/package.json`（新增 `@duya/agent-protocol` 依赖与 `./project-channels` 子路径导出）与 `adapters/discord/types.ts`（`DiscordMessage` 补 `guild_id` / `webhook_id` / `mentions` 三个可选字段）。
+
+**入口**：只能用子路径 `@duya/gateway/project-channels` 的 `createProjectDiscordTransport(options)`（或 `ProjectDiscordTransport` 类）。包根 `index.ts` 是 fork 出去的 gateway 进程入口，被 import 即安装 IPC 监听并 `gateway:ready`，因此**没有**把工厂挂到根导出，E 装配时不要 `import '@duya/gateway'`。
+
+**供 C 消费的语义**（端口签名之外的事实）：
+
+- `start` 先 REST 核验 `/users/@me`、再解析 `/gateway/bot`，通过后才顶替同 `connectionId` 的旧运行层；核验/发现失败时抛 `ProjectChannelTransportFailure`（带 A 的错误码）并把 `error` 观测写进 `observe()`。成功时返回的观测可能仍是 `disconnected`（socket 已开、READY 未到），不会谎报在线。
+- `verifyIdentity` / `inspectChannel` 端口没有错误联合，失败一律 `reject` 同一个 `ProjectChannelTransportFailure`（`credential_invalid` / `invalid_target` / `transport_unavailable`），C 按 `code` 映射，不要解析 message。
+- `send` 返回 `{ platformMessageId }` 或失败联合：429 且预算 ≤ 2s 内联重试一次（429 是确定的未投递，重试不会重复）；更长预算交回 `delivery_retryable` + `retryAfterMs`；401 `credential_invalid`、403/404/4xx `delivery_failed`、5xx 与断网/超时 `delivery_unknown`（无证据，不得自动重发）。超过 2000 字符或空正文在发出前就 `invalid_request` 拒绝，不截断、不拆块。
+- generation：`start` 顶替旧代、旧 socket 的迟到回调与迟到 `stop(connectionId, 旧 generation)` 都被忽略；`send` 只接受与运行层一致的 generation，否则 `generation_stale` 且不发请求。
+- 入站只交真实成员的原生 `@`：Bot/webhook 作者（含自身回声）、无 `guild_id` 的 DM、未原生提及本 Bot、空正文、重复 `messageId` 全部丢弃；`channelId` 永远是消息自身频道（不映射 thread 父频道，thread 需单独绑定才可能命中 Host 的 binding）；同连接入站串行交给 `onInbound`，避免两条问题抢同一个 Coordinator。
+- `stop` 关闭 socket/心跳/重连计时器并保留 `disconnected` 观测；`dispose()` 停全部连接，供 Host 关闭时调用。
+
+**与 §5「复用 DiscordAdapter」的偏差（需 E 复核）**：没有继承 `DiscordAdapter`，因为它的消息路径产出 `NormalizedMessage`，丢掉原生 mention id、guild、作者类型，且保留 slash/名称正则 mention 特例、按 `DISCORD_MAX` 每消息拉 `/channels/:id`、下载附件——正是 §4.1 第 1 项禁止的行为；继承又会连带 `BaseAdapter` 的 platform 级去重与健康状态。改为复用同一适配器的协议层（`adapters/discord/types.ts`、`message-utils.cleanContent`、`proxy-fetch.proxyFetch`），旧适配器文件保持零改动以保回归。默认 `fetchImpl` 走 `proxyFetch`，与旧 Bot 同一代理配置。
+
+**已知未覆盖 / 待 E 处理**：`architecture-policy.yaml` 中 `legacy-gateway` 仍是 `requires: []`，架构检查因此报 8 条 `pkg:gateway -> pkg:agent-protocol` 新边（退出 1）。E 加一行 `requires: [agent-protocol]` 即可通过（本切片已临时验证退出 0 后还原，未代改策略文件）。未做：真实 Discord 端点验收、guild/channel 事实缓存、发送块拆分、附件、TUI/Host 接线、Desktop 显示。分支已本地提交，未推送、未开 PR。
