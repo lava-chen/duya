@@ -150,8 +150,35 @@ const SEND_MESSAGE_SCHEMA = {
       },
       required: ['label', 'connector', 'field'],
     },
+    // Project Coordinator path. Deliberately narrow: a binding id, the text and
+    // an optional reference to the inbound being answered. No actor, project,
+    // session, run, epoch, credential or platform target — the Host derives all
+    // of those from the trusted worker attempt, and a payload that named them
+    // would be refused.
+    channelBindingId: {
+      type: 'string',
+      description:
+        'Project Coordinator only. The channel binding to send to, exactly as returned by project list_channels. Sends go out as this Project\'s own bot; the text is visible to everyone in that Discord channel.',
+    },
+    text: {
+      type: 'string',
+      description:
+        'Required with channelBindingId. The message body to post. It is public to the channel, so never include credentials, private transcripts, or tool internals.',
+    },
+    requestId: {
+      type: 'string',
+      description:
+        'Required with channelBindingId. A stable id for this send; replaying the same requestId with the same text is idempotent, and reusing it with different text is refused as a conflict.',
+    },
+    replyToInboundId: {
+      type: 'string',
+      description:
+        'Required when answering an external message: the inbound id you are replying to. Sending without one requires the binding to allow unsolicited messages.',
+    },
   },
-  required: ['type'],
+  // `type` stays required for every legacy shape; the project-channel branch
+  // validates its own fields instead (see `execute`).
+  required: [],
 } as const;
 
 // Grok-bot's SendMessage description (0.18) ported with duya adaptations.
@@ -568,6 +595,31 @@ async function deliverToChannel(
   }
 }
 
+/**
+ * Say what the ledger actually knows.
+ *
+ * A model that is told "sent" for a `queued` delivery will stop trying; one
+ * that is told "sent" for an `unknown` delivery will tell the user something
+ * that may be false. Both are worse than the extra sentence.
+ */
+function describeDelivery(deliveryId: string, status: string): string {
+  const receipt = `(delivery ${deliveryId}, status: ${status})`;
+  switch (status) {
+    case 'sent':
+      return `Sent to the channel ${receipt}.`;
+    case 'queued':
+      return `Accepted and queued for the channel ${receipt}. It has not been sent yet — queued is not delivered.`;
+    case 'sending':
+      return `Delivery is in flight ${receipt}. Do not send it again.`;
+    case 'unknown':
+      return `The platform outcome is unknown ${receipt}. It may or may not have been posted; do not resend it blindly.`;
+    case 'failed':
+      return `Delivery failed ${receipt}.`;
+    default:
+      return `Delivery recorded ${receipt}.`;
+  }
+}
+
 // ─── Tool class ──────────────────────────────────────────────────────────
 export class SendMessageTool extends BaseTool {
   constructor(private readonly port: SendMessagePort) {
@@ -577,6 +629,62 @@ export class SendMessageTool extends BaseTool {
   name = SEND_MESSAGE_TOOL_NAME;
   description = SEND_MESSAGE_DESCRIPTION;
   input_schema = SEND_MESSAGE_SCHEMA;
+
+  /**
+   * Post to a Project's authorized channel through the Host.
+   *
+   * Everything that decides whether this is allowed — who is calling, which
+   * project, which run and epoch, whether the binding is still live, whether
+   * unsolicited sends are permitted — is resolved by the Host from the trusted
+   * worker attempt. This method only shapes the request and reports the
+   * ledger's answer. It never upgrades that answer: `queued` is reported as
+   * accepted, and `unknown` is reported as unknown.
+   */
+  async #sendToProjectChannel(
+    input: Record<string, unknown>,
+    channelBindingId: string,
+  ): Promise<ToolResult> {
+    const refuse = (result: string): ToolResult => ({
+      id: randomUUID(), name: this.name, result, error: true,
+    });
+
+    const port = this.port.sendToProjectChannel;
+    if (port === undefined) {
+      // Outside a composed Project Host there is no channel to send to, and
+      // falling through to the legacy paths would post the text somewhere the
+      // model did not ask for.
+      return refuse('channel_support_unavailable: this session has no Project channel host.');
+    }
+    const requestId = typeof input.requestId === 'string' ? input.requestId.trim() : '';
+    const text = typeof input.text === 'string'
+      ? input.text
+      : typeof input.content === 'string' ? input.content : '';
+    if (requestId === '') return refuse('invalid_request: requestId is required for a channel send.');
+    if (text.trim() === '') return refuse('invalid_request: text is required for a channel send.');
+    const replyToInboundId = typeof input.replyToInboundId === 'string' ? input.replyToInboundId.trim() : '';
+
+    try {
+      const outcome = await port({
+        requestId,
+        channelBindingId,
+        text,
+        ...(replyToInboundId === '' ? {} : { replyToInboundId }),
+      });
+      if (!outcome.ok) {
+        return refuse(`${outcome.reason}${outcome.message === undefined ? '' : `: ${outcome.message}`}`);
+      }
+      return {
+        id: outcome.deliveryId,
+        name: this.name,
+        // The words matter: "accepted" is not "delivered", and a caller that
+        // reads either as proof the channel saw it would be wrong.
+        result: describeDelivery(outcome.deliveryId, outcome.status),
+      };
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      return refuse(`channel_send_failed: ${errorMessage}`);
+    }
+  }
 
   async execute(
     input: Record<string, unknown>,
@@ -590,6 +698,14 @@ export class SendMessageTool extends BaseTool {
         result: 'Invalid input: input must be an object.',
         error: true,
       };
+    }
+    // The project-channel branch runs BEFORE the legacy `type` check: a
+    // Coordinator answers the narrow contract (binding + text + optional reply
+    // reference) and has no `type` to give. Ordering here is what keeps the two
+    // shapes from being merged into one ambiguous request.
+    const channelBindingId = typeof input.channelBindingId === 'string' ? input.channelBindingId.trim() : '';
+    if (channelBindingId !== '') {
+      return await this.#sendToProjectChannel(input, channelBindingId);
     }
     const type = input.type as string | undefined;
     if (!type) {

@@ -183,17 +183,17 @@ describe('canonical Project Task lifecycle', () => {
   it('lets the real Coordinator project tool create/update but never accept or forge provenance', async () => {
     const f = createTask();
     const tool = createProjectToolService({ stores: { projects: f.projects }, projectApi: f.api });
-    const created = await tool.dispatch({ callerSessionId: f.coordinatorId, action: 'create_task',
+    const created = await tool.dispatch({ caller: { sessionId: f.coordinatorId, runId: 'run-1', epoch: 1 }, action: 'create_task',
       payload: { requestId: 'second', subject: 'Independent Task', description: 'Defined before launch' } });
     expect(created).toMatchObject({ ok: true, task: { status: 'pending', workSessionId: null, revision: 0 } });
-    const updated = await tool.dispatch({ callerSessionId: f.coordinatorId, action: 'update_task',
+    const updated = await tool.dispatch({ caller: { sessionId: f.coordinatorId, runId: 'run-1', epoch: 1 }, action: 'update_task',
       payload: { taskId: f.taskId, expectedRevision: 0, subject: 'Edited title' } });
     expect(updated).toMatchObject({ ok: true, task: { subject: 'Edited title', revision: 1 } });
     for (const payload of [{ taskId: f.taskId, expectedRevision: 1, status: 'accepted' },
       { taskId: f.taskId, expectedRevision: 1, subject: 'Fake', source: { type: 'user_message', id: 'fake' } }]) {
-      expect(await tool.dispatch({ callerSessionId: f.coordinatorId, action: 'update_task', payload })).toMatchObject({ ok: false });
+      expect(await tool.dispatch({ caller: { sessionId: f.coordinatorId, runId: 'run-1', epoch: 1 }, action: 'update_task', payload })).toMatchObject({ ok: false });
     }
-    expect(await tool.dispatch({ callerSessionId: f.coordinatorId, action: 'accept_task', payload: {} })).toMatchObject({ ok: false });
-    expect(await tool.dispatch({ callerSessionId: 'worker', action: 'create_task', payload: {} })).toMatchObject({ ok: false, reason: 'not_project_coordinator' });
+    expect(await tool.dispatch({ caller: { sessionId: f.coordinatorId, runId: 'run-1', epoch: 1 }, action: 'accept_task', payload: {} })).toMatchObject({ ok: false });
+    expect(await tool.dispatch({ caller: { sessionId: 'worker', runId: 'run-2', epoch: 1 }, action: 'create_task', payload: {} })).toMatchObject({ ok: false, reason: 'not_project_coordinator' });
   });
 });

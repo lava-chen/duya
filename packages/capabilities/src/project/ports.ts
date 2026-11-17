@@ -15,7 +15,9 @@ export type ProjectToolAction =
   | 'create_task'
   | 'update_task'
   | 'record_memory'
-  | 'list_channels';
+  | 'list_channels'
+  /** Internal: reached through `send_message`, not offered as a project action. */
+  | 'send_channel_message';
 
 export interface ProjectToolSource {
   readonly type: string;
@@ -116,6 +118,17 @@ export interface ProjectToolPayload {
   readonly decision?: ProjectToolDecision;
   readonly memory?: ProjectToolMemory;
   readonly channels?: readonly ProjectToolChannel[];
+  /**
+   * Receipt of an external send. `status` is the ledger's, never optimistically
+   * `sent`: `queued` means accepted here, `unknown` means the platform may or
+   * may not have it.
+   */
+  readonly delivery?: ProjectToolDelivery;
+}
+
+export interface ProjectToolDelivery {
+  readonly deliveryId: string;
+  readonly status: string;
 }
 
 export type ProjectToolOperation<T> =

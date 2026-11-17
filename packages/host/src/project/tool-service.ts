@@ -20,7 +20,12 @@ import type {
   ProjectDecision,
   ProjectMemory,
 } from '@duya/agent-protocol/projects';
-import type { HostProjectChannelApiV1 } from '@duya/agent-protocol/project-channels';
+import { isProjectChannelErrorCode } from '@duya/agent-protocol/project-channels';
+import type {
+  HostProjectChannelApiV1,
+  ProjectChannelSendMessageInput,
+  ProjectChannelSendResult,
+} from '@duya/agent-protocol/project-channels';
 import type { ProjectStore } from '@duya/data/project-store';
 import type {
   ProjectToolAction,
@@ -45,6 +50,10 @@ const PROJECT_TOOL_ACTIONS: ReadonlySet<string> = new Set([
   'create_task',
   'update_task',
   'list_channels',
+  // Not a model-facing project action: `send_message` reaches this through the
+  // channel tool. Kept in the same allowlist so the dispatch switch stays the
+  // single place that decides what a worker may ask for.
+  'send_channel_message',
 ]);
 
 const DEFAULT_ACTIVITY_LIMIT = 50;
@@ -73,7 +82,21 @@ export interface ProjectToolServiceOptions {
    * the Host. Absent when channel support is not composed: the action then
    * refuses instead of inventing an empty list that reads as "no channels".
    */
-  readonly channels?: Pick<HostProjectChannelApiV1, 'getProjectChannels'>;
+  readonly channels?: Pick<HostProjectChannelApiV1, 'getProjectChannels'> & {
+    /**
+     * The Coordinator send path. The caller facts come from here — the worker
+     * supplies only the binding, the text and an optional reply reference.
+     */
+    sendFromCoordinator(
+      caller: {
+        readonly projectId: string;
+        readonly sessionId: string;
+        readonly runId: string;
+        readonly epoch: number;
+      },
+      request: ProjectChannelSendMessageInput,
+    ): Promise<ProjectChannelSendResult>;
+  };
 }
 
 export interface ProjectToolService {
@@ -86,7 +109,16 @@ export interface ProjectToolService {
   dispatch(input: {
     readonly action: string;
     readonly payload: Record<string, unknown>;
-    readonly callerSessionId: string;
+    /**
+     * The trusted worker attempt. `sessionId` resolves the project;
+     * `runId`/`epoch` are what a channel send is authorised against, so a
+     * payload can never name its own identity.
+     */
+    readonly caller: {
+      readonly sessionId: string;
+      readonly runId: string;
+      readonly epoch: number;
+    };
   }): Promise<ProjectToolOperation<ProjectToolPayload>>;
 }
 
@@ -103,11 +135,11 @@ export function createProjectToolService(options: ProjectToolServiceOptions): Pr
       if (!context) throw new Error('Bound project context unavailable');
       return { ...context, projectId, role: coordinator ? 'coordinator' : 'work', taskId: link?.task_id ?? null };
     },
-    async dispatch({ action, payload, callerSessionId }) {
+    async dispatch({ action, payload, caller }) {
       if (!PROJECT_TOOL_ACTIONS.has(action)) {
         return refuse(`unsupported_action:${action}`);
       }
-      const project = stores.projects.getByCoordinatorSession(callerSessionId);
+      const project = stores.projects.getByCoordinatorSession(caller.sessionId);
       if (project === null) return refuse('not_project_coordinator');
       const projectId = project.project_id;
 
@@ -119,7 +151,7 @@ export function createProjectToolService(options: ProjectToolServiceOptions): Pr
           try {
             if (action === 'create_task') {
               if (typeof payload.requestId !== 'string' || typeof payload.subject !== 'string' || typeof payload.description !== 'string') return refuse('invalid_task_payload');
-              const row = await projectApi.createProjectTask({ projectId, coordinatorSessionId: callerSessionId,
+              const row = await projectApi.createProjectTask({ projectId, coordinatorSessionId: caller.sessionId,
                 requestId: payload.requestId, subject: payload.subject, description: payload.description });
               return { ok: true, task: toToolTask(row) };
             }
@@ -128,7 +160,7 @@ export function createProjectToolService(options: ProjectToolServiceOptions): Pr
               (payload.status !== undefined && payload.status !== 'pending') ||
               (payload.subject !== undefined && typeof payload.subject !== 'string') ||
               (payload.description !== undefined && typeof payload.description !== 'string')) return refuse('invalid_task_payload');
-            const row = await projectApi.updateProjectTask({ projectId, coordinatorSessionId: callerSessionId,
+            const row = await projectApi.updateProjectTask({ projectId, coordinatorSessionId: caller.sessionId,
               taskId: payload.taskId, expectedRevision,
               ...(typeof payload.subject === 'string' ? { subject: payload.subject } : {}),
               ...(typeof payload.description === 'string' ? { description: payload.description } : {}),
@@ -186,6 +218,40 @@ export function createProjectToolService(options: ProjectToolServiceOptions): Pr
           };
         }
 
+        case 'send_channel_message': {
+          if (options.channels === undefined) return refuse('channel_support_unavailable');
+          const keys = ['requestId', 'channelBindingId', 'text', 'replyToInboundId'];
+          if (Object.keys(payload).some((key) => !keys.includes(key))) return refuse('invalid_send_payload');
+          const requestId = readString(payload.requestId)?.trim() ?? '';
+          const channelBindingId = readString(payload.channelBindingId)?.trim() ?? '';
+          const text = readString(payload.text) ?? '';
+          const replyToInboundId = readString(payload.replyToInboundId)?.trim();
+          if (requestId === '' || channelBindingId === '' || text.trim() === '') {
+            return refuse('invalid_send_payload');
+          }
+          // Identity is the caller's, not the payload's: no actor, project,
+          // session, run, epoch or platform target is read from here.
+          try {
+            const result = await options.channels.sendFromCoordinator(
+              {
+                // The project came from the Coordinator binding resolved above,
+                // never from the payload; runId/epoch are the live attempt.
+                projectId,
+                sessionId: caller.sessionId,
+                runId: caller.runId,
+                epoch: caller.epoch,
+              },
+              { requestId, channelBindingId, text, ...(replyToInboundId ? { replyToInboundId } : {}) },
+            );
+            return { ok: true, delivery: { deliveryId: result.deliveryId, status: result.status } };
+          } catch (error) {
+            // A refused send is a domain answer, not a crash: the model gets
+            // the code and can correct itself, and `queued`/`sent` are never
+            // invented for a call that never reached the transport.
+            return refuse(channelErrorReason(error));
+          }
+        }
+
         case 'update_state': {
           const expectedRevision = readInteger(payload.expectedRevision, 0, Number.MAX_SAFE_INTEGER);
           if (expectedRevision === undefined || expectedRevision === 'invalid') {
@@ -199,7 +265,7 @@ export function createProjectToolService(options: ProjectToolServiceOptions): Pr
             expectedRevision,
             currentState,
             nextStep,
-            source: sessionSource(callerSessionId),
+            source: sessionSource(caller.sessionId),
           });
           if (state === null) return refuse('revision_conflict');
           return { ok: true, state: toToolState(state) };
@@ -224,7 +290,7 @@ export function createProjectToolService(options: ProjectToolServiceOptions): Pr
               content,
               status,
               expectedRevision,
-              source: sessionSource(callerSessionId),
+              source: sessionSource(caller.sessionId),
             });
             if (decision === null) return refuse('revision_conflict');
             return { ok: true, decision: toToolDecision(decision) };
@@ -254,7 +320,7 @@ export function createProjectToolService(options: ProjectToolServiceOptions): Pr
               content,
               status,
               expectedRevision,
-              source: sessionSource(callerSessionId),
+              source: sessionSource(caller.sessionId),
             });
             if (memory === null) return refuse('revision_conflict');
             return { ok: true, memory: toToolMemory(memory) };
@@ -269,6 +335,23 @@ export function createProjectToolService(options: ProjectToolServiceOptions): Pr
 
 function sessionSource(callerSessionId: string): { type: 'session'; id: string } {
   return { type: 'session', id: callerSessionId };
+}
+
+/**
+ * Turn a channel-service refusal into a stable reason string.
+ *
+ * The domain codes are already user-facing (`reply_scope_invalid`,
+ * `proactive_not_allowed`, `binding_revoked`), so they are passed through
+ * verbatim: a model that is told "proactive_not_allowed" can change its call,
+ * whereas "internal" teaches it nothing. Anything without a known code is
+ * reported as `channel_send_failed` rather than guessed at.
+ */
+function channelErrorReason(error: unknown): string {
+  if (error !== null && typeof error === 'object' && 'code' in error) {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === 'string' && isProjectChannelErrorCode(code)) return code;
+  }
+  return 'channel_send_failed';
 }
 
 function refuse(reason: string): { ok: false; reason: string } {

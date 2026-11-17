@@ -62,7 +62,12 @@ function snapshot(): ProjectContinuitySnapshot {
 function harness(options: {
   coordinator?: string | null;
   updateState?: 'ok' | 'conflict';
-  channels?: Pick<HostProjectChannelApiV1, 'getProjectChannels'>;
+  channels?: Pick<HostProjectChannelApiV1, 'getProjectChannels'> & {
+    sendFromCoordinator: (
+      caller: { projectId: string; sessionId: string; runId: string; epoch: number },
+      request: { requestId: string; channelBindingId: string; text: string; replyToInboundId?: string },
+    ) => Promise<{ deliveryId: string; status: string }>;
+  };
 } = {}) {
   const projectApi = {
     getProjectContinuity: vi.fn(async () => snapshot()),
@@ -118,7 +123,7 @@ describe('project tool service', () => {
   it('refuses a caller that is not the bound Coordinator without touching the project', async () => {
     const { service, projectApi } = harness({ coordinator: null });
 
-    const result = await service.dispatch({ action: 'get', payload: {}, callerSessionId: 'someone-else' });
+    const result = await service.dispatch({ action: 'get', payload: {}, caller: { sessionId: 'someone-else', runId: 'run-9', epoch: 1 } });
 
     expect(result).toEqual({ ok: false, reason: 'not_project_coordinator' });
     expect(projectApi.getProjectContinuity).not.toHaveBeenCalled();
@@ -130,7 +135,7 @@ describe('project tool service', () => {
     const result = await service.dispatch({
       action: 'get',
       payload: { afterCursor: 2, limit: 5 },
-      callerSessionId: COORDINATOR_ID,
+      caller: { sessionId: COORDINATOR_ID, runId: 'run-1', epoch: 1 },
     });
 
     expect(projectApi.getProjectContinuity).toHaveBeenCalledWith(PROJECT_ID, { afterCursor: 2, limit: 5 });
@@ -154,7 +159,7 @@ describe('project tool service', () => {
     const result = await service.dispatch({
       action: 'update_state',
       payload: { expectedRevision: 3, currentState: 'Merged', nextStep: 'Ask for acceptance' },
-      callerSessionId: COORDINATOR_ID,
+      caller: { sessionId: COORDINATOR_ID, runId: 'run-1', epoch: 1 },
     });
 
     expect(projectApi.updateProjectState).toHaveBeenCalledWith({
@@ -173,7 +178,7 @@ describe('project tool service', () => {
     const result = await service.dispatch({
       action: 'update_state',
       payload: { expectedRevision: 2, currentState: 'Stale' },
-      callerSessionId: COORDINATOR_ID,
+      caller: { sessionId: COORDINATOR_ID, runId: 'run-1', epoch: 1 },
     });
 
     expect(result).toEqual({ ok: false, reason: 'revision_conflict' });
@@ -185,12 +190,12 @@ describe('project tool service', () => {
     const decision = await service.dispatch({
       action: 'record_decision',
       payload: { expectedRevision: 0, key: 'k', content: 'c', status: 'accepted' },
-      callerSessionId: COORDINATOR_ID,
+      caller: { sessionId: COORDINATOR_ID, runId: 'run-1', epoch: 1 },
     });
     const memory = await service.dispatch({
       action: 'record_memory',
       payload: { expectedRevision: 0, key: 'k', content: 'c', status: 'active' },
-      callerSessionId: COORDINATOR_ID,
+      caller: { sessionId: COORDINATOR_ID, runId: 'run-1', epoch: 1 },
     });
 
     expect(decision).toEqual({ ok: false, reason: 'user_action_required' });
@@ -205,12 +210,12 @@ describe('project tool service', () => {
     const decision = await service.dispatch({
       action: 'record_decision',
       payload: { expectedRevision: 2, key: 'api-shape', content: 'Use REST', status: 'proposed' },
-      callerSessionId: COORDINATOR_ID,
+      caller: { sessionId: COORDINATOR_ID, runId: 'run-1', epoch: 1 },
     });
     const memory = await service.dispatch({
       action: 'record_memory',
       payload: { expectedRevision: 1, key: 'style', content: 'Small modules', status: 'candidate' },
-      callerSessionId: COORDINATOR_ID,
+      caller: { sessionId: COORDINATOR_ID, runId: 'run-1', epoch: 1 },
     });
 
     expect(decision).toMatchObject({ ok: true, decision: { key: 'api-shape', status: 'proposed' } });
@@ -229,7 +234,7 @@ describe('project tool service', () => {
     const result = await service.dispatch({
       action: 'context',
       payload: { taskId: 'task-1', maxCharacters: 1200 },
-      callerSessionId: COORDINATOR_ID,
+      caller: { sessionId: COORDINATOR_ID, runId: 'run-1', epoch: 1 },
     });
 
     expect(projectApi.getProjectContext).toHaveBeenCalledWith(PROJECT_ID, 'task-1', 1200);
@@ -239,7 +244,7 @@ describe('project tool service', () => {
   it('rejects an unknown action before resolving the project', async () => {
     const { service, projectApi } = harness();
 
-    const result = await service.dispatch({ action: 'accept_task', payload: {}, callerSessionId: COORDINATOR_ID });
+    const result = await service.dispatch({ action: 'accept_task', payload: {}, caller: { sessionId: COORDINATOR_ID, runId: 'run-1', epoch: 1 } });
 
     expect(result).toEqual({ ok: false, reason: 'unsupported_action:accept_task' });
     expect(projectApi.getProjectContinuity).not.toHaveBeenCalled();
@@ -281,7 +286,7 @@ describe('project tool list_channels', () => {
     ]);
     const { service } = harness({ channels });
 
-    const result = await service.dispatch({ action: 'list_channels', payload: {}, callerSessionId: COORDINATOR_ID });
+    const result = await service.dispatch({ action: 'list_channels', payload: {}, caller: { sessionId: COORDINATOR_ID, runId: 'run-1', epoch: 1 } });
 
     expect(result.ok).toBe(true);
     expect(result).toMatchObject({
@@ -299,7 +304,7 @@ describe('project tool list_channels', () => {
     const { channels } = withChannels([binding({ allowProactive: true })], { ...connection, enabled: false });
     const { service } = harness({ channels });
 
-    const result = await service.dispatch({ action: 'list_channels', payload: {}, callerSessionId: COORDINATOR_ID });
+    const result = await service.dispatch({ action: 'list_channels', payload: {}, caller: { sessionId: COORDINATOR_ID, runId: 'run-1', epoch: 1 } });
 
     expect(result).toMatchObject({
       channels: [{ bindingId: 'binding-1', canReply: false, canProactive: false }],
@@ -309,7 +314,7 @@ describe('project tool list_channels', () => {
   it('refuses instead of inventing an empty list when channel support is not composed', async () => {
     const { service } = harness();
 
-    const result = await service.dispatch({ action: 'list_channels', payload: {}, callerSessionId: COORDINATOR_ID });
+    const result = await service.dispatch({ action: 'list_channels', payload: {}, caller: { sessionId: COORDINATOR_ID, runId: 'run-1', epoch: 1 } });
 
     expect(result).toEqual({ ok: false, reason: 'channel_support_unavailable' });
   });
@@ -318,9 +323,144 @@ describe('project tool list_channels', () => {
     const { channels, getProjectChannels } = withChannels([binding()]);
     const { service } = harness({ coordinator: null, channels });
 
-    const result = await service.dispatch({ action: 'list_channels', payload: {}, callerSessionId: 'someone-else' });
+    const result = await service.dispatch({ action: 'list_channels', payload: {}, caller: { sessionId: 'someone-else', runId: 'run-9', epoch: 1 } });
 
     expect(result).toEqual({ ok: false, reason: 'not_project_coordinator' });
     expect(getProjectChannels).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * `send_channel_message` — the Host half of the Coordinator's `send_message`.
+ *
+ * The model supplies a binding, text and an optional reply reference. Anything
+ * that decides authorisation — project, session, run, epoch, reply scope,
+ * `allowProactive` — comes from the trusted caller and the channel domain. These
+ * cases pin the boundary: a payload that names an identity is refused outright,
+ * and a work Session has no send path at all.
+ */
+describe('project tool send_channel_message', () => {
+  function sendHarness(outcome: 'sent' | 'queued' | Error = 'sent') {
+    const sendFromCoordinator = vi.fn(async (
+      _caller: { projectId: string; sessionId: string; runId: string; epoch: number },
+      _request: { requestId: string; channelBindingId: string; text: string; replyToInboundId?: string },
+    ) => {
+      if (outcome instanceof Error) throw outcome;
+      return { deliveryId: 'delivery-1', status: outcome };
+    });
+    return {
+      sendFromCoordinator,
+      channels: { getProjectChannels: vi.fn(async () => null), sendFromCoordinator },
+    };
+  }
+
+  it('forwards the Host-resolved project and the trusted attempt, not payload identity', async () => {
+    const { channels, sendFromCoordinator } = sendHarness('sent');
+    const { service } = harness({ channels });
+
+    const result = await service.dispatch({
+      action: 'send_channel_message',
+      payload: { requestId: 'req-1', channelBindingId: 'binding-1', text: 'status is green' },
+      caller: { sessionId: COORDINATOR_ID, runId: 'run-7', epoch: 3 },
+    });
+
+    expect(result).toEqual({ ok: true, delivery: { deliveryId: 'delivery-1', status: 'sent' } });
+    expect(sendFromCoordinator).toHaveBeenCalledWith(
+      { projectId: PROJECT_ID, sessionId: COORDINATOR_ID, runId: 'run-7', epoch: 3 },
+      { requestId: 'req-1', channelBindingId: 'binding-1', text: 'status is green' },
+    );
+  });
+
+  it('passes a reply reference through and omits the key when absent', async () => {
+    const { channels, sendFromCoordinator } = sendHarness('sent');
+    const { service } = harness({ channels });
+
+    await service.dispatch({
+      action: 'send_channel_message',
+      payload: {
+        requestId: 'req-2', channelBindingId: 'binding-1', text: 'hi', replyToInboundId: 'inbound-9',
+      },
+      caller: { sessionId: COORDINATOR_ID, runId: 'run-7', epoch: 3 },
+    });
+
+    expect(sendFromCoordinator).toHaveBeenCalledWith(expect.anything(), {
+      requestId: 'req-2', channelBindingId: 'binding-1', text: 'hi', replyToInboundId: 'inbound-9',
+    });
+  });
+
+  it('refuses a payload that tries to name its own identity or target', async () => {
+    const { channels, sendFromCoordinator } = sendHarness('sent');
+    const { service } = harness({ channels });
+
+    for (const extra of [
+      { actor: 'someone' },
+      { projectId: 'other-project' },
+      { sessionId: 'other-session' },
+      { runId: 'other-run' },
+      { epoch: 99 },
+      { channelId: 'discord-channel' },
+      { credential: 'token' },
+    ]) {
+      const result = await service.dispatch({
+        action: 'send_channel_message',
+        payload: { requestId: 'req-3', channelBindingId: 'binding-1', text: 'hi', ...extra },
+        caller: { sessionId: COORDINATOR_ID, runId: 'run-7', epoch: 3 },
+      });
+      expect(result).toEqual({ ok: false, reason: 'invalid_send_payload' });
+    }
+    expect(sendFromCoordinator).not.toHaveBeenCalled();
+  });
+
+  it('gives a work Session no send path at all', async () => {
+    const { channels, sendFromCoordinator } = sendHarness('sent');
+    // The caller is not the project's Coordinator.
+    const { service } = harness({ coordinator: null, channels });
+
+    const result = await service.dispatch({
+      action: 'send_channel_message',
+      payload: { requestId: 'req-4', channelBindingId: 'binding-1', text: 'hi' },
+      caller: { sessionId: 'work-session', runId: 'run-8', epoch: 1 },
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'not_project_coordinator' });
+    expect(sendFromCoordinator).not.toHaveBeenCalled();
+  });
+
+  it('reports the domain refusal verbatim instead of inventing a delivery', async () => {
+    const { channels } = sendHarness(Object.assign(new Error('scope'), { code: 'reply_scope_invalid' }));
+    const { service } = harness({ channels });
+
+    const result = await service.dispatch({
+      action: 'send_channel_message',
+      payload: { requestId: 'req-5', channelBindingId: 'binding-1', text: 'hi', replyToInboundId: 'inbound-1' },
+      caller: { sessionId: COORDINATOR_ID, runId: 'run-7', epoch: 3 },
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'reply_scope_invalid' });
+  });
+
+  it('keeps the ledger status instead of upgrading queued to sent', async () => {
+    const { channels } = sendHarness('queued');
+    const { service } = harness({ channels });
+
+    const result = await service.dispatch({
+      action: 'send_channel_message',
+      payload: { requestId: 'req-6', channelBindingId: 'binding-1', text: 'hi' },
+      caller: { sessionId: COORDINATOR_ID, runId: 'run-7', epoch: 3 },
+    });
+
+    expect(result).toEqual({ ok: true, delivery: { deliveryId: 'delivery-1', status: 'queued' } });
+  });
+
+  it('refuses when channel support is not composed rather than dropping the message', async () => {
+    const { service } = harness();
+
+    const result = await service.dispatch({
+      action: 'send_channel_message',
+      payload: { requestId: 'req-7', channelBindingId: 'binding-1', text: 'hi' },
+      caller: { sessionId: COORDINATOR_ID, runId: 'run-7', epoch: 3 },
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'channel_support_unavailable' });
   });
 });
