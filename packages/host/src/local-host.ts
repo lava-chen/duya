@@ -1160,6 +1160,8 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       modeStateApi,
       taskApi,
       projectApi,
+      // Same instance the tool layer uses: one ledger, one transport lifecycle.
+      ...(projectChannels === undefined ? {} : { projectChannelApi: projectChannels }),
       researchApi: createHostResearchApi(core.stores),
       permissionRequestApi: runExecution?.permissionRequests ?? createHostPermissionRequestApi(core.stores),
       toolApprovalApi: createHostToolApprovalApi(mainDatabase.db),
