@@ -1,8 +1,9 @@
 # Project Channel：独立 Discord 身份与受限 send_message
 
-状态：active，A 已实现合同与存储，B/C/D/E 未开工 · 负责人：用户分派，集成 owner 待指定 · 更新：2026-11-17。
+状态：active，A 合同与存储、B transport、C Host 领域与恢复已实现，D/E 未开工 · 负责人：用户分派，集成 owner 待指定 · 更新：2026-11-17。
 设计检出：`claude/lucid-mestorf-72bac0`，worktree `.claude/worktrees/lucid-mestorf-72bac0`；代码基线：`5e5256decc4a915872add152b122a97ad71e55c1`；设计 owner：本会话。
 A 实施检出：`codex/project-channels-protocol-store`，worktree `.claude/worktrees/project-channels-a`；base：`5e5256decc4a915872add152b122a97ad71e55c1`；独占路径：`packages/agent-protocol/src/project-channels.ts` 与协议 exports、`packages/data/src/project-channel-store.ts`、迁移 69 装配、`packages/data/tests/project-channel-store.test.ts`；未合并。
+C 实施检出：`codex/project-channels-host-domain`，worktree `.claude/worktrees/project-channels-c`；base：`57610fc0c`（A 的 head）；独占路径：`packages/host/src/project-channels/**`、`packages/host/tests/project-channels-*.test.ts`（未改 `session-input-api/service`、`local-host`、HTTP）；未推送、未合入。
 
 本计划供其他 agent 实施。用户已选择“独立项目身份”，并要求本会话只设计实现步骤、不代为启动实施 agent。接口名、路由和命令在下文标为**拟新增合同**，不代表基线已具备。
 
@@ -223,7 +224,7 @@ E 的真实本地验收必须包含：同检出生产 Worker、真实 Host HTTP/
 - [x] 核对 Gateway、输入/发送、生命周期和架构限制；给出合同、路径 owner 和可转发任务说明。
 - [x] A：协议与持久化（合同/API/port/错误码/幂等键 + 迁移 69 真实 SQLite 存储；21 项专属用例通过）。
 - [ ] B：多实例 Discord transport。
-- [ ] C：Host 领域、持久收发及恢复。
+- [x] C：Host 领域、持久收发及恢复（`packages/host/src/project-channels/**`：控制面 + 连接生命周期 + 入站鉴权/持久排队/串行 drain + 出站 outbox + 启动恢复；44 项专属用例通过）。
 - [ ] D：工具投影与 CLI handler。
 - [ ] E：公共装配、实际链路及门禁。
 - [ ] 用户授权的真实 Discord 验收、PR/review/CI、授权集成。
@@ -236,6 +237,12 @@ E 的真实本地验收必须包含：同检出生产 Worker、真实 Host HTTP/
 | 同上 | 同上 | `vitest run packages/agent-protocol/test`（基线 29 文件/465 项）；`vitest run packages/data/tests`（基线 22 文件/150 项，5 失败） | 协议 465/465 通过；数据 145/150，5 项 `migratePreviousDefaultDatabases` fs-copy 基线失败保持不变 | 新增测试文件全绿；5 项失败在改动前已存在，错误签名一致（`database-migration.test.ts:86` EPERM/copyfile），非本切片引入 |
 | 同上 | 同上 | `tsc --noEmit -p packages/agent-protocol/tsconfig.json`；`tsc --noEmit -p packages/data/tsconfig.json`；`npm run typecheck:protocol`；`npm run architecture:check`；五项 `check:*` | 全部退出 0 | 协议零依赖不变量经 01/02 漂移测试；架构无新增违规（tolerated 3228/3228）|
 | 同上 | 同上 | `npm run build:packages` | 退出 1（非本切片） | `@duya/capabilities` 资产复制在 worktree 中 EPERM（沙箱 fs shim 拒绝 copyfile）；与 5 项基线测试同因，protocol/data 单独 tsc 通过 |
+
+| C base `57610fc0c`，新增 `packages/host/src/project-channels/**` 与三个专属测试文件 | Linux，Node v22.22.2，vitest 5.0.5，better-sqlite3 内存真实库（真实迁移 2/49/50/69） | `vitest run packages/host/tests/project-channels-{service,recovery,secrets}.test.ts` | 退出 0；44/44 通过（30 + 8 + 6） | 配置前先验身份、Bot 身份跨项目唯一、空 allowlist/thread/未核验频道拒绝；原生 @ + 白名单 + generation fencing；重复事件同 id 不二次执行；同 messageId 异正文 `inbound_fingerprint_conflict`；busy/control lease 持久等待后 drain；撤销 binding/断连后不执行旧授权；reply scope 与 allowProactive；`queued` 不等于 `sent`；429 有界重试一次、长限流不重发、无证据落 `unknown`；`sending` → `unknown`、claimed → `recovery_required` 不盲重启、未提交事件按当前 Coordinator 恢复、跨 Host 重启队列存活 |
+| 同上 | 同上 | `tsc --noEmit -p packages/host/tsconfig.json`；`tsc -b packages/host/tsconfig.json`；`npm run architecture:check` | 全部退出 0 | 产物 `packages/host/dist/project-channels/index.js` 生成；架构 `OK — no new boundary violations`（host 只依赖 data/agent-protocol，未引入 Gateway） |
+| 同上 | 同上 | `npm run check:encoding`；`check:test-coverage`；`check:no-ts-suppress`；`check:manifest-keys` | 全部退出 0 | 新增测试已被 vitest include 收集；无新增编码/抑制/清单违规 |
+| 同上 | 同上 | `vitest run packages/host/tests/{session-input-api,session-input-service,project-dispatch,project-tool-service}.test.ts` | 退出 0；36/36 通过 | 相邻输入/派工/项目工具回归未受影响；未改这些模块源码 |
+| 同上 | 同上 | `vitest run packages/host/tests`（全量） | 被沙箱安全策略终止（SIGTERM，资源限制），未取得结果 | 未宣称 host 全量绿；本切片只新增文件，未修改既有 host 源码，回归以相邻 4 文件 + 架构门禁为准，E 集成时需补跑全量 |
 
 ## 8. 接续 / 结果
 
@@ -250,3 +257,66 @@ A 分支 `codex/project-channels-protocol-store`（base `5e5256decc4a915872add15
 关键语义（已由 Store 测试钉死）：入站去重键为 `connectionId + messageId`，同键正文不同抛 `inbound_fingerprint_conflict`；投递幂等键为 `projectId + requestId`，`queued` 不等于 `sent`，无平台证据落 `unknown` 不自动重发；连接/绑定写作为 revision CAS，撤销保留审计行；connection `generation` 与持久化 `revision` 分离，旧 generation 观测被 `observe` 拒绝。存储仅接受平台核验后的 `botUserId`，无任何 token 字段。
 
 A 未做业务接线：不实现 Gateway、Host composition、工具或 CLI。B 依赖 `ProjectChannelTransportPort` 工厂；C 消费 `ProjectChannelStore`（从 Host db handle 构造，迁移 69 已在 `collectCoreDataMigrations()` 装配）；E 负责公共入口与集成。Draft PR [#640](https://github.com/lava-chen/duya/pull/640) 已开，未合并；未取得真实 Discord 验收。
+
+### C 交接（Host 领域与恢复，供 D/E 依赖）
+
+C 分支 `codex/project-channels-host-domain`（base `57610fc0c`，head `75e397be9`）。只新增
+`packages/host/src/project-channels/**`（`service.ts` 控制面与生命周期、`inbound.ts` 入站与串行 drain、
+`outbound.ts` 持久 outbox、`pending.ts` 只读待办索引、`secrets.ts` 凭据端口与本地实现、`types.ts` 端口/错误、
+`index.ts` 导出）与 `packages/host/tests/project-channels-{fixture,service,recovery,secrets}`。
+未改 `local-host.ts`、`http-server.ts`、`http-client.ts`、`session-input-api.ts`、`session-input-service.ts`。
+
+**装配入口**（E 注入，不自行实现领域规则）：
+
+```ts
+createProjectChannelHostService({
+  stores: { channels: ProjectChannelStore, projects, sessions, sessionInputs, leases },
+  pending: createProjectChannelPendingIndex(core.database.db),
+  transport: createProjectDiscordTransport(...),      // B 的中立端口，非 import '@duya/gateway'
+  secrets: createProjectChannelSecretStore({ dataRoot }),
+  execution: { isSessionBusy, startRun },             // 用 HostRunExecutionController 实现
+  ensureCoordinator: (projectId) => projectApi.ensureCoordinatorSession(projectId),
+  logger, now?, newId?, sleep?, maxTextLength?
+})
+```
+
+返回对象实现 `HostProjectChannelApiV1`（`getProjectChannels` / `configureDiscordConnection` / `createBinding` /
+`updateBinding` / `revokeBinding` / `disconnectConnection` / `getDelivery`），另有
+`handleInbound`、`handleObservation`、`start()`（启动启用连接 + 恢复）、`recover()`、`drainSession(sessionId)`、
+`drainProject(projectId)`、`sendFromCoordinator(caller, request)`、`hasReplyDelivery(inboundId)`、`close()`。
+`start()` 自己创建 transport handlers 并调用 `transport.start`，E 不需要手写回调。
+`startRun` 收到的是 Host 拼好的 prompt（含 `[project-channel:inbound]` 头、binding/inbound id、untrusted 正文分隔），
+调用方不得自行拼正文或传 actor。
+
+**必须由 E 接上的线**：
+1. 控制面 HTTP 路由（实现 `HostProjectChannelApiV1`，认证本地控制面，凭据字段只出现在写入请求，输出无 token）。
+2. `drainSession` 挂到 Run settle / Session idle 钩子；非 client-scoped Host 启动时 `await start()`，`close()` 时 `await close()`。
+3. `sendFromCoordinator` 必须走 Host 受信路径（D 的工具绑定），**不要**暴露到 worker DB bridge：
+   `ProjectChannelTransportPort` 和凭据都不能进入 Worker。
+4. `architecture-policy.yaml` 中 CLI/Desktop composition → Gateway 的依赖边；Host 侧无需新增依赖（已过架构检查）。
+
+**C 侧语义（D 可直接依赖）**：
+- 入站去重键沿用 A 的 `connectionId + messageId`；重复事件返回原 inboundId，不新建执行义务。
+- 排队状态 = `session_inputs.stage = 'persisted'` + `reason`（`session_busy` / `control_lease_held` / `host_shutdown`）。
+  `queued` 只表示“已被 drainer 认领、结果未知”，启动恢复会改写 reason 为 `recovery_required` 且**不**自动重启。
+- 每次 drain 都重读 binding/connection：撤销、断连、成员被移出白名单 → 该条 `rejected`，不执行旧授权。
+- 发送：`queued → sending → sent|failed|unknown|cancelled`；只有 `delivery_retryable` 且 Retry-After ≤ 2s 内联重试一次，
+  无平台证据（超时/断连/进程中断/异常）一律 `unknown` 且不重发；超长文本在建立 Delivery 前 `invalid_request`。
+- 回复必须引用本项目、本 binding、**当前 Session** 的真实入站；无引用时要求 `allowProactive` 且调用方是当前 Coordinator。
+- `hasReplyDelivery(inboundId)` 供 D 判断“本轮是否已建立回复义务”（`queued`/`sending`/`sent` 算，`failed` 不算），
+  避免用“出现过工具名”计数。
+- `disconnectConnection` 停接收并 `transport.stop`，**保留**本地凭据文件（不声称远端已撤销 token）；
+  真正丢弃凭据需另行显式操作。
+- `close()` 后拒绝新入站、不再启动新 Run（进行中的 drain 把该条退回 `persisted` + `host_shutdown`），持久队列与 Delivery 全部保留。
+
+**与计划文本的偏差（需 E 复核）**：
+1. 持久正文载体 = 入站 ledger（`project_channel_inbounds.text`）+ `session_inputs` receipt；
+   因 `session_inputs` 按设计不存正文，队列用 `persisted + reason` 表达，未复用 `queued` 作为“忙等待”状态。
+2. 新增 `pending.ts` 只读查询（未提交入站 / `sending` 投递 / claimed 输入）：A 的 store 没有“枚举未完成工作”的接口，
+   而启动恢复必须能枚举。无新表、无新迁移号（编号仍归 A）；建议后续由 A 收进 `ProjectChannelStore`，Host 侧再改为调用。
+3. drain 时按 `binding.enabled` + 实时 allowlist 判定授权，不要求 `binding.revision` 与接收时相等：
+   label/allowProactive 变更不应取消一条已授权消息，成员被移出才应取消。
+
+**已知未覆盖**：真实 Discord 未验证；无 HTTP/CLI/Desktop 接线；无 standalone idle 唤醒（E 负责，C 只提供 `drainSession`）；
+Coordinator 替换后**已绑定旧目标**的排队行需由该 Session 的 settle/idle 钩子 drain（E 挂载点需覆盖所有 Session，
+不只是当前 Coordinator）；`recovery_required` 行需人工/后续显式对账；host 全量测试未跑（沙箱资源限制）。分支已本地提交，未推送、未开 PR。
