@@ -47,6 +47,16 @@ export interface ProjectChannelHostStores {
  */
 export interface ProjectChannelExecutionPort {
   isSessionBusy(sessionId: string): boolean;
+  /**
+   * Whether `(sessionId, runId, epoch)` is the Host's CURRENT live attempt.
+   *
+   * This is the fence the domain cannot compute on its own and must not fake:
+   * a run that settled, an epoch superseded by a retry, or a Coordinator that
+   * was replaced all keep their old ids, so a send authorized against the id
+   * alone would still succeed. The Host answers from its run records — the same
+   * source the plugin-app and checkout paths already use.
+   */
+  isCurrentAttempt(sessionId: string, runId: string, epoch: number): boolean;
   startRun(input: {
     readonly sessionId: string;
     readonly prompt: string;

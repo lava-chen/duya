@@ -71,10 +71,21 @@ export function createProjectChannelOutbound(context: ProjectChannelContext): Pr
 
   /**
    * A reply must reference a real inbound of this Project, this binding, and
-   * THIS Session. That is what makes it a reply rather than a way to borrow an
-   * old event to bypass `allowProactive`.
+   * THIS Run — the run that was actually started for that inbound.
+   *
+   * Checking only the target Session is not enough: a later local turn of the
+   * same Coordinator would then be able to quote any earlier channel message
+   * and treat it as its own reply scope, which is exactly how `allowProactive`
+   * gets bypassed. The grant is therefore read from the durable input receipt
+   * of this Session, which records the run id that admission started, and it is
+   * fenced again by the Host's live attempt check so a settled run or a
+   * superseded epoch cannot send. The tool layer cannot supply any of these
+   * facts; they are all derived from rows.
    */
   function replyTarget(caller: ProjectChannelCaller, binding: ProjectChannelBinding, inboundId: string): string {
+    if (caller.runId === null || caller.epoch === null) {
+      throw projectChannelServiceError('reply_scope_invalid', 'a reply requires a live run, not a client session');
+    }
     const inbound = stores.channels.getInbound(inboundId);
     if (inbound === null
       || inbound.connectionId !== binding.connectionId
@@ -82,18 +93,43 @@ export function createProjectChannelOutbound(context: ProjectChannelContext): Pr
       || inbound.targetSessionId !== caller.sessionId) {
       throw projectChannelServiceError('reply_scope_invalid', 'reply target is not an inbound of this binding and session');
     }
+    requireCurrentCoordinator(caller, 'reply_scope_invalid');
+    const receipt = stores.sessionInputs.get(caller.sessionId, inbound.inboundId);
+    if (receipt === null
+      || (receipt.stage !== 'delivered' && receipt.stage !== 'consumed')
+      || receipt.runId !== caller.runId) {
+      // The inbound was never admitted to a run, or it was admitted to a
+      // different one. Either way this caller holds no reply scope for it.
+      throw projectChannelServiceError('reply_scope_invalid', 'this run was not granted this inbound');
+    }
+    if (!context.execution.isCurrentAttempt(caller.sessionId, caller.runId, caller.epoch)) {
+      throw projectChannelServiceError('reply_scope_invalid', 'the run that received this inbound is no longer current');
+    }
     return inbound.platformMessageId;
+  }
+
+  /** The caller must be the Project's current Coordinator, not merely its Session id owner. */
+  function requireCurrentCoordinator(caller: ProjectChannelCaller, code: ProjectChannelErrorCode): void {
+    const project = stores.projects.get(caller.projectId);
+    if (project === null || project.coordinator_session_id !== caller.sessionId) {
+      throw projectChannelServiceError(code, 'only the current Coordinator of this project may speak for it');
+    }
   }
 
   function requireProactive(caller: ProjectChannelCaller, binding: ProjectChannelBinding): void {
     if (!binding.allowProactive) {
       throw projectChannelServiceError('proactive_not_allowed', 'this binding does not allow unsolicited sends');
     }
-    // Proactive sends speak for the Project, so only its current Coordinator may
-    // ask. A work Session that happens to hold the binding id may not.
-    const project = stores.projects.get(caller.projectId);
-    if (project === null || project.coordinator_session_id !== caller.sessionId) {
-      throw projectChannelServiceError('proactive_not_allowed', 'only the current Coordinator may send proactively');
+    // Proactive sends speak for the Project, so only its current Coordinator
+    // may ask, and only from a run that is still live. A work Session that
+    // happens to hold the binding id may not, and neither may a Coordinator
+    // turn that already settled.
+    requireCurrentCoordinator(caller, 'proactive_not_allowed');
+    if (caller.runId === null || caller.epoch === null) {
+      throw projectChannelServiceError('proactive_not_allowed', 'proactive sends require a live run');
+    }
+    if (!context.execution.isCurrentAttempt(caller.sessionId, caller.runId, caller.epoch)) {
+      throw projectChannelServiceError('proactive_not_allowed', 'the calling run is no longer current');
     }
   }
 

@@ -450,3 +450,139 @@ describe('outbound send authorization', () => {
     expect(await fixture.service.getDelivery('project-b', sent.deliveryId)).toBeNull();
   });
 });
+
+/**
+ * The reply scope is a grant to ONE run, not to a Session.
+ *
+ * These cases exist because checking only `connection + binding + Session`
+ * lets a later local turn of the same Coordinator quote an older channel
+ * message and pass it off as its own reply, which is the documented way to
+ * bypass `allowProactive`. Every case below therefore runs with
+ * `strictAttempts` so a fabricated run id cannot be "current".
+ */
+describe('run-scoped reply authorization', () => {
+  /** Configure, receive one message and let the drain start its run. */
+  async function deliveredInbound(fixture: ReturnType<typeof projectChannelsFixture>) {
+    const { connection, binding } = await fixture.connected({ allowProactive: true });
+    const inboundId = await fixture.service.handleInbound(
+      inboundCallback(connection.connectionId, connection.generation),
+    );
+    const attempt = fixture.execution.liveAttempt(fixture.coordinatorId);
+    expect(attempt).not.toBeNull();
+    return { connection, binding, inboundId, attempt: attempt!, caller: { ...attempt!, projectId: PROJECT_ID } };
+  }
+
+  it('accepts the run that actually received the inbound', async () => {
+    const fixture = projectChannelsFixture();
+    fixture.execution.strictAttempts = true;
+    const { binding, inboundId, attempt, caller } = await deliveredInbound(fixture);
+
+    const result = await fixture.service.sendFromCoordinator(caller, {
+      requestId: 'scope-ok', channelBindingId: binding.bindingId, text: 'status is green',
+      replyToInboundId: inboundId,
+    });
+
+    expect(result.status).toBe('sent');
+    expect(fixture.channels.getDelivery(result.deliveryId)?.runId).toBe(attempt.runId);
+  });
+
+  it('refuses a later run of the same Session borrowing an older inbound', async () => {
+    const fixture = projectChannelsFixture();
+    fixture.execution.strictAttempts = true;
+    const { connection, binding, inboundId } = await deliveredInbound(fixture);
+
+    // A second channel message starts a second run on the same Coordinator.
+    const secondInbound = await fixture.service.handleInbound(
+      inboundCallback(connection.connectionId, connection.generation, { platformMessageId: 'platform-message-2' }),
+    );
+    const secondRun = fixture.execution.liveAttempt(fixture.coordinatorId)!;
+    const secondCaller = { ...secondRun, projectId: PROJECT_ID };
+    expect(secondRun.runId).not.toBe(inboundId);
+
+    // The new run quotes the FIRST message: it never carried that reply scope.
+    expect(await codeOf(() => fixture.service.sendFromCoordinator(secondCaller, {
+      requestId: 'scope-borrow', channelBindingId: binding.bindingId, text: 'borrowed',
+      replyToInboundId: inboundId,
+    }))).toBe('reply_scope_invalid');
+
+    // Its own inbound is fine, so the refusal is about scope, not about sends.
+    const own = await fixture.service.sendFromCoordinator(secondCaller, {
+      requestId: 'scope-own', channelBindingId: binding.bindingId, text: 'own', replyToInboundId: secondInbound,
+    });
+    expect(own.status).toBe('sent');
+    expect(fixture.transport.sends).toHaveLength(1);
+  });
+
+  it('refuses a local turn that never received any inbound', async () => {
+    const fixture = projectChannelsFixture();
+    fixture.execution.strictAttempts = true;
+    const { connection, binding } = await fixture.connected({ allowProactive: true });
+    const inboundId = await fixture.service.handleInbound(
+      inboundCallback(connection.connectionId, connection.generation),
+    );
+
+    // A local TUI turn on the same Coordinator: a live run, no channel scope.
+    fixture.execution.strictAttempts = false;
+    const localRun = await fixture.execution.startRun({
+      sessionId: fixture.coordinatorId, prompt: 'local question', source: 'project_channel',
+      inboundId: 'none', bindingId: 'none', projectId: PROJECT_ID,
+    });
+    expect(localRun.accepted).toBe(true);
+    fixture.execution.strictAttempts = true;
+    const live = fixture.execution.liveAttempt(fixture.coordinatorId)!;
+    const caller = { ...live, projectId: PROJECT_ID };
+
+    expect(await codeOf(() => fixture.service.sendFromCoordinator(caller, {
+      requestId: 'scope-local', channelBindingId: binding.bindingId, text: 'pretend reply',
+      replyToInboundId: inboundId,
+    }))).toBe('reply_scope_invalid');
+    expect(fixture.transport.sends).toHaveLength(0);
+  });
+
+  it('refuses a settled run and a superseded epoch', async () => {
+    const fixture = projectChannelsFixture();
+    fixture.execution.strictAttempts = true;
+    const { binding, inboundId, attempt, caller } = await deliveredInbound(fixture);
+
+    // The run settled while the tool call was in flight.
+    fixture.execution.retire(fixture.coordinatorId);
+    expect(await codeOf(() => fixture.service.sendFromCoordinator(caller, {
+      requestId: 'scope-settled', channelBindingId: binding.bindingId, text: 'late',
+      replyToInboundId: inboundId,
+    }))).toBe('reply_scope_invalid');
+
+    // The same run id under a new epoch is a different attempt.
+    expect(await codeOf(() => fixture.service.sendFromCoordinator(
+      { ...caller, epoch: attempt.epoch + 1 },
+      { requestId: 'scope-epoch', channelBindingId: binding.bindingId, text: 'late', replyToInboundId: inboundId },
+    ))).toBe('reply_scope_invalid');
+    expect(fixture.transport.sends).toHaveLength(0);
+  });
+
+  it('refuses a replaced Coordinator that still holds the old Session id', async () => {
+    const fixture = projectChannelsFixture();
+    fixture.execution.strictAttempts = true;
+    const { binding, inboundId, caller } = await deliveredInbound(fixture);
+
+    // Rebind the project to a new Coordinator without retargeting the event.
+    fixture.projects.bindCoordinatorSession(PROJECT_ID, 'coordinator-a2');
+
+    expect(await codeOf(() => fixture.service.sendFromCoordinator(caller, {
+      requestId: 'scope-swap', channelBindingId: binding.bindingId, text: 'still here',
+      replyToInboundId: inboundId,
+    }))).toBe('reply_scope_invalid');
+    expect(fixture.transport.sends).toHaveLength(0);
+  });
+
+  it('refuses a proactive send from a run that is no longer live', async () => {
+    const fixture = projectChannelsFixture({ allowProactive: true });
+    fixture.execution.strictAttempts = true;
+    const { binding, caller } = await deliveredInbound(fixture);
+
+    fixture.execution.retire(fixture.coordinatorId);
+    expect(await codeOf(() => fixture.service.sendFromCoordinator(caller, {
+      requestId: 'scope-proactive', channelBindingId: binding.bindingId, text: 'unsolicited',
+    }))).toBe('proactive_not_allowed');
+    expect(fixture.transport.sends).toHaveLength(0);
+  });
+});

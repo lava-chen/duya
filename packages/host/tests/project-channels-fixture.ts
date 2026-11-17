@@ -119,6 +119,16 @@ export class FakeExecution implements ProjectChannelExecutionPort {
   readonly busy = new Set<string>();
   /** When set, the next start is refused with this stage. */
   refuseWith: string | null = null;
+  /**
+   * When false (default) any caller counts as a live attempt, because the older
+   * cases assert binding, revision and Coordinator authority and never start a
+   * run. Cases that exercise run/epoch fencing set this to true and then use
+   * only attempts this fake actually started.
+   */
+  strictAttempts = false;
+  /** Every attempt the port started, newest last. */
+  readonly attempts: Array<{ sessionId: string; runId: string; epoch: number; live: boolean }> = [];
+  private epochCounter = 0;
 
   isSessionBusy(sessionId: string): boolean {
     return this.busy.has(sessionId);
@@ -129,7 +139,34 @@ export class FakeExecution implements ProjectChannelExecutionPort {
     if (this.refuseWith !== null) {
       return { accepted: false as const, stage: 'refused_run_open_failed', reason: this.refuseWith };
     }
-    return { accepted: true as const, runId: `run-${this.starts.length}` };
+    this.epochCounter += 1;
+    const runId = `run-${this.starts.length}`;
+    this.attempts.push({ sessionId: input.sessionId, runId, epoch: this.epochCounter, live: true });
+    return { accepted: true as const, runId };
+  }
+
+  isCurrentAttempt(sessionId: string, runId: string, epoch: number): boolean {
+    if (!this.strictAttempts) return true;
+    return this.attempts.some((attempt) => attempt.live
+      && attempt.sessionId === sessionId && attempt.runId === runId && attempt.epoch === epoch);
+  }
+
+  /** The newest attempt still running for a Session, or null. */
+  liveAttempt(sessionId: string): { sessionId: string; runId: string; epoch: number } | null {
+    for (let index = this.attempts.length - 1; index >= 0; index -= 1) {
+      const attempt = this.attempts[index]!;
+      if (attempt.sessionId === sessionId && attempt.live) {
+        return { sessionId: attempt.sessionId, runId: attempt.runId, epoch: attempt.epoch };
+      }
+    }
+    return null;
+  }
+
+  /** Retire every attempt of a Session, as a settle or a Coordinator swap would. */
+  retire(sessionId: string): void {
+    for (const attempt of this.attempts) {
+      if (attempt.sessionId === sessionId) attempt.live = false;
+    }
   }
 }
 
@@ -183,7 +220,7 @@ export function projectChannelsFixture(options: FixtureOptions = {}) {
       sessionInputs,
       leases,
     },
-    pending: createProjectChannelPendingIndex(db),
+    pending: createProjectChannelPendingIndex(channels),
     transport,
     secrets,
     execution,
