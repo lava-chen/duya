@@ -12,7 +12,15 @@ export type ProjectTaskStores = {
   tasks: Pick<CoreDataHostStores['tasks'], 'get' | 'create' | 'update'>;
 };
 
-const OPEN = new Set(['starting', 'running', 'unknown']);
+/**
+ * An attempt is open while it can still be finished. Expressed as a pure
+ * predicate rather than a module-level Set: a worker process serves several
+ * Sessions, so module-scope mutable state is a cross-session leak even when no
+ * code path mutates it.
+ */
+function isOpenAttempt(status: ProjectTaskAttemptRow['status']): boolean {
+  return status === 'starting' || status === 'running' || status === 'unknown';
+}
 function revision(value: unknown): asserts value is number {
   if (!Number.isSafeInteger(value) || (value as number) < 0) throw new Error('invalid_expectedRevision');
 }
@@ -40,7 +48,7 @@ export function createProjectTaskLifecycle(stores: ProjectTaskStores) {
     if (!projects.bumpTaskRevision(link.task_id, expected)) throw new Error('revision_conflict');
   }
   function active(taskId: string): boolean {
-    return projects.listTaskAttempts(taskId).some((attempt) => OPEN.has(attempt.status));
+    return projects.listTaskAttempts(taskId).some((attempt) => isOpenAttempt(attempt.status));
   }
   function activity(link: ProjectTaskLinkRow, type: string, sourceType: string, sourceId: string,
     payload: Record<string, unknown> = {}, attempt?: ProjectTaskAttemptRow): void {
@@ -147,7 +155,7 @@ export function createProjectTaskLifecycle(stores: ProjectTaskStores) {
   function finish(attemptId: string, taskId: string, status: ProjectTaskAttemptRow['status'], reason: string | null, runId: string | null = null): void {
     projects.raw.transaction(() => {
       const attempt = projects.listTaskAttempts(taskId).find((row) => row.attempt_id === attemptId);
-      if (!attempt || !OPEN.has(attempt.status)) return;
+      if (!attempt || !isOpenAttempt(attempt.status)) return;
       const link = linkFor(attempt.project_id, taskId);
       const updated = { ...attempt, status, reason, run_id: runId ?? attempt.run_id };
       projects.updateTaskAttempt(attemptId, updated);
