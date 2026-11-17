@@ -103,7 +103,7 @@ import { createHostGoalApi } from './goal-api.js';
 import { createHostModeStateApi } from './mode-state-api.js';
 import { createHostTaskApi } from './task-api.js';
 import { createHostProjectApi } from './project-api.js';
-import { createProjectRunSettlementService } from './project/reconciliation.js';
+import { createProjectRunSettlementService, createProjectTaskLifecycle } from './project/reconciliation.js';
 import { createProjectToolService } from './project/tool-service.js';
 import { createHostPermissionRequestApi } from './permission-request-api.js';
 import { createHostToolApprovalApi } from './tool-approval-api.js';
@@ -538,7 +538,6 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       stores: core.stores,
       legacyAttachments: new MainAttachmentStore(mainDatabase.db),
     });
-    const workspaceApi = createHostWorkspaceRegistrationApi(workspaceAccess);
     // One instance for the HTTP surface and the worker db bridge: the bridge
     // serves the legacy session row shape, and it must be the same rows the
     // HTTP surface reads.
@@ -552,9 +551,13 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
     const goalApi = createHostGoalApi(core.stores);
     const modeStateApi = createHostModeStateApi(core.stores);
     const taskApi = createHostTaskApi(core.stores, core.stores.projects);
+    const workspaceApi = createHostWorkspaceRegistrationApi(workspaceAccess);
     const projectApi = createHostProjectApi(core.stores.projects, core.stores.tasks, {
       sessions: core.stores.sessions,
       spawnEdges: core.stores.spawnEdges,
+    }, {
+      sessions: api,
+      workspaces: workspaceApi,
     });
     const lockApi = createHostLockApi(core.stores);
     // ONE instance per API, shared by the HTTP surface and the worker db
@@ -630,6 +633,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
         projectDispatch: createProjectDispatchPort({
           projects: core.stores.projects,
           tasks: core.stores.tasks,
+          runs: core.stores.runs,
         }),
         sessions: api,
         runs: createHostRunApi(core.stores),
@@ -663,6 +667,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       // idle dispatcher here, so the row is delivered on the Coordinator's
       // next turn (or by whichever surface drains the mailbox).
       const projectRunSettlement = createProjectRunSettlementService({
+        taskLifecycle: createProjectTaskLifecycle(core.stores),
         stores: {
           runs: core.stores.runs,
           projects: core.stores.projects,

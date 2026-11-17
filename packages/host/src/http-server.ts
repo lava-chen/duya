@@ -3508,18 +3508,53 @@ export class HostSessionHttpServer {
       } catch (error) { this.#sendApiError(res, error); }
       return;
     }
+    const taskRecordMatch = /^\/v1\/projects\/([^/]+)\/task-records(?:\/([^/]+))?$/.exec(url.pathname);
+    if (taskRecordMatch) {
+      const projectId = this.#decodePathPart(taskRecordMatch[1]!, res);
+      const taskId = taskRecordMatch[2] ? this.#decodePathPart(taskRecordMatch[2], res) : undefined;
+      if (projectId === null || taskId === null) return;
+      const body = await this.#readJson(req, res); if (!body) return;
+      try {
+        if (!taskId && req.method === 'POST' && typeof body.coordinatorSessionId === 'string' &&
+          typeof body.requestId === 'string' && typeof body.subject === 'string' && typeof body.description === 'string' &&
+          Object.keys(body).every((key) => ['coordinatorSessionId', 'requestId', 'subject', 'description'].includes(key))) {
+          const task = await api.createProjectTask({ projectId, coordinatorSessionId: body.coordinatorSessionId,
+            requestId: body.requestId, subject: body.subject, description: body.description });
+          this.#sendJson(res, 200, { task }); return;
+        }
+        if (taskId && req.method === 'PATCH' && typeof body.coordinatorSessionId === 'string' &&
+          Number.isSafeInteger(body.expectedRevision) &&
+          (body.subject === undefined || typeof body.subject === 'string') &&
+          (body.description === undefined || typeof body.description === 'string') &&
+          (body.status === undefined || body.status === 'pending') &&
+          Object.keys(body).every((key) => ['coordinatorSessionId', 'expectedRevision', 'subject', 'description', 'status'].includes(key))) {
+          const task = await api.updateProjectTask({ projectId, taskId, coordinatorSessionId: body.coordinatorSessionId,
+            expectedRevision: body.expectedRevision as number,
+            ...(typeof body.subject === 'string' ? { subject: body.subject } : {}),
+            ...(typeof body.description === 'string' ? { description: body.description } : {}),
+            ...(body.status === 'pending' ? { status: 'pending' as const } : {}) });
+          this.#sendJson(res, 200, { task }); return;
+        }
+        this.#sendJson(res, 400, { error: { code: 'invalid_project_task' } });
+      } catch (error) { this.#sendJson(res, 409, { error: { code: 'project_task_conflict', message: error instanceof Error ? error.message : String(error) } }); }
+      return;
+    }
     const acceptanceMatch = /^\/v1\/projects\/([^/]+)\/tasks\/([^/]+)\/acceptance$/.exec(url.pathname);
     if (acceptanceMatch) {
       const projectId = this.#decodePathPart(acceptanceMatch[1]!, res), taskId = this.#decodePathPart(acceptanceMatch[2]!, res);
       if (projectId === null || taskId === null) return;
       const body = await this.#readJson(req, res); if (!body) return;
-      if (req.method !== 'PUT' || !['accepted', 'rejected'].includes(String(body.status)) || !isProjectSource(body.source)) {
+      if (req.method !== 'PUT' || !['accepted', 'rejected'].includes(String(body.status)) ||
+        typeof body.sessionId !== 'string' || typeof body.requestId !== 'string' ||
+        typeof body.note !== 'string' || !Number.isSafeInteger(body.expectedRevision) ||
+        Object.keys(body).some((key) => !['status', 'sessionId', 'requestId', 'note', 'expectedRevision'].includes(key))) {
         this.#sendJson(res, 400, { error: { code: 'invalid_task_acceptance' } }); return;
       }
       try {
-        const task = await api.updateProjectTaskAcceptance({ projectId, taskId, status: body.status as 'accepted' | 'rejected', source: body.source });
+        const task = await api.updateProjectTaskAcceptance({ projectId, taskId, status: body.status as 'accepted' | 'rejected',
+          sessionId: body.sessionId, requestId: body.requestId, note: body.note, expectedRevision: body.expectedRevision as number });
         this.#sendJson(res, task ? 200 : 404, { task });
-      } catch (error) { this.#sendApiError(res, error); }
+      } catch (error) { this.#sendJson(res, 409, { error: { code: 'project_task_conflict', message: error instanceof Error ? error.message : String(error) } }); }
       return;
     }
     const taskMatch = /^\/v1\/projects\/([^/]+)\/tasks(?:\/([^/]+)\/work-session)?$/.exec(url.pathname);
@@ -3545,6 +3580,16 @@ export class HostSessionHttpServer {
           return;
         }
         this.#sendJson(res, 400, { error: { code: 'invalid_project_task_link' } });
+      } catch (error) { this.#sendApiError(res, error); }
+      return;
+    }
+    const ensureCoordinatorMatch = /^\/v1\/projects\/([^/]+)\/coordinator\/ensure$/.exec(url.pathname);
+    if (ensureCoordinatorMatch && req.method === 'POST') {
+      const projectId = this.#decodePathPart(ensureCoordinatorMatch[1]!, res);
+      if (projectId === null) return;
+      try {
+        const coordinator = await api.ensureCoordinatorSession(projectId);
+        this.#sendJson(res, 200, { coordinator });
       } catch (error) { this.#sendApiError(res, error); }
       return;
     }

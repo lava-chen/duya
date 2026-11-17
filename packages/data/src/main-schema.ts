@@ -182,8 +182,7 @@ export function initializeSchema(
       blocked_by TEXT NOT NULL DEFAULT '[]',
       metadata TEXT NOT NULL DEFAULT '{}',
       created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
+      updated_at INTEGER NOT NULL
     )
   `);
 

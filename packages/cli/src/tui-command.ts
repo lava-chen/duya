@@ -29,6 +29,8 @@
 
 import type { SessionId } from '@duya/agent-protocol';
 import * as path from 'node:path';
+import { createInterface } from 'node:readline/promises';
+import type { HostProjectRecord } from '@duya/agent-protocol/projects';
 import type { HostHandshakeV1 } from '@duya/host/http-client';
 import { HostSessionHttpClient } from '@duya/host/http-client';
 import { readLocalHostRuntime, startLocalHost } from '@duya/host/local-host';
@@ -52,6 +54,11 @@ export interface TuiCommandOptions {
   readonly model?: string;
   readonly providerId?: string;
   readonly apiFormat?: 'anthropic' | 'openai';
+  /** Enter the Coordinator workbench rather than a generic Session. */
+  readonly projectMode?: boolean;
+  /** Direct project selection for `duya project --project <id>`. */
+  readonly projectId?: string;
+  readonly project?: { readonly projectId: string; readonly name: string };
 }
 
 /** The Host the TUI talks to, however it came to be running. */
@@ -214,12 +221,35 @@ export async function runTuiCommand(options: TuiCommandOptions): Promise<number>
 
   let sessionId: SessionId;
   const owned = new OwnedSessions();
-  if (options.session !== undefined && options.session.trim().length > 0) {
+  if (options.projectMode === true) {
+    let project: HostProjectRecord | null;
+    try {
+      project = await selectProject(client, options.projectId);
+      if (project === null) {
+        lease.close();
+        await host.close();
+        return 0;
+      }
+      const coordinator = await client.ensureCoordinatorSession(project.project_id);
+      sessionId = coordinator.sessionId as SessionId;
+      options = {
+        ...options,
+        workingDirectory: project.canonical_root,
+        project: { projectId: project.project_id, name: project.name },
+      };
+    } catch (error) {
+      write(`${RED}Could not open Project Coordinator: ${errorMessage(error)}${RESET}`);
+      lease.close();
+      await host.close();
+      return 1;
+    }
+  } else if (options.session !== undefined && options.session.trim().length > 0) {
     sessionId = options.session.trim() as SessionId;
     const existing = await client.readLocalSession(sessionId, { includeAllSessions: true });
     if (existing === null) {
       write(`${RED}session ${sessionId} does not exist on this Host${RESET}`);
       lease.close();
+      await host.close();
       return 1;
     }
     const recordedDirectory = path.resolve(existing.workingDirectory);
@@ -227,6 +257,7 @@ export async function runTuiCommand(options: TuiCommandOptions): Promise<number>
       && path.resolve(options.workingDirectory) !== recordedDirectory) {
       write(`${RED}workspace does not match session ${sessionId}; use the session's recorded directory (${recordedDirectory})${RESET}`);
       lease.close();
+      await host.close();
       return 1;
     }
     options = { ...options, workingDirectory: recordedDirectory };
@@ -263,6 +294,45 @@ export async function runTuiCommand(options: TuiCommandOptions): Promise<number>
     }
   }
   return exitCode;
+}
+
+async function selectProject(
+  client: HostSessionHttpClient,
+  projectId?: string,
+): Promise<HostProjectRecord | null> {
+  if (projectId !== undefined) {
+    const project = await client.getProject(projectId.trim());
+    if (project === null) throw new Error(`Project "${projectId}" does not exist`);
+    return project;
+  }
+
+  const projects = (await client.listProjects())
+    .filter((project) => project.name.trim() !== '' && project.canonical_root.trim() !== '')
+    .sort((left, right) => right.last_seen_at - left.last_seen_at || left.name.localeCompare(right.name));
+  if (projects.length === 0) {
+    throw new Error('No named Projects are registered. Register a Project first, then run `duya project`.');
+  }
+  if (projects.length === 1) return projects[0]!;
+  if (process.stdin.isTTY !== true || process.stdout.isTTY !== true) {
+    throw new Error('Choose a Project with `duya project --project <id>` in a non-interactive terminal.');
+  }
+
+  write('Projects:');
+  projects.forEach((project, index) => {
+    write(`  ${index + 1}. ${project.name}  ${project.canonical_root}`);
+  });
+  const prompt = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    for (;;) {
+      const answer = (await prompt.question('Select a Project number (q to cancel): ')).trim();
+      if (answer.toLowerCase() === 'q' || answer === '') return null;
+      const index = Number(answer) - 1;
+      if (Number.isInteger(index) && index >= 0 && index < projects.length) return projects[index]!;
+      write(`Enter a number from 1 to ${projects.length}, or q to cancel.`);
+    }
+  } finally {
+    prompt.close();
+  }
 }
 
 /**

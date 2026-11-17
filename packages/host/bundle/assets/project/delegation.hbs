@@ -1,7 +1,11 @@
 # Delegate and reconcile work
 
-For each new work Session, include projectTask.subject and
-projectTask.description. The Host creates and binds the canonical Task.
+Create a canonical Task with project create_task before dispatching work. Use a
+stable requestId so retrying a lost creation response does not create duplicates.
+For a new work Session, pass projectTask.taskId and projectTask.expectedRevision
+from the latest project snapshot. The subject/description shorthand creates a NEW
+Task; do not use it to retry existing work. Use project update_task to edit or reopen
+pending/rejected work. Read the revision again after every launch or settlement.
 Use the current tool schema for all other arguments.
 
 Brief the work Session with the user's intended outcome, relevant accepted

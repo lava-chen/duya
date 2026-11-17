@@ -41,6 +41,8 @@ const PROJECT_TOOL_ACTIONS: ReadonlySet<string> = new Set([
   'update_state',
   'record_decision',
   'record_memory',
+  'create_task',
+  'update_task',
 ]);
 
 const DEFAULT_ACTIVITY_LIMIT = 50;
@@ -61,6 +63,8 @@ export interface ProjectToolServiceOptions {
     | 'updateProjectState'
     | 'updateProjectDecision'
     | 'updateProjectMemory'
+    | 'createProjectTask'
+    | 'updateProjectTask'
   >;
 }
 
@@ -100,6 +104,30 @@ export function createProjectToolService(options: ProjectToolServiceOptions): Pr
       const projectId = project.project_id;
 
       switch (action as ProjectToolAction) {
+        case 'create_task':
+        case 'update_task': {
+          const keys = action === 'create_task' ? ['requestId', 'subject', 'description'] : ['taskId', 'expectedRevision', 'subject', 'description', 'status'];
+          if (Object.keys(payload).some((key) => !keys.includes(key))) return refuse('invalid_task_payload');
+          try {
+            if (action === 'create_task') {
+              if (typeof payload.requestId !== 'string' || typeof payload.subject !== 'string' || typeof payload.description !== 'string') return refuse('invalid_task_payload');
+              const row = await projectApi.createProjectTask({ projectId, coordinatorSessionId: callerSessionId,
+                requestId: payload.requestId, subject: payload.subject, description: payload.description });
+              return { ok: true, task: toToolTask(row) };
+            }
+            const expectedRevision = readInteger(payload.expectedRevision, 0, Number.MAX_SAFE_INTEGER);
+            if (expectedRevision === undefined || expectedRevision === 'invalid' || typeof payload.taskId !== 'string' ||
+              (payload.status !== undefined && payload.status !== 'pending') ||
+              (payload.subject !== undefined && typeof payload.subject !== 'string') ||
+              (payload.description !== undefined && typeof payload.description !== 'string')) return refuse('invalid_task_payload');
+            const row = await projectApi.updateProjectTask({ projectId, coordinatorSessionId: callerSessionId,
+              taskId: payload.taskId, expectedRevision,
+              ...(typeof payload.subject === 'string' ? { subject: payload.subject } : {}),
+              ...(typeof payload.description === 'string' ? { description: payload.description } : {}),
+              ...(payload.status === 'pending' ? { status: 'pending' as const } : {}) });
+            return { ok: true, task: toToolTask(row) };
+          } catch (error) { return refuse(messageOf(error)); }
+        }
         case 'get': {
           const afterCursor = readInteger(payload.afterCursor, 0, Number.MAX_SAFE_INTEGER);
           if (afterCursor === 'invalid') return refuse('invalid_afterCursor');
@@ -227,21 +255,18 @@ function toToolSnapshot(snapshot: ProjectContinuitySnapshot): ProjectToolSnapsho
       coordinatorSessionId: snapshot.project.coordinator_session_id,
     },
     state: snapshot.state === null ? null : toToolState(snapshot.state),
-    tasks: snapshot.tasks.map(({ task, link }) => ({
-      taskId: link.taskId,
-      subject: task?.subject ?? '',
-      description: task?.description ?? '',
-      status: task?.status ?? 'pending',
-      acceptanceStatus: link.acceptanceStatus,
-      workSessionId: link.workSessionId,
-      updatedAt: link.updatedAt,
-      recordAvailable: task !== null,
-    })),
+    tasks: snapshot.tasks.map(toToolTask),
     decisions: snapshot.decisions.map(toToolDecision),
     memories: snapshot.memories.map(toToolMemory),
     activity: snapshot.activity.map(toToolActivity),
     nextCursor: snapshot.nextCursor,
   };
+}
+
+function toToolTask({ task, link, attempts }: import('@duya/agent-protocol/projects').ProjectTaskSnapshot) {
+  return { taskId: link.taskId, subject: task?.subject ?? '', description: task?.description ?? '',
+    status: task?.status ?? 'unknown', acceptanceStatus: link.acceptanceStatus, workSessionId: link.workSessionId,
+    updatedAt: link.updatedAt, recordAvailable: task !== null, revision: link.revision ?? 0, attempts: attempts ?? [] };
 }
 
 function toToolState(state: ProjectContinuityState): ProjectToolState {

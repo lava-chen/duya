@@ -13,6 +13,7 @@
 import { randomUUID } from 'node:crypto';
 import { BaseTool } from './BaseTool.js';
 import type { ToolResult, ToolUseContext } from './contracts/tool.js';
+import type { ProjectTaskDispatchInput } from '@duya/agent-protocol/projects';
 
 export const SESSION_TOOL_NAME = 'session';
 
@@ -43,12 +44,12 @@ interface SessionCompletionReceipt {
   readonly completionNotification?: 'automatic' | 'query';
 }
 
-export type SessionSpawnOperation<T> = { ok: true } & T | { ok: false; reason: string };
+export type SessionSpawnOperation<T> = { ok: true } & T | { ok: false; reason: string; taskId?: string; sessionId?: string };
 
 /** Host worker-DB actions used by the session tool. */
 export interface SessionToolPort {
   getCallerSessionId(contextSessionId?: string): string;
-  spawn(input: { parentSessionId: string; workingDirectory: string; prompt: string; model?: string; use_worktree?: boolean; source_branch?: string; branch_name?: string; projectTask?: { subject: string; description: string } }): Promise<SessionSpawnOperation<{ sessionId: string; parentId: string; workingDirectory?: string; checkout?: unknown; branchName?: string; isolation?: string; taskId?: string } & SessionCompletionReceipt>>;
+  spawn(input: { parentSessionId: string; workingDirectory: string; prompt: string; model?: string; use_worktree?: boolean; source_branch?: string; branch_name?: string; projectTask?: ProjectTaskDispatchInput }): Promise<SessionSpawnOperation<{ sessionId: string; parentId: string; workingDirectory?: string; checkout?: unknown; branchName?: string; isolation?: string; taskId?: string } & SessionCompletionReceipt>>;
   list(parentSessionId: string): Promise<SessionSpawnOperation<{ sessions: SessionSpawnSession[] }>>;
   get(sessionId: string, callerSessionId: string): Promise<SessionSpawnOperation<{ session: SessionSpawnDetails }>>;
   reply(input: { sessionId: string; callerSessionId: string; prompt: string; model?: string }): Promise<SessionSpawnOperation<{ sessionId: string } & SessionCompletionReceipt>>;
@@ -66,12 +67,14 @@ const SESSION_SCHEMA: Record<string, unknown> = {
     projectTask: {
       type: 'object',
       additionalProperties: false,
-      description: 'When dispatching from a Project Coordinator, the canonical Project Task to create before starting this work Session.',
+      description: 'Project Coordinator: dispatch an existing Task with taskId and expectedRevision. subject/description remains a create-and-dispatch shorthand.',
       properties: {
+        taskId: { type: 'string', minLength: 1 },
+        expectedRevision: { type: 'integer', minimum: 0 },
         subject: { type: 'string', minLength: 1, maxLength: 160 },
         description: { type: 'string', minLength: 1, maxLength: 12000 },
       },
-      required: ['subject', 'description'],
+      oneOf: [{ required: ['taskId', 'expectedRevision'] }, { required: ['subject', 'description'] }],
     },
     action: {
       type: 'string',
@@ -108,6 +111,20 @@ const SESSION_SCHEMA: Record<string, unknown> = {
   required: [],
 };
 
+function readProjectTask(value: unknown): ProjectTaskDispatchInput | undefined | 'invalid' {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return 'invalid';
+  const record = value as Record<string, unknown>;
+  if ('taskId' in record) {
+    return Object.keys(record).every((key) => ['taskId', 'expectedRevision'].includes(key)) &&
+      typeof record.taskId === 'string' && record.taskId.trim() && Number.isSafeInteger(record.expectedRevision) && (record.expectedRevision as number) >= 0
+      ? { taskId: record.taskId, expectedRevision: record.expectedRevision as number } : 'invalid';
+  }
+  return Object.keys(record).every((key) => ['subject', 'description'].includes(key)) &&
+    typeof record.subject === 'string' && typeof record.description === 'string'
+    ? { subject: record.subject, description: record.description } : 'invalid';
+}
+
 export class SessionTool extends BaseTool {
   readonly name = SESSION_TOOL_NAME;
   readonly description = `Create and manage independent child sessions in specified projects (grok CloudAgent parity).
@@ -135,8 +152,9 @@ export class SessionTool extends BaseTool {
 
 ## Actions
 - spawn: workingDirectory (required) + prompt (required) + model (optional).
-  A Project Coordinator must also supply projectTask.subject and description;
-  the Host creates the canonical Task and binds it to the new work Session.
+  A Project Coordinator should supply projectTask.taskId and expectedRevision
+  from project get/create_task. Retry the SAME Task after a recorded launch failure.
+  subject/description is a create-and-dispatch shorthand, not a retry mechanism.
   Set use_worktree=true for an independent branch or PR.
 - list: list work sessions the Host authorizes you to manage.
 - get: sessionId → status, tracked run result when available, working directory,
@@ -192,24 +210,19 @@ export class SessionTool extends BaseTool {
           if (!workingDirectory || !prompt) {
             return err('workingDirectory and prompt are required for spawn.');
           }
+          const projectTask = readProjectTask(input.projectTask);
+          if (projectTask === 'invalid') return err('Invalid projectTask: use taskId/expectedRevision OR subject/description.');
           const result = await this.port.spawn({
             ...(typeof input.use_worktree === 'boolean' ? { use_worktree: input.use_worktree } : {}),
             ...(typeof input.source_branch === 'string' ? { source_branch: input.source_branch } : {}),
             ...(typeof input.branch_name === 'string' ? { branch_name: input.branch_name } : {}),
-            ...(typeof input.projectTask === 'object' && input.projectTask !== null
-              && typeof (input.projectTask as Record<string, unknown>).subject === 'string'
-              && typeof (input.projectTask as Record<string, unknown>).description === 'string'
-              ? { projectTask: {
-                  subject: (input.projectTask as { subject: string }).subject,
-                  description: (input.projectTask as { description: string }).description,
-                } }
-              : {}),
+            ...(projectTask ? { projectTask } : {}),
             parentSessionId: callerSessionId,
             workingDirectory,
             prompt,
             ...(model ? { model } : {}),
           });
-          if (!result.ok) return err(`Failed to spawn session: ${result.reason}`);
+          if (!result.ok) return err(`Failed to spawn session: ${result.reason}${result.taskId ? `; Task ${result.taskId}` : ''}${result.sessionId ? `; Session ${result.sessionId}` : ''}. Read project state before retrying; unknown launches must be reconciled, not duplicated.`);
           return {
             id: randomUUID(),
             name: this.name,

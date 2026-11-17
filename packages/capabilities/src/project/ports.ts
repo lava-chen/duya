@@ -12,6 +12,8 @@ export type ProjectToolAction =
   | 'context'
   | 'update_state'
   | 'record_decision'
+  | 'create_task'
+  | 'update_task'
   | 'record_memory';
 
 export interface ProjectToolSource {
@@ -42,6 +44,9 @@ export interface ProjectToolTask {
   readonly workSessionId: string | null;
   readonly updatedAt: number;
   readonly recordAvailable: boolean;
+  readonly revision?: number;
+  readonly attempts?: readonly { readonly attemptId: string; readonly workSessionId: string | null;
+    readonly runId: string | null; readonly status: string; readonly reason: string | null }[];
 }
 
 export interface ProjectToolDecision {
@@ -89,6 +94,7 @@ export interface ProjectToolContext {
 }
 
 export interface ProjectToolPayload {
+  readonly task?: ProjectToolTask;
   readonly snapshot?: ProjectToolSnapshot;
   readonly context?: ProjectToolContext;
   readonly state?: ProjectToolState;

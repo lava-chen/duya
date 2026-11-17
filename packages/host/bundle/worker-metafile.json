@@ -17,7 +17,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-db-client.ts": {
-      "bytes": 53462,
+      "bytes": 53486,
       "imports": [
         {
           "path": "packages/host/src/worker-db-context.ts",
@@ -81,7 +81,7 @@
       "format": "esm"
     },
     "packages/data/src/core-database.ts": {
-      "bytes": 4822,
+      "bytes": 5594,
       "imports": [
         {
           "path": "packages/data/src/sqlite-connection.ts",
@@ -113,7 +113,7 @@
       "format": "esm"
     },
     "packages/data/src/project-store.ts": {
-      "bytes": 30613,
+      "bytes": 35388,
       "imports": [
         {
           "path": "node:crypto",
@@ -176,7 +176,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/projects.ts": {
-      "bytes": 8184,
+      "bytes": 9567,
       "imports": [],
       "format": "esm"
     },
@@ -1165,7 +1165,7 @@
       "format": "esm"
     },
     "packages/data/src/core-stores.ts": {
-      "bytes": 53739,
+      "bytes": 55344,
       "imports": [
         {
           "path": "node:crypto",
@@ -1460,7 +1460,7 @@
       "format": "esm"
     },
     "packages/data/src/main-schema.ts": {
-      "bytes": 97139,
+      "bytes": 97060,
       "imports": [
         {
           "path": "packages/data/src/tool-approval-state.ts",
@@ -30738,7 +30738,7 @@
       "format": "esm"
     },
     "packages/host/src/http-client.ts": {
-      "bytes": 113976,
+      "bytes": 115001,
       "imports": [],
       "format": "esm"
     },
@@ -31735,7 +31735,7 @@
       "format": "esm"
     },
     "packages/host/src/session-service.ts": {
-      "bytes": 28105,
+      "bytes": 32001,
       "imports": [
         {
           "path": "node:fs/promises",
@@ -31766,13 +31766,34 @@
       "imports": [],
       "format": "esm"
     },
-    "packages/host/src/project/dispatch.ts": {
-      "bytes": 6810,
+    "packages/host/src/project/task-lifecycle.ts": {
+      "bytes": 12316,
       "imports": [
         {
           "path": "node:crypto",
           "kind": "import-statement",
           "external": true
+        },
+        {
+          "path": "packages/host/src/project/identity.ts",
+          "kind": "import-statement",
+          "original": "./identity.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/host/src/project/dispatch.ts": {
+      "bytes": 8843,
+      "imports": [
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/host/src/project/task-lifecycle.ts",
+          "kind": "import-statement",
+          "original": "./task-lifecycle.js"
         },
         {
           "path": "packages/host/src/project/identity.ts",
@@ -32155,7 +32176,7 @@
       "format": "esm"
     },
     "packages/host/src/task-api.ts": {
-      "bytes": 5246,
+      "bytes": 5315,
       "imports": [
         {
           "path": "node:crypto",
@@ -32669,7 +32690,7 @@
       "format": "esm"
     },
     "packages/host/src/project/context.ts": {
-      "bytes": 4634,
+      "bytes": 4789,
       "imports": [
         {
           "path": "packages/memory/src/index.ts",
@@ -32679,8 +32700,19 @@
       ],
       "format": "esm"
     },
+    "packages/host/src/project/coordinator-session.ts": {
+      "bytes": 3140,
+      "imports": [
+        {
+          "path": "packages/host/src/project/identity.ts",
+          "kind": "import-statement",
+          "original": "./identity.js"
+        }
+      ],
+      "format": "esm"
+    },
     "packages/host/src/project-api.ts": {
-      "bytes": 17561,
+      "bytes": 18597,
       "imports": [
         {
           "path": "packages/data/src/project-store.ts",
@@ -32696,12 +32728,22 @@
           "path": "packages/host/src/project/context.ts",
           "kind": "import-statement",
           "original": "./project/context.js"
+        },
+        {
+          "path": "packages/host/src/project/coordinator-session.ts",
+          "kind": "import-statement",
+          "original": "./project/coordinator-session.js"
+        },
+        {
+          "path": "packages/host/src/project/task-lifecycle.ts",
+          "kind": "import-statement",
+          "original": "./project/task-lifecycle.js"
         }
       ],
       "format": "esm"
     },
     "packages/host/src/http-server.ts": {
-      "bytes": 278227,
+      "bytes": 281570,
       "imports": [
         {
           "path": "packages/host/src/plugins/http.ts",
@@ -33161,18 +33203,23 @@
       "format": "esm"
     },
     "packages/host/src/project/reconciliation.ts": {
-      "bytes": 12368,
+      "bytes": 12728,
       "imports": [
         {
           "path": "node:crypto",
           "kind": "import-statement",
           "external": true
+        },
+        {
+          "path": "packages/host/src/project/task-lifecycle.ts",
+          "kind": "import-statement",
+          "original": "./task-lifecycle.js"
         }
       ],
       "format": "esm"
     },
     "packages/host/src/project/tool-service.ts": {
-      "bytes": 11721,
+      "bytes": 13898,
       "imports": [],
       "format": "esm"
     },
@@ -33924,7 +33971,7 @@
       "format": "esm"
     },
     "packages/host/src/local-host.ts": {
-      "bytes": 56710,
+      "bytes": 56898,
       "imports": [
         {
           "path": "packages/host/src/plugins/audit.ts",
@@ -36827,7 +36874,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/session-tool.ts": {
-      "bytes": 15220,
+      "bytes": 16451,
       "imports": [
         {
           "path": "node:crypto",
@@ -39614,7 +39661,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/project/tool.ts": {
-      "bytes": 17701,
+      "bytes": 19897,
       "imports": [
         {
           "path": "node:crypto",
@@ -42848,6 +42895,11 @@
           "external": true
         },
         {
+          "path": "node:crypto",
+          "kind": "require-call",
+          "external": true
+        },
+        {
           "path": "fs",
           "kind": "require-call",
           "external": true
@@ -43512,7 +43564,7 @@
           "bytesInOutput": 434
         },
         "packages/data/src/core-database.ts": {
-          "bytesInOutput": 1926
+          "bytesInOutput": 2378
         },
         "packages/data/src/integration-store.ts": {
           "bytesInOutput": 6037
@@ -43524,7 +43576,7 @@
           "bytesInOutput": 17179
         },
         "packages/data/src/project-store.ts": {
-          "bytesInOutput": 17477
+          "bytesInOutput": 20767
         },
         "packages/data/src/research-store.ts": {
           "bytesInOutput": 39756
@@ -43803,7 +43855,7 @@
           "bytesInOutput": 4048
         },
         "packages/data/src/core-stores.ts": {
-          "bytesInOutput": 22063
+          "bytesInOutput": 23086
         },
         "packages/data/src/rollout-events.ts": {
           "bytesInOutput": 35
@@ -43839,7 +43891,7 @@
           "bytesInOutput": 3397
         },
         "packages/data/src/main-schema.ts": {
-          "bytesInOutput": 65314
+          "bytesInOutput": 65235
         },
         "packages/data/src/main-database.ts": {
           "bytesInOutput": 447
@@ -45156,13 +45208,13 @@
           "bytesInOutput": 1159
         },
         "node_modules/handlebars/dist/cjs/handlebars/helpers/helper-missing.js": {
-          "bytesInOutput": 331
+          "bytesInOutput": 335
         },
         "node_modules/handlebars/dist/cjs/handlebars/helpers/if.js": {
-          "bytesInOutput": 619
+          "bytesInOutput": 623
         },
         "node_modules/handlebars/dist/cjs/handlebars/helpers/log.js": {
-          "bytesInOutput": 348
+          "bytesInOutput": 352
         },
         "node_modules/handlebars/dist/cjs/handlebars/helpers/lookup.js": {
           "bytesInOutput": 180
@@ -45711,7 +45763,7 @@
           "bytesInOutput": 1627
         },
         "packages/host/src/worker-context/background-notification.ts": {
-          "bytesInOutput": 422
+          "bytesInOutput": 409
         },
         "packages/capabilities/src/SubagentTool/constants.ts": {
           "bytesInOutput": 45
@@ -46047,7 +46099,7 @@
           "bytesInOutput": 581
         },
         "node_modules/omggif/omggif.js": {
-          "bytesInOutput": 6512
+          "bytesInOutput": 6514
         },
         "node_modules/gifwrap/src/bitmapimage.js": {
           "bytesInOutput": 2740
@@ -47628,7 +47680,7 @@
           "bytesInOutput": 1611
         },
         "packages/host/src/worker-transport.ts": {
-          "bytesInOutput": 1452
+          "bytesInOutput": 1454
         },
         "packages/host/src/worker-modes/research-mode/research-events.ts": {
           "bytesInOutput": 330
@@ -48405,7 +48457,7 @@
           "bytesInOutput": 1286
         },
         "packages/host/src/http-client.ts": {
-          "bytesInOutput": 42786
+          "bytesInOutput": 43256
         },
         "packages/cli/src/tui/background-host.ts": {
           "bytesInOutput": 1665
@@ -48531,7 +48583,7 @@
           "bytesInOutput": 0
         },
         "packages/host/src/local-host.ts": {
-          "bytesInOutput": 16163
+          "bytesInOutput": 16235
         },
         "packages/host/src/session-api.ts": {
           "bytesInOutput": 13623
@@ -48543,13 +48595,16 @@
           "bytesInOutput": 4271
         },
         "packages/host/src/session-service.ts": {
-          "bytesInOutput": 11423
+          "bytesInOutput": 12980
         },
         "packages/host/src/session-input-service.ts": {
           "bytesInOutput": 9321
         },
         "packages/host/src/project/dispatch.ts": {
-          "bytesInOutput": 1564
+          "bytesInOutput": 3224
+        },
+        "packages/host/src/project/task-lifecycle.ts": {
+          "bytesInOutput": 6254
         },
         "packages/host/src/project/identity.ts": {
           "bytesInOutput": 102
@@ -48561,7 +48616,7 @@
           "bytesInOutput": 2668
         },
         "packages/host/src/http-server.ts": {
-          "bytesInOutput": 127682
+          "bytesInOutput": 129829
         },
         "packages/host/src/checkout-api.ts": {
           "bytesInOutput": 1975
@@ -48621,7 +48676,7 @@
           "bytesInOutput": 2616
         },
         "packages/host/src/task-api.ts": {
-          "bytesInOutput": 2327
+          "bytesInOutput": 2264
         },
         "packages/host/src/run-api.ts": {
           "bytesInOutput": 6416
@@ -48630,7 +48685,7 @@
           "bytesInOutput": 3953
         },
         "packages/host/src/project-api.ts": {
-          "bytesInOutput": 8474
+          "bytesInOutput": 8706
         },
         "packages/memory/src/index.ts": {
           "bytesInOutput": 5
@@ -48669,7 +48724,10 @@
           "bytesInOutput": 460
         },
         "packages/host/src/project/context.ts": {
-          "bytesInOutput": 2301
+          "bytesInOutput": 2411
+        },
+        "packages/host/src/project/coordinator-session.ts": {
+          "bytesInOutput": 971
         },
         "packages/host/src/local-session-api.ts": {
           "bytesInOutput": 609
@@ -48783,10 +48841,10 @@
           "bytesInOutput": 291
         },
         "packages/host/src/project/reconciliation.ts": {
-          "bytesInOutput": 3913
+          "bytesInOutput": 4036
         },
         "packages/host/src/project/tool-service.ts": {
-          "bytesInOutput": 4636
+          "bytesInOutput": 5897
         },
         "packages/host/src/permission-request-api.ts": {
           "bytesInOutput": 1152
@@ -49245,7 +49303,7 @@
           "bytesInOutput": 70
         },
         "packages/capabilities/src/session-tool.ts": {
-          "bytesInOutput": 8831
+          "bytesInOutput": 9722
         },
         "packages/host/src/worker-tool-services/session-management.ts": {
           "bytesInOutput": 355
@@ -49467,7 +49525,7 @@
           "bytesInOutput": 386
         },
         "packages/capabilities/src/project/tool.ts": {
-          "bytesInOutput": 10301
+          "bytesInOutput": 12102
         },
         "packages/capabilities/src/project/index.ts": {
           "bytesInOutput": 0
@@ -49602,7 +49660,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 5778769
+      "bytes": 5800944
     }
   }
 }

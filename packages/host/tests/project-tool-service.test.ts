@@ -97,6 +97,8 @@ function harness(options: { coordinator?: string | null; updateState?: 'ok' | 'c
       | 'updateProjectState'
       | 'updateProjectDecision'
       | 'updateProjectMemory'
+      | 'createProjectTask'
+      | 'updateProjectTask'
     >,
   });
   return { service, projectApi };

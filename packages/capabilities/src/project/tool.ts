@@ -37,11 +37,14 @@ const PROJECT_SCHEMA: Record<string, unknown> = {
   properties: {
     action: {
       type: 'string',
-      enum: ['get', 'context', 'update_state', 'record_decision', 'record_memory'],
+      enum: ['get', 'context', 'create_task', 'update_task', 'update_state', 'record_decision', 'record_memory'],
       default: 'get',
       description:
-        'get: read state, tasks, decisions, memories and activity. context: build bounded prompt-ready context, optionally for one task. update_state: replace current state and next step with a revision check. record_decision: propose or supersede a durable decision. record_memory: record a memory candidate, or supersede/retire an existing memory.',
+        'get: read state, tasks, decisions, memories and activity. context: build bounded prompt-ready context, optionally for one task. create_task: create an idempotent Task without launching work. update_task: edit or reopen a non-accepted Task with a revision check. update_state: replace current state and next step with a revision check. record_decision: propose or supersede a durable decision. record_memory: record a memory candidate, or supersede/retire an existing memory.',
     },
+    requestId: { type: 'string', minLength: 1, maxLength: 160, description: 'For create_task: stable idempotency key. Reuse the same key after a lost response, not for a different task.' },
+    subject: { type: 'string', minLength: 1, maxLength: 160, description: 'For create_task/update_task: concise task title.' },
+    description: { type: 'string', minLength: 1, maxLength: 12000, description: 'For create_task/update_task: task brief and acceptance criteria.' },
     afterCursor: {
       type: 'integer',
       minimum: 0,
@@ -55,7 +58,7 @@ const PROJECT_SCHEMA: Record<string, unknown> = {
     },
     taskId: {
       type: 'string',
-      description: 'For context: scope the context to one Project Task.',
+      description: 'For context/update_task: identify one Project Task.',
     },
     maxCharacters: {
       type: 'integer',
@@ -67,7 +70,7 @@ const PROJECT_SCHEMA: Record<string, unknown> = {
       type: 'integer',
       minimum: 0,
       description:
-        'For update_state/record_decision/record_memory: the revision you last read. Use 0 for a new key; read with get and retry on a revision conflict.',
+        'For update_task/update_state/record_decision/record_memory: the corresponding record revision you last read. Use 0 for a new key; read with get and retry on a revision conflict.',
     },
     currentState: {
       type: 'string',
@@ -91,9 +94,9 @@ const PROJECT_SCHEMA: Record<string, unknown> = {
     },
     status: {
       type: 'string',
-      enum: ['proposed', 'accepted', 'superseded', 'candidate', 'active', 'retired'],
+      enum: ['pending', 'proposed', 'accepted', 'superseded', 'candidate', 'active', 'retired'],
       description:
-        'For record_decision: proposed or superseded. For record_memory: candidate, superseded or retired. accepted/active require an explicit user action and are refused here.',
+        'For update_task: pending only. For record_decision: proposed or superseded. For record_memory: candidate, superseded or retired. accepted/active require an explicit user action and are refused here.',
     },
   },
   required: [],
@@ -107,6 +110,9 @@ export class ProjectTool extends BaseTool {
 ## When to use
 - Read the project before planning: state, tasks and their acceptance, accepted decisions, active memories, and recent activity. Use action "get"; page activity with afterCursor.
 - Build bounded context for a task or for yourself with "context".
+- Create a Task before dispatch with "create_task" (requestId, subject, description). Dispatch it using session spawn projectTask={taskId, expectedRevision}; never create a replacement Task just to retry.
+- Edit or reopen a non-accepted Task with "update_task" (taskId, expectedRevision, subject/description or status="pending"). Editing invalidates prior completion evidence. Active/unknown launches cannot be edited or duplicated.
+- A terminal successful work Run marks the Task completed but leaves acceptance pending. Only the user control-plane action can accept/reject it.
 - Keep the durable "current state" and "next step" current after meaningful progress with "update_state". Read the current revision first; a stale revision is refused.
 - Record a decision the user made, or a memory candidate you observed, with "record_decision"/"record_memory". Proposals and candidates carry this session as their source and keep their revision history.
 
@@ -147,6 +153,16 @@ export class ProjectTool extends BaseTool {
 
     try {
       switch (action) {
+        case 'create_task':
+        case 'update_task': {
+          const allowed = action === 'create_task' ? ['action', 'requestId', 'subject', 'description'] : ['action', 'taskId', 'expectedRevision', 'subject', 'description', 'status'];
+          if (Object.keys(input).some((key) => !allowed.includes(key))) return err('Unexpected task fields.');
+          const { action: _action, ...payload } = input;
+          const result = await this.port.dispatch({ action, payload });
+          if (!result.ok) return err(describeRefusal(result.reason));
+          if (!result.task) return err('The Host returned no task.');
+          return { id: randomUUID(), name: this.name, result: formatTask(result.task) };
+        }
         case 'get': {
           const afterCursor = readNonNegativeInteger(input.afterCursor, 'afterCursor');
           if (afterCursor === 'invalid') return err('afterCursor must be an integer >= 0.');
@@ -337,7 +353,9 @@ function formatTask(task: ProjectToolTask): string {
   const work = task.workSessionId === null ? '' : ` · work ${task.workSessionId}`;
   const availability = task.recordAvailable ? '' : ' · Task record unavailable';
   const description = truncate(task.description.trim(), MAX_TASK_DESCRIPTION);
-  return `- ${task.taskId} [${task.status} · acceptance=${task.acceptanceStatus}${work}${availability}] ${task.subject}` +
+  const attempt = task.attempts?.[0];
+  const execution = attempt ? ` · launch=${attempt.status}${attempt.reason ? ` (${attempt.reason})` : ''}` : '';
+  return `- ${task.taskId} [${task.status} · r${task.revision ?? 0} · acceptance=${task.acceptanceStatus}${execution}${work}${availability}] ${task.subject}` +
     (description === '' ? '' : `\n  ${description}`);
 }
 

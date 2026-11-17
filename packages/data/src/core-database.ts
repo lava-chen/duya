@@ -6,6 +6,8 @@ export type { SqliteCtor, SqliteDatabase } from './sqlite-connection.js';
 export interface Migration {
   id: number;
   name: string;
+  /** Table rebuilds must suspend enforcement outside the migration transaction. */
+  rebuildWithForeignKeysOff?: boolean;
   up: (db: SqliteDatabase) => void;
 }
 
@@ -136,11 +138,19 @@ export class CoreDatabase {
       });
       const txn = this.db.transaction(() => {
         migration.up(this.db);
+        if (migration.rebuildWithForeignKeysOff && (this.db.pragma('foreign_key_check') as unknown[]).length > 0) {
+          throw new Error(`Foreign key validation failed after core migration ${migration.id}`);
+        }
         this.db
           .prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
           .run(SCHEMA_VERSION_KEY, String(migration.id));
       });
+      const foreignKeys = this.db.pragma('foreign_keys', { simple: true });
       try {
+        if (migration.rebuildWithForeignKeysOff) {
+          if (this.db.inTransaction) throw new Error('Cannot rebuild tables inside an existing transaction');
+          this.db.pragma('foreign_keys = OFF');
+        }
         txn();
         logger?.({
           level: 'info',
@@ -156,6 +166,8 @@ export class CoreDatabase {
           error: migrationError,
         });
         throw error;
+      } finally {
+        if (migration.rebuildWithForeignKeysOff) this.db.pragma(`foreign_keys = ${foreignKeys ? 'ON' : 'OFF'}`);
       }
     }
   }

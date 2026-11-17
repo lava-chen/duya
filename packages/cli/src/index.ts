@@ -57,6 +57,10 @@ export function buildProgram(): Command {
     .name('duya')
     .description('DUYA Host control plane (serve, status, plugins, sessions, crons, channels, ...)')
     .version(process.env.DUYA_CLI_VERSION ?? '0.1.0');
+  addTuiOptions(program, { includeSession: true, includeWorkspace: true, includePort: true });
+  program.action(async () => {
+    process.exitCode = await runTuiCommand(readTuiOptions(program));
+  });
   buildControlPlane(program);
 
   // The Host is a long-running process command, so it is intentionally kept
@@ -130,15 +134,15 @@ export function buildProgram(): Command {
     const asString = (value: unknown): string | undefined =>
       typeof value === 'string' && value.length > 0 ? value : undefined;
     const options: ChatCommandOptions = {
-      origin: asString(chat.getOptionValue('origin')),
-      token: asString(chat.getOptionValue('token')),
-      runtimeFile: asString(chat.getOptionValue('runtimeFile')),
-      session: asString(chat.getOptionValue('session')),
-      workingDirectory: asString(chat.getOptionValue('workspace')),
-      model: asString(chat.getOptionValue('model')),
-      providerId: asString(chat.getOptionValue('provider')),
-      apiFormat: asString(chat.getOptionValue('apiFormat')) as 'anthropic' | 'openai' | undefined,
-      print: asString(chat.getOptionValue('print')),
+      origin: asString(optionValue(chat, 'origin')),
+      token: asString(optionValue(chat, 'token')),
+      runtimeFile: asString(optionValue(chat, 'runtimeFile')),
+      session: asString(optionValue(chat, 'session')),
+      workingDirectory: asString(optionValue(chat, 'workspace')),
+      model: asString(optionValue(chat, 'model')),
+      providerId: asString(optionValue(chat, 'provider')),
+      apiFormat: asString(optionValue(chat, 'apiFormat')) as 'anthropic' | 'openai' | undefined,
+      print: asString(optionValue(chat, 'print')),
     };
     process.exitCode = await runChatCommand(options);
   });
@@ -148,34 +152,62 @@ export function buildProgram(): Command {
   const tui = program
     .command('tui')
     .description('Open the TUI against the Duya Host that owns this data directory (DUYA_TUI_INLINE=1 for the inline screen model)');
-  tui.option('--port <port>', 'HTTP port for the embedded Host (0 = auto)', '0');
-  tui.option('--session <id>', 'Continue an existing session instead of creating one');
-  tui.option('--workspace <dir>', 'Working directory for a new session (defaults to the current directory)');
-  tui.option('--model <model>', 'Default model override');
-  tui.option('--provider <id>', 'Default provider override (e.g. deepseek, glm-cn)');
-  tui.option('--api-format <format>', 'API format override: anthropic | openai');
+  addTuiOptions(tui, { includeSession: true, includeWorkspace: true, includePort: true });
   tui.action(async () => {
-    const asString = (value: unknown): string | undefined =>
-      typeof value === 'string' && value.length > 0 ? value : undefined;
-    const asInt = (value: unknown): number | undefined => {
-      if (typeof value === 'string') {
-        const n = Number(value);
-        return Number.isInteger(n) && n >= 0 && n <= 65535 ? n : undefined;
-      }
-      return undefined;
-    };
-    const options: TuiCommandOptions = {
-      port: asInt(tui.getOptionValue('port')),
-      session: asString(tui.getOptionValue('session')),
-      workingDirectory: asString(tui.getOptionValue('workspace')),
-      model: asString(tui.getOptionValue('model')),
-      providerId: asString(tui.getOptionValue('provider')),
-      apiFormat: asString(tui.getOptionValue('apiFormat')) as 'anthropic' | 'openai' | undefined,
-    };
-    process.exitCode = await runTuiCommand(options);
+    process.exitCode = await runTuiCommand(readTuiOptions(tui));
+  });
+
+  const project = program.command('project').description('Open a Project Coordinator TUI');
+  addTuiOptions(project, { includeProject: true, includePort: true });
+  project.action(async () => {
+    process.exitCode = await runTuiCommand({
+      ...readTuiOptions(project),
+      projectMode: true,
+      projectId: asString(optionValue(project, 'project')),
+    });
   });
 
   return program;
+}
+
+function addTuiOptions(
+  command: Command,
+  options: { includePort?: boolean; includeSession?: boolean; includeWorkspace?: boolean; includeProject?: boolean } = {},
+): void {
+  if (options.includePort) command.option('--port <port>', 'HTTP port for the embedded Host (0 = auto)', '0');
+  if (options.includeSession) command.option('--session <id>', 'Continue an existing session instead of creating one');
+  if (options.includeWorkspace) command.option('--workspace <dir>', 'Working directory for a new session (defaults to the current directory)');
+  command.option('--model <model>', 'Default model override');
+  command.option('--provider <id>', 'Default provider override (e.g. deepseek, glm-cn)');
+  command.option('--api-format <format>', 'API format override: anthropic | openai');
+  if (options.includeProject) command.option('--project <id>', 'Open this project directly without the selector');
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function asInt(value: unknown): number | undefined {
+  if (typeof value === 'string') {
+    const n = Number(value);
+    return Number.isInteger(n) && n >= 0 && n <= 65535 ? n : undefined;
+  }
+  return undefined;
+}
+
+function optionValue(command: Command, name: string): unknown {
+  return command.getOptionValue(name) ?? command.parent?.getOptionValue(name);
+}
+
+function readTuiOptions(command: Command): TuiCommandOptions {
+  return {
+    port: asInt(optionValue(command, 'port')),
+    session: asString(optionValue(command, 'session')),
+    workingDirectory: asString(optionValue(command, 'workspace')),
+    model: asString(optionValue(command, 'model')),
+    providerId: asString(optionValue(command, 'provider')),
+    apiFormat: asString(optionValue(command, 'apiFormat')) as 'anthropic' | 'openai' | undefined,
+  };
 }
 
 // Standalone entry: when run as `node packages/cli/dist/index.js`,

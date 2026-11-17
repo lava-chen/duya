@@ -39,6 +39,35 @@ beforeEach(() => {
   mocks.runTuiCommand.mockClear();
 });
 
+describe('duya default TUI route', () => {
+  it('opens the generic Session TUI when no subcommand is given', async () => {
+    const program = buildProgram();
+
+    await program.parseAsync(['node', 'duya']);
+
+    expect(mocks.runTuiCommand).toHaveBeenCalledWith(expect.objectContaining({
+      session: undefined,
+      workingDirectory: undefined,
+      model: undefined,
+      providerId: undefined,
+      apiFormat: undefined,
+    }));
+  });
+});
+
+describe('duya project route', () => {
+  it('passes an explicit project id to the Coordinator TUI', async () => {
+    const program = buildProgram();
+
+    await program.parseAsync(['node', 'duya', 'project', '--project', 'project-123']);
+
+    expect(mocks.runTuiCommand).toHaveBeenCalledWith(expect.objectContaining({
+      projectMode: true,
+      projectId: 'project-123',
+    }));
+  });
+});
+
 describe('duya serve --client-scoped', () => {
   it('hands the Host a client-scoped lifetime', async () => {
     const program = buildProgram();
