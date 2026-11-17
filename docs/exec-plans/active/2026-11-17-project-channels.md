@@ -394,3 +394,52 @@ B 分支 `codex/project-channels-discord-runtime`（base `57610fc0c`，即 A 的
 **与 §5「复用 DiscordAdapter」的偏差（需 E 复核）**：没有继承 `DiscordAdapter`，因为它的消息路径产出 `NormalizedMessage`，丢掉原生 mention id、guild、作者类型，且保留 slash/名称正则 mention 特例、按 `DISCORD_MAX` 每消息拉 `/channels/:id`、下载附件——正是 §4.1 第 1 项禁止的行为；继承又会连带 `BaseAdapter` 的 platform 级去重与健康状态。改为复用同一适配器的协议层（`adapters/discord/types.ts`、`message-utils.cleanContent`、`proxy-fetch.proxyFetch`），旧适配器文件保持零改动以保回归。默认 `fetchImpl` 走 `proxyFetch`，与旧 Bot 同一代理配置。
 
 **已知未覆盖 / 待 E 处理**：`architecture-policy.yaml` 中 `legacy-gateway` 仍是 `requires: []`，架构检查因此报 8 条 `pkg:gateway -> pkg:agent-protocol` 新边（退出 1）。E 加一行 `requires: [agent-protocol]` 即可通过（本切片已临时验证退出 0 后还原，未代改策略文件）。未做：真实 Discord 端点验收、guild/channel 事实缓存、发送块拆分、附件、TUI/Host 接线、Desktop 显示。分支已本地提交，未推送、未开 PR。
+
+---
+
+## D/E 第二轮（2026-11-17 晚，已提交）
+
+同一 worktree `.claude/worktrees/project-channels-de`、同一分支 `codex/project-channels-de`。
+本轮 base 起点 `4d51b62e4`；新增三个 commit：`5b326bd12`（控制面 HTTP）、`8136796b7`（CLI 运维命令）、`b04392baa`（Coordinator 发送通路）。
+
+### 本轮实际接通了什么
+
+| 合同项 | 实现 | 验证 |
+| --- | --- | --- |
+| 控制面 HTTP 路由（仅认证的本地控制面） | `http-server.ts` 新增 `#routeProjectChannels`：`GET /v1/projects/:id/channels`、`PUT …/connection`、`POST …/connection/disconnect`、`POST …/bindings`、`PATCH|DELETE …/bindings/:bid`、`GET …/deliveries/:did`。选项 `projectChannelApi` 可选，未装配时 404 `project_channel_api_unavailable`。项目 id 只来自路径段；请求体里的 `projectId` 被忽略。DELETE 的 CAS 支持 query 或 JSON body（共享 CLI 客户端的 DELETE 不带 body） | `project-channels-local-host.test.ts` 6 条：无 token 401 / 伪造 token 403 且不泄漏形状；configure+bind+overview 往返且输出不含 token；跨项目 body 不能改写落点（落在路径指定的项目）；stale revision 409；update/revoke/disconnect 全链 CAS + 缺失 delivery 404；畸形体 400 |
+| 领域码 → HTTP 状态映射 | `projectChannelHttpStatus()`：404（not found 族）/409（CAS 与冲突族）/400（请求与权限族）/503（transport_unavailable、delivery_retryable）/500（delivery_unknown、delivery_failed、internal） | 同上用例以 409/400/404 断言实际状态，非猜测 |
+| CLI `duya project channel connect/bind/list/status/update/unbind/disconnect` | 新文件 `packages/cli/src/commands/project-channel.ts`；挂在 commander 的 `project` 下。**不加入 `program/descriptors.ts`**，因此 `duya_cli` 工具无法解析该路径；`duya project` 单独调用仍是原 Coordinator TUI | `cli-options.test.ts` 7 条（argv→handler、`--member` 重复与逗号、`--proactive/--state` 映射、`--token` 落到拒绝路径、`duya project` 仍走 TUI）；`project-channel.test.ts` 7 条（真实 Host + 真实 HTTP） |
+| 凭据只从 env/stdin | `PROJECT_CHANNEL_TOKEN_ENV`（`DUYA_DISCORD_BOT_TOKEN`）或 stdin 管道；`--token` 被声明只为拒绝并给出替代做法；token 不出现在任何输出 | 用例断言 `--token` 时 exit 64 且**未发起任何请求**；connect 成功输出不含 token 字面量 |
+| Coordinator 的 `send_message`（窄路径） | 复用唯一 canonical 名称 `send_message`（`SendMessageTool`）。`channelBindingId` 存在时走工程通道分支，先于 legacy `type` 校验；参数仅 `channelBindingId`/`text`/`requestId`/`replyToInboundId`。无该字段时 legacy 形状完全不变（`required` 放宽后仍由既有校验要求 `type`） | `send-message-tool.test.ts` 新增 7 条：窄 payload 发出、reply 引用透传、`queued` 报「未投递」、`unknown` 报「不要盲目重发」、领域码原样回显、未装配时 `channel_support_unavailable` 且不落 legacy 路径、缺 requestId/text 拒绝 |
+| Host 从可信 caller 推导身份 | `ProjectToolService.dispatch` 改为接收 `caller{sessionId,runId,epoch}`；`worker-db-bridge` 的 `project:tool` 传入真实 worker attempt；新增 `send_channel_message` 动作，项目由 Coordinator 绑定解析，身份由 caller 提供，payload 只允许 4 个字段 | `project-tool-service.test.ts` 新增 7 条：转发 Host 解析的 projectId + caller；`actor/projectId/sessionId/runId/epoch/channelId/credential` 任一出现即 `invalid_send_payload` 且不调用发送；工作 Session 直接 `not_project_coordinator`；领域拒绝原样回传；`queued` 不被升级为 `sent`；未装配时拒绝 |
+| Worker → Host 受限发送通路 | `worker-tool-services/send-message.ts#sendToProjectChannel` → `projectDb.tool({action:'send_channel_message'})`；transport/token/secret store/身份裁决都留在 Host | 由上述 Host 用例覆盖（worker 侧只是转发请求，不含身份字段） |
+| Session idle / Run settle 的 drain 挂载 | `local-host.ts` 的 `onRunSettled`：在既有 `projectRunSettlement.settleRun` 之后，按 `runs.getRun(runId).session_id` 调 `projectChannels.drainSession(sessionId)`，异步、不阻塞 settle、失败只记日志 | **未取得端到端证据**：真实 settle 需要真实 worker 起 run。域层的「忙碌→排队→idle 后串行消费」仍由 C 的 `project-channels-service.test.ts` 覆盖（假 execution），未宣称已在真实 Host 上验证 |
+
+### 本轮验证记录（同一检出，工作区仅 node_modules 未跟踪）
+
+| 命令 | 退出码 / 结果 |
+| --- | --- |
+| `vitest run` 12 个相关文件（A 存储、B transport、C 服务/恢复/密钥、Host 装配与控制面、project 工具三件、capabilities send_message、CLI 两件） | 退出 0；**171/171** |
+| `npx tsc -b packages/host/tsconfig.json packages/cli/tsconfig.json`（含 `--force` 重建 capabilities 声明） | 退出 0 |
+| `architecture:check` | 退出 0；`OK — no new boundary violations`（无新增 baseline） |
+| `architecture:worker-module-state` | 退出 0；PASS（234 / 1122） |
+| `check:no-ts-suppress` / `check:encoding` | 退出 0 |
+| `vitest run packages/host/tests/local-host.test.ts` | 1 项失败：`migratePreviousDefaultDatabases` 的 `copyFileSync` 被本机安全策略拒绝（EPERM）——与本轮改动无关的既有环境限制，与 `build:packages` 同因 |
+| `npm run build:packages` / `build:cli-dev` / `typecheck:all` / `electron:build` | **未跑通**：同一 `copyFile` EPERM 环境限制。CLI 真实 bundle 与 Electron 重建因此没有证据 |
+
+### 仍未完成（不得当作已实现）
+
+1. **受信 Worker 发送通路的端到端**：Host 侧动作、worker 端口、CLI 都已就位，但没有一次「真实生产 Worker → Host → transport」的完整运行证据。
+2. **无人值守 Task 完成通知**：未接通。需要 mailbox/task terminal 唤醒 Coordinator，再由其决定是否 `send_message`。
+3. **来源感知的回复义务提醒 / `delivery_missing`**：`hasReplyDelivery` 已在域层提供，但「本回合必须回复对应入站」的回合级提醒与缺失记账未实现。
+4. **CLI/Desktop 注入真实 transport**：`startLocalHost` 有注入点，但 `duya serve`、TUI、Desktop 的 composition 仍无人传入 `createProjectDiscordTransport(...)`，因此生产路径上 channel 仍未启用。
+5. **控制面 HTTP 客户端**：`HostSessionHttpClient` 未加 channel 方法（目前 CLI 直接走 `CliApiClient`），Desktop 也没有挂载设置页。
+6. **真实 Discord 验收**：未做，也没有本地受控 REST/WebSocket 端点接入证据。
+7. **`build:packages` / `build:cli-dev` / `typecheck:all` / `electron:build`**：被环境 EPERM 阻断，未取得产物。
+
+### 下一动作
+
+1. 给 `duya serve`（以及 TUI 的常驻 Host 路径）注入 `createProjectDiscordTransport`，让生产链路真正有 transport —— 这是「能否跑起来」的最后一道门。
+2. 接通无人值守完成通知（mailbox → 唤醒 Coordinator）。
+3. 补回合级回复义务提醒与 `delivery_missing`。
+4. 需要用户另行授权：本地完整链路验收、真实 Discord 操作、最终集成。
