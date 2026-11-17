@@ -186,7 +186,7 @@ describe('boot recovery', () => {
         sessionInputs: fixture.sessionInputs,
         leases: fixture.leases,
       },
-      pending: createProjectChannelPendingIndex(fixture.db),
+      pending: createProjectChannelPendingIndex(fixture.channels),
       transport: secondTransport,
       secrets: fixture.secrets,
       execution: {

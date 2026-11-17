@@ -21,7 +21,7 @@ export {
 export {
   createProjectChannelPendingIndex,
   type ProjectChannelPendingIndex,
-  type ProjectChannelQueryDatabase,
+  type ProjectChannelPendingSource,
   type ProjectChannelQueuedInput,
 } from './pending.js';
 export {

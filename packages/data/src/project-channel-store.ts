@@ -189,6 +189,13 @@ function normalizeAllowlist(ids: readonly string[]): string[] {
   return [...new Set(ids)].sort();
 }
 
+/** Recovery scans are bounded so a corrupted ledger cannot stall a boot. */
+const DEFAULT_PENDING_LIMIT = 200;
+
+function pendingLimit(limit: number): number {
+  return Number.isSafeInteger(limit) && limit > 0 ? Math.min(limit, 1_000) : DEFAULT_PENDING_LIMIT;
+}
+
 function decodeConnection(row: ConnectionRow): ProjectChannelConnection {
   return {
     connectionId: row.connection_id, projectId: row.project_id, platform: row.platform,
@@ -782,5 +789,66 @@ export class ProjectChannelStore {
       input.state, input.errorCode ?? null, input.observedAt,
     );
     return this.getObservation(input.connectionId)!;
+  }
+
+  // ── Pending work (read-only, for boot recovery) ─────────────────────────────
+
+  /**
+   * "What is still unfinished?" is a question the per-row getters cannot answer,
+   * and it belongs with the tables that own the rows rather than in every
+   * consumer. These four queries are the whole of that question: an event with
+   * no admitted input, a delivery left mid-send, an input claimed but never
+   * settled, and whether this inbound already has a reply. All are read-only and
+   * bounded, and none of them derives a second state machine from the ledger.
+   */
+  listUnsubmittedInboundIds(limit = DEFAULT_PENDING_LIMIT): string[] {
+    const rows = this.db.prepare(
+      `SELECT inbound_id FROM project_channel_inbounds
+        WHERE input_id IS NULL
+        ORDER BY created_at, inbound_id
+        LIMIT ?`,
+    ).all(pendingLimit(limit)) as Array<{ inbound_id: string }>;
+    return rows.map((row) => row.inbound_id);
+  }
+
+  listSendingDeliveryIds(limit = DEFAULT_PENDING_LIMIT): string[] {
+    const rows = this.db.prepare(
+      `SELECT delivery_id FROM project_channel_deliveries
+        WHERE status = 'sending'
+        ORDER BY created_at, delivery_id
+        LIMIT ?`,
+    ).all(pendingLimit(limit)) as Array<{ delivery_id: string }>;
+    return rows.map((row) => row.delivery_id);
+  }
+
+  /** Inputs a drainer had claimed (stage `queued`) whose outcome was never recorded. */
+  listQueuedInboundInputs(limit = DEFAULT_PENDING_LIMIT): Array<{
+    readonly sessionId: string;
+    readonly requestId: string;
+  }> {
+    const rows = this.db.prepare(
+      `SELECT i.target_session_id AS session_id, i.inbound_id AS request_id
+         FROM project_channel_inbounds i
+         JOIN session_inputs s
+           ON s.session_id = i.target_session_id AND s.request_id = i.inbound_id
+        WHERE s.stage = 'queued' AND i.input_id IS NOT NULL
+        ORDER BY i.created_at, i.inbound_id
+        LIMIT ?`,
+    ).all(pendingLimit(limit)) as Array<{ session_id: string; request_id: string }>;
+    return rows.map((row) => ({ sessionId: row.session_id, requestId: row.request_id }));
+  }
+
+  /**
+   * Whether a durable reply obligation exists for this inbound. `queued` and
+   * `sending` count because the obligation was established; `failed` does not,
+   * because a refused send answered nobody.
+   */
+  hasReplyDelivery(inboundId: string): boolean {
+    const row = this.db.prepare(
+      `SELECT delivery_id FROM project_channel_deliveries
+        WHERE reply_to_inbound_id = ? AND status IN ('queued','sending','sent')
+        LIMIT 1`,
+    ).get(inboundId) as { delivery_id: string } | undefined;
+    return row !== undefined;
   }
 }
