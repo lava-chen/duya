@@ -245,8 +245,8 @@ E 的真实本地验收必须包含：同检出生产 Worker、真实 Host HTTP/
 
 ### A 交接（合同已冻结，供 B/C/D 依赖）
 
-A 分支 `codex/project-channels-protocol-store`（base `5e5256decc4a915872add152b122a97ad71e55c1`）已交付可编译公开合同，`@duya/agent-protocol` 主入口与 `./project-channels` 子路径导出：`ProjectChannelConnection`、`ProjectChannelBinding`、`ProjectChannelInboundEvent`、`ProjectChannelDelivery`、`ProjectChannelRuntimeObservation`、`HostProjectChannelApiV1`、`ProjectChannelTransportPort`、`ProjectChannelSendMessageInput`、错误码集合与 `inboundDedupKey` / `deliveryRequestKey` / 两个正文指纹函数。B/C/D 直接 import，不得另造近似类型。
+A 分支 `codex/project-channels-protocol-store`（base `5e5256decc4a915872add152b122a97ad71e55c1`，head `47d6b127d`）已交付可编译公开合同，`@duya/agent-protocol` 主入口与 `./project-channels` 子路径导出：`ProjectChannelConnection`、`ProjectChannelBinding`、`ProjectChannelInboundEvent`、`ProjectChannelDelivery`、`ProjectChannelRuntimeObservation`、`HostProjectChannelApiV1`、`ProjectChannelTransportPort`、`ProjectChannelSendMessageInput`、错误码集合与 `inboundDedupKey` / `deliveryRequestKey` / 两个正文指纹函数。B/C/D 直接 import，不得另造近似类型。
 
 关键语义（已由 Store 测试钉死）：入站去重键为 `connectionId + messageId`，同键正文不同抛 `inbound_fingerprint_conflict`；投递幂等键为 `projectId + requestId`，`queued` 不等于 `sent`，无平台证据落 `unknown` 不自动重发；连接/绑定写作为 revision CAS，撤销保留审计行；connection `generation` 与持久化 `revision` 分离，旧 generation 观测被 `observe` 拒绝。存储仅接受平台核验后的 `botUserId`，无任何 token 字段。
 
-A 未做业务接线：不实现 Gateway、Host composition、工具或 CLI。B 依赖 `ProjectChannelTransportPort` 工厂；C 消费 `ProjectChannelStore`（从 Host db handle 构造，迁移 69 已在 `collectCoreDataMigrations()` 装配）；E 负责公共入口与集成。未提交 PR，未合并；未取得真实 Discord 验收。
+A 未做业务接线：不实现 Gateway、Host composition、工具或 CLI。B 依赖 `ProjectChannelTransportPort` 工厂；C 消费 `ProjectChannelStore`（从 Host db handle 构造，迁移 69 已在 `collectCoreDataMigrations()` 装配）；E 负责公共入口与集成。Draft PR [#640](https://github.com/lava-chen/duya/pull/640) 已开，未合并；未取得真实 Discord 验收。
