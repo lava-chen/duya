@@ -138,6 +138,7 @@ import {
 import { capacityBar } from './capacity-bar.js';
 import { formatTokensPerSecond, readGitBranch } from './footer.js';
 import type { PrBadge } from './pr-badge.js';
+import type { ProjectWorkbenchSummary } from './project-workbench.js';
 import type { WorkbenchWorkspaceSummary } from './workbench-workspace.js';
 import type { StatuslineProfile } from './preferences.js';
 import {
@@ -519,6 +520,7 @@ export interface TUIAppOptions {
   readonly pullRequestBadge?: () => PrBadge | null;
   /** Cached local Git status for the directory this session executes in. */
   readonly workbenchWorkspace?: () => WorkbenchWorkspaceSummary;
+  readonly workbenchProject?: () => ProjectWorkbenchSummary | undefined;
   /**
    * Reasoning effort for the NEXT turn, as a string (`'low'`, `'high'`, …).
    *
@@ -2264,9 +2266,9 @@ export class TUIApp {
 
   private workbenchColumns(total: number): number {
     if (this.inlineSurface !== null || !this.sidebarVisible || !this.options.onWorkbenchCommand
-      || process.env['DUYA_TUI_SIDEBAR'] === '0' || this.terminalSize().columns < 120
+      || process.env['DUYA_TUI_SIDEBAR'] === '0' || this.terminalSize().columns < (this.options.workbenchProject === undefined ? 120 : 92)
       || this.visibleTranscriptRows() < 6) return 0;
-    const preferred = this.preferredSidebarWidth ?? Math.round(total * 0.22);
+    const preferred = this.preferredSidebarWidth ?? Math.round(total * (this.options.workbenchProject === undefined ? 0.22 : 0.29));
     return Math.max(18, Math.min(72, Math.floor(preferred), total - 60));
   }
 
@@ -2371,6 +2373,7 @@ export class TUIApp {
           changedFiles: null,
           changes: [],
         },
+        project: this.options.workbenchProject?.(),
         pullRequest: this.options.pullRequestBadge?.() ?? null,
         contextTokens: this.watchedSubagentId === null ? this.contextTokens() : null,
         contextBudget: this.watchedSubagentId === null ? this.options.contextBudgetTokens?.() ?? null : null,
@@ -2882,7 +2885,7 @@ export class TUIApp {
 
   private paintStatus(): void {
     const model = this.options.modelLabel?.();
-    const text = model === undefined || model === null
+    const text = this.options.workbenchProject !== undefined || model === undefined || model === null
       ? this.options.statusText?.() ?? ''
       : [model.provider, model.model].filter((part) => part !== undefined && part !== '').join(' · ');
     const busy = this.options.isBusy?.() ?? this.busy;
@@ -2931,7 +2934,9 @@ export class TUIApp {
         : this.editor.isEmpty && this.hasTurnSuggestion()
         ? 'Enter adopt · / commands · F1 help'
         : '/ commands · F1 help';
-      this.inlineStatusLines = this.footerLines(width, hint + queueSegment);
+      const projectHint = this.options.workbenchProject !== undefined && !this.completion.isOpen && !busy
+        ? this.options.statusText?.() ?? hint : hint;
+      this.inlineStatusLines = this.footerLines(width, projectHint + queueSegment);
       return;
     }
     const fixed = [text, tail.trim(), usage.trim().replace(/^·\s*/u, ''), queueSegment.trim().replace(/^·\s*/u, ''), context]
@@ -4771,6 +4776,14 @@ exportHistory(): string[] {
       },
     };
 
+    // Exact project navigation commands should run even when a longer
+    // suggestion (such as /statusline) currently has the popup selection.
+    if (key === 'return' && this.options.workbenchProject !== undefined
+      && /^\/(?:status|sessions)(?:\s.*)?$/iu.test(this.editor.text.trim())) {
+      this.completion.close();
+      this.onEnter(true);
+      return;
+    }
     const selectingSlashOption = this.completion.snapshot.argumentCommand !== undefined;
     const result = this.completion.handleKey(key, this.editor.text);
     if (result.accepted !== null) {

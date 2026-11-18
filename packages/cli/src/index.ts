@@ -203,6 +203,18 @@ export function buildProgram(): Command {
 function addProjectChannelCommands(project: Command): void {
   const channel = project.command('channel').description("Manage this Project's own Discord bot: connect, bind channels, revoke, disconnect");
 
+  const setup = channel.command('setup')
+    .description('Open the interactive Discord setup')
+    .option('--project <id>', 'Project id');
+  setup.action(async () => {
+    process.exitCode = await runTuiCommand({
+      ...readTuiOptions(project),
+      projectMode: true,
+      projectChannelsOnly: true,
+      projectId: asString(ancestorOption(setup, 'project')),
+    });
+  });
+
   const withFormat = (command: Command): Command =>
     command.option('--format <format>', 'Output format: text | json', 'text');
 

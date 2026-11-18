@@ -29,7 +29,7 @@
 
 import type { SessionId } from '@duya/agent-protocol';
 import * as path from 'node:path';
-import { createInterface } from 'node:readline/promises';
+import { selectProject } from './commands/project-menu.js';
 import type { HostProjectRecord } from '@duya/agent-protocol/projects';
 import type { HostHandshakeV1 } from '@duya/host/http-client';
 import { HostSessionHttpClient } from '@duya/host/http-client';
@@ -56,6 +56,7 @@ export interface TuiCommandOptions {
   readonly apiFormat?: 'anthropic' | 'openai';
   /** Enter the Coordinator workbench rather than a generic Session. */
   readonly projectMode?: boolean;
+  readonly projectChannelsOnly?: boolean;
   /** Direct project selection for `duya project --project <id>`. */
   readonly projectId?: string;
   readonly project?: { readonly projectId: string; readonly name: string };
@@ -187,6 +188,10 @@ function errorMessage(error: unknown): string {
 export async function runTuiCommand(options: TuiCommandOptions): Promise<number> {
   const explicit = attachedHostFromEnv(process.env);
   const discovered = explicit === null ? await attachedHostFromRuntime() : null;
+  if (options.projectChannelsOnly === true && explicit === null && discovered === null) {
+    write('Start duya serve in one terminal, then run duya project channel setup in another.');
+    return 2;
+  }
   if (discovered !== null) {
     const refusal = await discoveredHostRefusal(discovered);
     if (refusal !== null) {
@@ -206,7 +211,7 @@ export async function runTuiCommand(options: TuiCommandOptions): Promise<number>
   const client = new HostSessionHttpClient(host.origin, host.token ?? '');
   try {
     const health = await client.getHealth();
-    write(`${DIM}duya tui · Host ${host.origin} (api v${health.apiVersion})${RESET}`);
+    if (options.projectMode !== true) write(`${DIM}duya tui · Host ${host.origin} (api v${health.apiVersion})${RESET}`);
   } catch (error) {
     write(`${RED}Host failed to start: ${error instanceof Error ? error.message : String(error)}${RESET}`);
     return 1;
@@ -224,7 +229,10 @@ export async function runTuiCommand(options: TuiCommandOptions): Promise<number>
   if (options.projectMode === true) {
     let project: HostProjectRecord | null;
     try {
-      project = await selectProject(client, options.projectId);
+      project = await selectProject(client, host, {
+        ...(options.projectId === undefined ? {} : { projectId: options.projectId }),
+        ...(options.projectChannelsOnly === true ? { channelsOnly: true } : {}),
+      });
       if (project === null) {
         lease.close();
         await host.close();
@@ -294,45 +302,6 @@ export async function runTuiCommand(options: TuiCommandOptions): Promise<number>
     }
   }
   return exitCode;
-}
-
-async function selectProject(
-  client: HostSessionHttpClient,
-  projectId?: string,
-): Promise<HostProjectRecord | null> {
-  if (projectId !== undefined) {
-    const project = await client.getProject(projectId.trim());
-    if (project === null) throw new Error(`Project "${projectId}" does not exist`);
-    return project;
-  }
-
-  const projects = (await client.listProjects())
-    .filter((project) => project.name.trim() !== '' && project.canonical_root.trim() !== '')
-    .sort((left, right) => right.last_seen_at - left.last_seen_at || left.name.localeCompare(right.name));
-  if (projects.length === 0) {
-    throw new Error('No named Projects are registered. Register a Project first, then run `duya project`.');
-  }
-  if (projects.length === 1) return projects[0]!;
-  if (process.stdin.isTTY !== true || process.stdout.isTTY !== true) {
-    throw new Error('Choose a Project with `duya project --project <id>` in a non-interactive terminal.');
-  }
-
-  write('Projects:');
-  projects.forEach((project, index) => {
-    write(`  ${index + 1}. ${project.name}  ${project.canonical_root}`);
-  });
-  const prompt = createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    for (;;) {
-      const answer = (await prompt.question('Select a Project number (q to cancel): ')).trim();
-      if (answer.toLowerCase() === 'q' || answer === '') return null;
-      const index = Number(answer) - 1;
-      if (Number.isInteger(index) && index >= 0 && index < projects.length) return projects[index]!;
-      write(`Enter a number from 1 to ${projects.length}, or q to cancel.`);
-    }
-  } finally {
-    prompt.close();
-  }
 }
 
 /**
