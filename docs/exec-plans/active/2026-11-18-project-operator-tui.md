@@ -48,3 +48,29 @@ CLI 菜单创建、选择项目和引导绑定 Discord。Coordinator TUI 显示�
 ### 交付与接续
 
 菜单 `ad055099c`，派发和 Worker bundle `bf809bbd7`。在 `bf809bbd7` 上运行 `npm run bundle:verify` 返回 0，1132 个一方输入全部匹配。已发布任务分支并创建 [Draft PR #642](https://github.com/lava-chen/duya/pull/642)，base 为试用分支 `codex/project-operator-tui`。独立 worktree 保留，未合并且没有集成授权。接下来在该检出的 CLI 复测用户模型和真实 Discord，评估基线打包检查，再按 PR 门禁集成。
+
+### 试用反馈，原地切换工作消息流
+
+owner 为当前会话，复用 managed worktree `project-coordinator-tool-picker/duya`、分支 `codex/project-coordinator-tool-picker`、Draft PR #642，本轮基线 `9e8bb42a8`。修改范围为 CLI TUI、子代理 Worker 与运行时协议、现有测试和架构说明。当前检出无 CodeGraph 索引，未提供 Workspace 状态工具，已通过计划、Git 与 PR 对账。
+
+- 基线测试已过，4 个文件共 47 项。运行命令为 `npm exec --offline -- vitest run packages/cli/src/tui/__tests__/tui-subagent-card.test.ts packages/cli/src/tui/__tests__/tui-background-tasks-view.test.ts packages/cli/src/tui/__tests__/tui-session-dashboard.test.ts packages/host/tests/project-task-worker.test.ts`。
+- [x] 统一项目工作 Session 和子代理到主消息区，复用消息、工具、搜索与滚动渲染。Esc 回父会话，查看期间保留父会话的草稿和运行。
+- [x] 已在执行的工作 Session 通过 Host 事件流跟随，切换时取消观察订阅，核验历史和流式输出不重复。
+- [x] 参考 [Claude Code Focus 说明](https://code.claude.com/docs/en/commands)，实现全屏 `/focus` 的最后一轮投影和用户偏好。工具摘要汇总修改行数、启动的子代理和本轮已完成的后台子代理。
+- [x] 精简状态与侧栏，工具悬停恢复正文色。底部切换器提供 F7 与全屏点击。架构文档说明消息投影、终端壳、Host 观察和未来 Mods 扩展的边界，参考 [Claude Code Mods](https://code.claude.com/docs/en/plugins/mods/overview)。
+- [x] 核实短父 Run 的子代理启动事件未进入 canonical stream，后台输出也未写入可跟随的任务日志。将启动接到 Run 自己的事件投影，后台子代理的输出按顺序写入任务日志。
+- [x] 复跑最终快照的打包 CLI、真实 PTY、类型与架构门禁，使用同一草稿 PR 交付。
+
+#### 原地消息流验证
+
+环境为 Fedora Linux x86_64、Node 26.13.0、npm 11.20.0。基线为 `9e8bb42a8`，实现与 Worker bundle 为 `fb2d445c2`。变更包含 CLI、Command Catalog、协议和 Worker、测试与文档。
+
+| 命令或操作 | 退出码与证据 |
+| --- | --- |
+| `npm exec --offline -- vitest run --maxWorkers=4 packages/cli/src packages/agent-protocol/test packages/agent-runtime/test packages/command-catalog/tests packages/host/tests/project-task-worker.test.ts packages/host/tests/worker-subagents packages/host/tests/worker-product-runtime` | 0。334 个文件，3800 项通过，1 项标记为预期失败。此前无并发限制的运行中，`chat-tui-host-stop-continue.test.ts` 的 cooperative stop 一次超时，隔离运行及最终全量均通过。 |
+| `npm exec --offline -- vitest run packages/host/tests/project-task-worker.test.ts` | 0。Electron 构建后恢复 Node SQLite ABI 再实跑。真实打包 CLI 通过 PTY 验证方向键、工作 Session 运行中显示工具与流式输出、普通子代理在父会话结束后继续输出、F7 切换、Esc 返回、`/focus` 与持久偏好、Project Task 人工验收。模型为确定性本地 Provider。 |
+| `npm run typecheck:all`、`npm run architecture:check`、`npm run architecture:worker-module-state` | 0。无新增架构违规或 Worker 模块状态。 |
+| `npm run build:cli-dev`、`npm run electron:build`、`npm run bundle:verify` | 0。在 `fb2d445c2` 验证 1132 个 Worker 一方输入全部匹配。 |
+| `npm run check:packaged-artifacts:bundle` | 1。对比 `9e8bb42a8` 的提交产物，两条发现逐项一致，分别为外部 `ajv-formats/dist/formats` 和 4 处动态 `require`。 |
+
+验证通过独立的临时 Host、仓库和 PTY。保留 managed worktree 和 [草稿 PR #642](https://github.com/lava-chen/duya/pull/642) 接续用户试用及集成。

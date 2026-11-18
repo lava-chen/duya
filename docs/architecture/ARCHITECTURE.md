@@ -1269,9 +1269,8 @@ The plan 587/610 cutover moved execution out of `@duya/agent`. Current ownership
   scroll position. `agent-switcher.ts` renders selection independently of Host
   calls, and `focus-transcript.ts` projects the last turn without mutating it.
 - The TUI already uses the Host plugin inventory and exposes plugin mentions.
-  Future TUI extensions
-  can follow these internal boundaries with typed contributions for tool-row
-  presentation and bounded regions near the composer or in the sidebar.
+  Future TUI extensions can build on these boundaries with typed contributions
+  for tool-row presentation and bounded regions near the composer or in the sidebar.
   Components would receive presentation data and return markup and named actions
   for the TUI to measure and route. Terminal input, conversation subscriptions,
   and permission decisions are owned by the TUI shell and Host. The current
