@@ -326,11 +326,9 @@ export function createHostSessionService(options: HostSessionServiceOptions) {
           const model = requireString(payload, 'model') ?? undefined;
           if (payload.use_worktree !== undefined && typeof payload.use_worktree !== 'boolean') return { ok: false, reason: 'invalid_use_worktree' };
           for (const key of ['source_branch', 'branch_name']) if (payload[key] !== undefined && !requireString(payload, key)) return { ok: false, reason: `invalid_${key}` };
-          const isolated = payload.use_worktree === true || (payload.use_worktree === undefined && Boolean(options.checkoutService?.read(caller.sessionId).checkout));
-          if (!isolated && (payload.source_branch !== undefined || payload.branch_name !== undefined)) return { ok: false, reason: 'independent_branch_requires_worktree' };
-          if (isolated && !options.checkoutService) return { ok: false, reason: 'worktree_isolation_unavailable' };
-          if (!prompt || !requestedDirectory || !path.isAbsolute(requestedDirectory)) {
-            return { ok: false, reason: 'invalid_spawn_input' };
+          if (!prompt) return { ok: false, reason: 'invalid_spawn_input' };
+          if (payload.workingDirectory !== undefined && (!requestedDirectory || !path.isAbsolute(requestedDirectory))) {
+            return { ok: false, reason: 'invalid_working_directory' };
           }
           const parent = await parentFor(caller);
           if (!parent) return { ok: false, reason: 'parent_session_missing_or_unbound' };
@@ -344,10 +342,17 @@ export function createHostSessionService(options: HostSessionServiceOptions) {
               ? { kind: 'plain' }
               : { kind: 'refused', reason: 'project_coordination_unavailable' };
           if (dispatchPlan.kind === 'refused') return { ok: false, reason: dispatchPlan.reason };
-          const requestedCanonical = await realpath(requestedDirectory).catch(() => null);
-          requireCurrentCaller(caller);
-          if (!requestedCanonical || !sameCanonicalDirectory(parent.workingDirectory, requestedCanonical)) {
-            return { ok: false, reason: 'working_directory_must_match_parent' };
+          // Resolve checkout policy on the Host that owns the project workspace.
+          const isolated = payload.use_worktree ?? (dispatchPlan.kind === 'project' ||
+            Boolean(options.checkoutService?.read(caller.sessionId).checkout));
+          if (!isolated && (payload.source_branch !== undefined || payload.branch_name !== undefined)) return { ok: false, reason: 'independent_branch_requires_worktree' };
+          if (isolated && !options.checkoutService) return { ok: false, reason: 'worktree_isolation_unavailable' };
+          if (requestedDirectory !== null) {
+            const requestedCanonical = await realpath(requestedDirectory).catch(() => null);
+            requireCurrentCaller(caller);
+            if (!requestedCanonical || !sameCanonicalDirectory(parent.workingDirectory, requestedCanonical)) {
+              return { ok: false, reason: 'working_directory_must_match_parent' };
+            }
           }
           const workspace = boundWorkspace(parent.record);
           if (!workspace) return { ok: false, reason: 'parent_workspace_unbound' };

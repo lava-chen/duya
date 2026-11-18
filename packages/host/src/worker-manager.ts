@@ -104,6 +104,7 @@ export interface WorkerManagerOptions {
   resolveWorkerPath(): string;
   resolveBetterSqlite3Path(): string;
   lowPower?: boolean;
+  appConnectionTransportUnavailable?: boolean;
 }
 
 /** How much of one worker's stderr has already been accounted for. */
@@ -550,14 +551,19 @@ export class WorkerManager {
           return;
         }
       }
-      // appConnection:invoke,
-      // appConnection:listDescriptors and appConnection:catalog are
-      // handled by per-request handlers in the Desktop router (they forward
-      // to main process) — this Host manager does not own those transports,
-      // so they are dropped here. `db:request` is NOT dropped: when the HOST
-      // owns execution (plan 12), the HostRunExecutionController serves it
-      // from Host-owned stores via the centralized handler below.
+      // Desktop's per-request handlers own these messages. A standalone
+      // Host has no Desktop connector transport, so settle its requests here.
       if (msg.type === 'appConnection:invoke' || msg.type === 'appConnection:listDescriptors' || msg.type === 'appConnection:catalog') {
+        if (this.options.appConnectionTransportUnavailable && child.connected && typeof msg.requestId === 'string') {
+          child.send({
+            type: `${msg.type}:response`,
+            requestId: msg.requestId,
+            ...(msg.type === 'appConnection:listDescriptors' ? { success: true, descriptors: [] } : {
+              success: false,
+              error: { code: 'UNSUPPORTED_CHANNEL', message: 'Desktop App Connections are unavailable on this Host.' },
+            }),
+          });
+        }
         return;
       }
       if (this.onWorkerMessage) {

@@ -25,7 +25,7 @@
 | project_activity_list | afterCursor、limit；返回带 eventId、source、taskId/sessionId/runId 的持久项目事件与 nextCursor；读取不重复触发执行 | Host 项目查询；复用既有 Run/输入事件并补缺失的项目关联 |
 | project_memory_read | query 或 key/ref、cursor、limit；先返回预算内索引/片段、revision、source refs，正文按需读取 | Host 项目 scope + memory，Coordinator 无需 Read 文件工具 |
 | project_memory_update | requestId、expectedRevision、op=candidate/upsert/retire、key、内容、来源引用；返回生效/候选状态与新 revision；退役影响后续索引/召回 | 复用 memory 存取/纠错/遗忘适配，原始对话继续由 transcript 保存 |
-| session_spawn / get / read / rename | 复用 Session MCP；项目派发额外关联 taskId、目标 Host/cwd/隔离 checkout、任务配置和绑定 revision；Host 校验项目归属，不只靠 children/workspace | 已有 Session 服务 + Project binding 适配 |
+| session_spawn / get / read / rename | 复用 Session MCP；Coordinator 提交 taskId、expectedRevision 与要执行的说明；Host 校验项目绑定，解析工作区并分配 checkout | 已有 Session 服务 + Project binding 适配 |
 | session_send / status | 复用异步输入与 receipt；含 requestId、expectedRunId/expectedTurnId（适用时）及当前控制 revision；status 明确区分输入回执与执行结果，get 查询 Run | #579/#580 统一后的一个 Host 输入服务 |
 | session_cancel / control | 取消捕获的目标 Run；用户接管/交还使用同一 Host lease 服务。模型自身不能代用户取得 user-control 或回答审批 | 已有执行控制、可信客户端与 Host 授权适配 |
 | 普通回复 / 用户问题 | 沿用现有 assistant 消息投影与 AskUserQuestion/审批交互，消息有稳定 ID 与收件目标；不新增 post_message + assistant 双重投递 | 共享 UI/现有会话通道；移除对 Bot send_message/outbox 的必需依赖 |
@@ -44,6 +44,20 @@ Coordinator 默认只允许上述管理能力及必要的用户问题工具，�
 6. claim 后崩溃、派发结果丢失、事件重复或旧协调者回报都按同一输入/receipt/Run/binding 权威恢复；无法确定时显示 queued/unknown/recovery_required，不另开重复执行。
 
 子任务请求带来源用户指令与 Coordinator brief 的不同 provenance，沿现有受信结构传输；用户文本/网页/记忆不因出现 XML 标签获得 principal 身份。审批必须落到真实审批 ledger/Run，主对话一句“可以”不自动回答另一工作 Session 的待审批请求。
+
+### 工作区归属与跨 Host 派发
+
+Claude Code Projects 让用户在一个长期项目对话里交代工作，由协调者分派并行线程。线程共享项目仓库、指令和记忆，各自执行并回报结果。需要本机资源时，可以把特定线程交给自己的电脑。[Claude Code Projects](https://code.claude.com/docs/en/claude-projects)
+
+Cursor Projects 也把持久项目上下文、任务与执行环境分开。协调者可派工作 Agent 到获准的其他仓库、环境或机器。[Cursor Projects](https://cursor.com/docs/agent/projects)、[仓库和环境授权](https://cursor.com/docs/cloud-agent/repo-access)
+
+Duya 的派发按三个对象划分责任：
+
+- **Project** 保存目标、项目上下文、任务及默认工作区。若未来接入多仓库或远端 Host，目标应引用已注册、已授权的仓库或环境 ID。工作 Session 继续按 Task 关联。
+- **Coordinator** 提交任务引用、版本和执行说明。已有任务的默认调用为 `session` 的 `{action: "spawn", projectTask: {taskId, expectedRevision}, prompt}`。同一个任务的跟进使用已绑定的工作 Session。
+- **执行 Host** 决定实际运行位置。本地用已绑定父会话的工作目录作为来源，为 Project Task 默认创建独立 Git worktree 和分支。由 Git HEAD 提供默认内容，未提交改动不随之带入。没有可用 Git checkout 时返回失败。共享目录需要明确传入 `use_worktree: false`。旧调用可显式提交匹配的绝对路径，Host 校验后仍按自己的工作区绑定执行。
+
+未来的远端派发应由 Host 校验目标授权并交给目标环境物化 checkout。目标 Host 的绝对路径留在执行回执和工作 Session 上。Project 依据任务、派发尝试与 Session/Run 回执恢复状态，`reply`、`get`、`cancel` 按已经分配的工作身份路由。本地实现只含当前 Host 派发，远端调度和授权传递须另行实施。
 
 ## 4. 项目上下文与记忆
 

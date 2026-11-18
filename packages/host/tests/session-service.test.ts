@@ -413,8 +413,12 @@ describe('Host session service', () => {
       workingDirectory: outside,
       prompt: 'escape attempt',
     }, harness.caller);
+    const relative = await harness.service.dispatch('session:spawn', {
+      workingDirectory: '.',
+      prompt: 'invalid checkout location',
+    }, harness.caller);
+    expect(relative).toEqual({ ok: false, reason: 'invalid_working_directory' });
     const child = await harness.service.dispatch('session:spawn', {
-      workingDirectory: harness.workingDirectory,
       prompt: 'live child',
     }, harness.caller);
     const reply = await harness.service.dispatch('session:spawnReply', {

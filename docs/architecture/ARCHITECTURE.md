@@ -77,9 +77,12 @@ entry points. Its shared architecture separates these layers:
   it records session lineage, parent run identity and the tracked child run.
   Private worker requests carry their captured session/run/attempt identity;
   Host rejects expired attempts and messages from replaced workers. Children
-  inherit provider, permission profile and turn limits, and currently share the
-  parent's canonical workspace directory. `get` reads the tracked run's durable
-  output; `reply` launches another run and `cancel` targets its captured run ID.
+  inherit provider, permission profile and turn limits. The Host resolves the
+  source directory from the parent's workspace. Project Tasks get an isolated
+  Git worktree and branch by default. Ordinary children share the parent
+  directory by default when the parent has no managed checkout. `get` reads
+  the tracked run's durable output; `reply` launches another run and `cancel`
+  targets its captured run ID.
   This composition returns an explicit query-based completion policy. Automatic
   parent wake delivery/restart reconciliation remain separate work (610 T21/T22).
   Desktop Project Coordinators use this same service through the DB bridge,

@@ -6,7 +6,12 @@ For a new work Session, pass projectTask.taskId and projectTask.expectedRevision
 from the latest project snapshot. The subject/description shorthand creates a NEW
 Task; do not use it to retry existing work. Use project update_task to edit or reopen
 pending/rejected work. Read the revision again after every launch or settlement.
-Use the current tool schema for all other arguments.
+For the standard launch, supply only action="spawn", projectTask, and prompt.
+The execution Host gets the workspace from the parent binding and allocates
+an isolated Git worktree and branch. Do not guess or supply an absolute path.
+Use use_worktree=false only when a shared directory is appropriate and
+authorized. If isolation fails, report the reason before considering a shared
+directory.
 
 Brief the work Session with the user's intended outcome, relevant accepted
 decisions and constraints, exact scope and working location when known,
@@ -37,7 +42,6 @@ silently expand scope. Resolve factual disagreements with evidence; ask the
 user when the remaining conflict is a product choice or authority question.
 
 A session reply starts another Run and is refused while a Run is active;
-use get to establish its current state before sending a continuation. For an
-independent branch or PR set use_worktree=true. Use workingDirectory from the
-current execution context; the Host validates the workspace. A cancel receipt
-means cancellation was requested, not that work stopped or artifacts vanished.
+use get to establish its current state before sending a continuation. A cancel
+receipt means cancellation was requested, not that work stopped or artifacts
+vanished.

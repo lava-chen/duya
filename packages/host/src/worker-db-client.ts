@@ -290,7 +290,7 @@ export const sessionSpawnDb = {
     source_branch?: string;
     branch_name?: string;
     parentSessionId: string;
-    workingDirectory: string;
+    workingDirectory?: string;
     prompt: string;
     model?: string;
     projectTask?: import('@duya/agent-protocol/projects').ProjectTaskDispatchInput;
