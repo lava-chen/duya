@@ -10,7 +10,7 @@
  */
 
 import type { ProjectChannelErrorCode } from '@duya/agent-protocol/project-channels';
-import { PROJECT_CHANNEL_RETRYABLE_CODES } from '@duya/agent-protocol/project-channels';
+import { isProjectChannelRetryable } from '@duya/agent-protocol/project-channels';
 
 export interface ProjectChannelTransportFailureParams {
   readonly code: ProjectChannelErrorCode;
@@ -32,7 +32,7 @@ export class ProjectChannelTransportFailure extends Error {
     super(params.message);
     this.name = 'ProjectChannelTransportFailure';
     this.code = params.code;
-    this.retryable = params.retryable ?? PROJECT_CHANNEL_RETRYABLE_CODES.has(params.code);
+    this.retryable = params.retryable ?? isProjectChannelRetryable(params.code);
     this.retryAfterMs = params.retryAfterMs;
     this.status = params.status;
   }

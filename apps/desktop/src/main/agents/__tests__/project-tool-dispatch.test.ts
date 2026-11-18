@@ -49,7 +49,7 @@ describe('Desktop project tool dispatch', () => {
     expect(boundary.dispatch).toHaveBeenCalledWith({
       action: 'get',
       payload: { limit: 5 },
-      callerSessionId: 'coordinator-1',
+      caller: { sessionId: 'coordinator-1' },
     });
     expect(result).toMatchObject({ ok: true });
   });
@@ -64,7 +64,7 @@ describe('Desktop project tool dispatch', () => {
       { sessionId: 'coordinator-2', runId: 'run-1', epoch: 0 },
     );
 
-    expect(boundary.dispatch).toHaveBeenCalledWith(expect.objectContaining({ callerSessionId: 'coordinator-2' }));
+    expect(boundary.dispatch).toHaveBeenCalledWith(expect.objectContaining({ caller: { sessionId: 'coordinator-2', runId: 'run-1', epoch: 0 } }));
   });
 
   it('refuses a request the transport did not bind to a Session', async () => {

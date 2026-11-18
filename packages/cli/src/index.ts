@@ -95,10 +95,16 @@ export function buildProgram(): Command {
 
     try {
       const workerPath = resolveHostWorkerPath();
+      // Only a persistent Host with execution can receive Project messages.
+      // Import the transport subpath without starting the legacy Gateway process.
+      const projectChannelTransport = !clientScoped && workerPath !== undefined
+        ? (await import('@duya/gateway/project-channels')).createProjectDiscordTransport()
+        : undefined;
       const host = await startLocalHost({
         port,
         clientScoped,
         ...(workerPath === undefined ? {} : { workerPath }),
+        ...(projectChannelTransport === undefined ? {} : { projectChannelTransport }),
       });
       process.stdout.write(`Duya Host listening at ${host.origin}\n`);
       process.stdout.write(`Runtime descriptor: ${host.runtimeFilePath}\n`);

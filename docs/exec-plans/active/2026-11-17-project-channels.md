@@ -443,3 +443,17 @@ B 分支 `codex/project-channels-discord-runtime`（base `57610fc0c`，即 A 的
 2. 接通无人值守完成通知（mailbox → 唤醒 Coordinator）。
 3. 补回合级回复义务提醒与 `delivery_missing`。
 4. 需要用户另行授权：本地完整链路验收、真实 Discord 操作、最终集成。
+
+### Standalone Host 装配接续（2026-11-18）
+
+独立检出 `codex/discord-coordinator-framework`，基线 #641 `e7513517a566c9f143b4423d4dd745bedce1d76c`。复用 #640/#641 的协议、SQLite、transport、控制面和 worker 发送接口。
+
+- 常驻且有 Worker 的 `duya serve` 注入 Gateway 的 Project Discord transport；更新 workspace 依赖与锁文件。
+- 基线源码里的 Run settle 只对账工作结果；已在 Session 退出运行状态后接入频道队列 drain。
+- Coordinator 开放 canonical `send_message`，只投影 Project binding 参数，执行入口拒绝旧 Bot 路由参数；实际发送继续由 Host 验证 Project、Run 和回复范围。
+- Desktop 项目工具桥转发可信 attempt，保留已注册 Session 的普通项目调用；外部发送要求真实 Run。协议错误分类改为纯判断，清除基线的三个 Worker 模块级集合违规。
+- Linux / Node 24.19.0：`npm ci`、`npm run build:cli-dev`、`npm run architecture:check` 通过。13 个相关测试文件共 168 项通过，包括生产 Worker provider 套件及 Desktop 工具桥。Worker 模块状态门禁、Electron main/preload 构建也通过。使用生产 CLI 启动真实 Host 后，认证频道接口可访问。独立的生产 Worker 测试用脚本化模型和测试 transport 验证了两条消息各回复原帖，第二条在首轮运行期间排队，首轮结束后自动处理。
+
+`check:packaged-artifacts:bundle` 报 `ajv-formats/dist/formats` 和 4 个非字面量 `require`。#641 已提交产物和同版本重建产物均复现相同两项检查结果。
+
+未接真实 Discord 验收。项目资料目录、工作 Thread 自动唤醒及跨轮双向投递仍待接入；现有工作结果继续持久化到账本和 Coordinator mailbox。

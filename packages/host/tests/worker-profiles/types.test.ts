@@ -10,8 +10,8 @@ import { sessionTool } from '../../src/worker-tool-bindings/session.js';
 describe('PRESET_AGENT_PROFILES', () => {
   it('project-coordinator runs on the dedicated project prompt system', () => {
     const coordinator = PRESET_AGENT_PROFILES.find((p) => p.id === PROJECT_COORDINATOR_PROFILE_ID)!;
-    expect(coordinator.allowedTools).toEqual(['session', 'project']);
-    expect(PROJECT_COORDINATOR_ALLOWED_TOOLS).toEqual(['session', 'project']);
+    expect(coordinator.allowedTools).toEqual(['session', 'project', 'send_message']);
+    expect(PROJECT_COORDINATOR_ALLOWED_TOOLS).toEqual(['session', 'project', 'send_message']);
     expect(PROJECT_COORDINATOR_ALLOWED_TOOLS).not.toContain('todo');
     expect(coordinator.promptSystem).toBe('project');
     expect(coordinator.suppressIdentityBlock).toBe(true);

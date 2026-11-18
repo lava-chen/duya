@@ -840,7 +840,20 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
           logger: executionLogger,
         }),
         logger: executionLogger,
-        onRunSettled: (runId) => projectRunSettlement.settleRun(runId),
+        onRunSettled: (runId) => {
+          // The controller has released the finishing Session by this point.
+          const sessionId = core.stores.runs.getRun(runId)?.session_id;
+          if (sessionId !== undefined && projectChannels !== undefined) {
+            void projectChannels.drainSession(sessionId).catch((error: unknown) => {
+              executionLogger.error(
+                'Project channel queue drain failed',
+                error instanceof Error ? error : new Error(String(error)),
+                { sessionId, runId },
+              );
+            });
+          }
+          projectRunSettlement.settleRun(runId);
+        },
         worker: {
           resolveWorkerPath: () => options.workerPath as string,
           resolveBetterSqlite3Path: () =>

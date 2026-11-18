@@ -32,7 +32,6 @@ import type {
   ProjectChannelTransportSendInput,
 } from '@duya/agent-protocol/project-channels';
 import {
-  PROJECT_CHANNEL_UNKNOWN_CODES,
   deliveryBodyFingerprint,
   type ProjectChannelErrorCode,
 } from '@duya/agent-protocol/project-channels';
@@ -341,7 +340,7 @@ function isUnknown(code: ProjectChannelErrorCode): boolean {
   // `transport_unavailable` also means "no receipt": the adapter never got a
   // platform answer, so treating it as a definite failure would invite a resend
   // that might duplicate a delivered message.
-  return PROJECT_CHANNEL_UNKNOWN_CODES.has(code) || code === 'transport_unavailable';
+  return code === 'delivery_unknown' || code === 'transport_unavailable';
 }
 
 /**

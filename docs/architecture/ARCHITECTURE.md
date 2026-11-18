@@ -150,6 +150,11 @@ Their per-binding inbox replaces the old global message-ID cache for dedup.
 This path is opt-in through S3c scheduler ownership; legacy channel retirement
 remains S7.
 
+Project Discord channels use the separate Project channel service. A persistent
+`duya serve` with a worker composes Gateway's Discord transport through its
+public subpath. The Host owns the connection lifecycle and message ledgers.
+The client-scoped TUI Host and ledger-only Host do not start Project sockets.
+
 | Layer | Technology |
 |-------|------------|
 | Frontend | Vite 6, React 19, Zero Router, Tailwind |

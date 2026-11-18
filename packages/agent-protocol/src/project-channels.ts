@@ -412,19 +412,6 @@ export const PROJECT_CHANNEL_ERROR_CODES = [
 ] as const;
 export type ProjectChannelErrorCode = (typeof PROJECT_CHANNEL_ERROR_CODES)[number];
 
-const CODE_SET: ReadonlySet<string> = new Set<string>(PROJECT_CHANNEL_ERROR_CODES);
-
-/** Codes a caller may retry after a bounded backoff / Retry-After. */
-export const PROJECT_CHANNEL_RETRYABLE_CODES: ReadonlySet<ProjectChannelErrorCode> =
-  new Set<ProjectChannelErrorCode>(['delivery_retryable', 'transport_unavailable']);
-
-/**
- * The no-evidence outcome. `delivery_unknown` is neither retryable nor a
- * definite failure: the message may or may not have reached the platform.
- */
-export const PROJECT_CHANNEL_UNKNOWN_CODES: ReadonlySet<ProjectChannelErrorCode> =
-  new Set<ProjectChannelErrorCode>(['delivery_unknown']);
-
 export interface ProjectChannelErrorInfo {
   readonly code: ProjectChannelErrorCode;
   readonly message: string;
@@ -439,11 +426,12 @@ export interface ProjectChannelErrorInfo {
 export type ProjectChannelResult<T> = { readonly ok: T } | { readonly err: ProjectChannelErrorInfo };
 
 export function isProjectChannelErrorCode(code: string): code is ProjectChannelErrorCode {
-  return CODE_SET.has(code);
+  return PROJECT_CHANNEL_ERROR_CODES.some((candidate) => candidate === code);
 }
 
+/** Codes a caller may retry after a bounded backoff or Retry-After. */
 export function isProjectChannelRetryable(code: ProjectChannelErrorCode): boolean {
-  return PROJECT_CHANNEL_RETRYABLE_CODES.has(code);
+  return code === 'delivery_retryable' || code === 'transport_unavailable';
 }
 
 export function projectChannelError(

@@ -67,7 +67,7 @@ describe('project prompt system', () => {
     const identity = byName.get('projectIdentity') ?? '';
     expect(identity).toContain('Project Coordinator');
     expect(identity).toContain('project records and work Sessions');
-    expect(coordinator?.allowedTools).toEqual(['session', 'project']);
+    expect(coordinator?.allowedTools).toEqual(['session', 'project', 'send_message']);
 
     const operation = byName.get('projectOperation') ?? '';
     expect(operation).toContain('project');

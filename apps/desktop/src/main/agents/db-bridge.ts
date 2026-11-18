@@ -1859,7 +1859,9 @@ export async function dispatchDbAction(
       return getDesktopProjectToolService().dispatch({
         action: p.action,
         payload: (toolPayload ?? {}) as Record<string, unknown>,
-        callerSessionId,
+        caller: trustedAttempt
+          ? { sessionId: callerSessionId, runId: trustedAttempt.runId, epoch: trustedAttempt.epoch }
+          : { sessionId: callerSessionId },
       });
     }
     case 'project:continuity-context': {

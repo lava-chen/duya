@@ -114,11 +114,10 @@ export interface ProjectToolService {
      * `runId`/`epoch` are what a channel send is authorised against, so a
      * payload can never name its own identity.
      */
-    readonly caller: {
-      readonly sessionId: string;
-      readonly runId: string;
-      readonly epoch: number;
-    };
+    readonly caller: { readonly sessionId: string } & (
+      | { readonly runId: string; readonly epoch: number }
+      | { readonly runId?: never; readonly epoch?: never }
+    );
   }): Promise<ProjectToolOperation<ProjectToolPayload>>;
 }
 
@@ -220,6 +219,7 @@ export function createProjectToolService(options: ProjectToolServiceOptions): Pr
 
         case 'send_channel_message': {
           if (options.channels === undefined) return refuse('channel_support_unavailable');
+          if (caller.runId === undefined) return refuse('caller_attempt_not_current');
           const keys = ['requestId', 'channelBindingId', 'text', 'replyToInboundId'];
           if (Object.keys(payload).some((key) => !keys.includes(key))) return refuse('invalid_send_payload');
           const requestId = readString(payload.requestId)?.trim() ?? '';

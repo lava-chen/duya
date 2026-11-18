@@ -56,6 +56,7 @@
     "@duya/ai": "0.1.0",
       "@duya/command-catalog": "0.1.0",
     "@duya/data": "0.1.0",
+    "@duya/gateway": "0.1.0",
     "@duya/host": "0.1.0",
     "@duya/input-completion": "0.1.0",
     "@duya/plugin-core": "0.1.0",
