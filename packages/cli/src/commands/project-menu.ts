@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import * as path from 'node:path';
+import { clearScreenDown, emitKeypressEvents, moveCursor, type Key } from 'node:readline';
 import { createInterface } from 'node:readline/promises';
 import { Writable } from 'node:stream';
 import type { ProjectChannelBinding, ProjectChannelConnection, ProjectChannelOverview } from '@duya/agent-protocol/project-channels';
@@ -8,6 +9,7 @@ import type { HostProjectRecord } from '@duya/agent-protocol/projects';
 import type { HostSessionHttpClient } from '@duya/host/http-client';
 import { CliApiClient } from '../api/client.js';
 import { CliApiError } from '../api/errors.js';
+import { truncateToWidth } from '../tui/width.js';
 import { PROJECT_CHANNEL_TOKEN_ENV } from './project-channel.js';
 
 type Choice<T> = { label: string; value: T };
@@ -22,15 +24,16 @@ function openPrompts() {
       else process.stdout.write(chunk, done);
     },
   });
-  const input = createInterface({ input: process.stdin, output, terminal: true, historySize: 0 });
   const cancellation = new AbortController();
-  input.once('close', () => cancellation.abort());
-  input.on('SIGINT', () => input.close());
+  const close = () => cancellation.abort();
 
   async function ask(label: string, options: { fallback?: string; hidden?: boolean } = {}): Promise<string | null> {
     if (cancellation.signal.aborted) return null;
     const prompt = options.fallback === undefined ? `${label}: ` : `${label} [${terminalText(options.fallback)}]: `;
     secret = options.hidden === true;
+    const input = createInterface({ input: process.stdin, output, terminal: true, historySize: 0 });
+    input.once('close', close);
+    input.on('SIGINT', close);
     if (secret) process.stdout.write(prompt);
     try {
       const answer = (await input.question(secret ? '' : prompt, { signal: cancellation.signal })).trim();
@@ -39,17 +42,21 @@ function openPrompts() {
       if (cancellation.signal.aborted) return null;
       throw error;
     } finally {
+      input.off('close', close);
+      input.close();
       if (secret) print('');
       secret = false;
     }
   }
 
-  async function choose<T>(title: string, choices: readonly Choice<T>[], fallback?: number): Promise<T | null> {
+  async function choose<T>(title: string, choices: readonly Choice<T>[]): Promise<T | null> {
+    if (cancellation.signal.aborted || choices.length === 0) return null;
+    if (process.env.TERM !== 'dumb') return chooseWithKeyboard(title, choices, cancellation);
+
     print(`\n${terminalText(title)}`);
     choices.forEach(({ label }, index) => print(`  ${index + 1}) ${terminalText(label)}`));
     for (;;) {
-      const answer = await ask('Choose a number or q to go back',
-        fallback === undefined ? {} : { fallback: String(fallback + 1) });
+      const answer = await ask('Choose a number or q to go back', { fallback: '1' });
       if (answer === null || answer.toLowerCase() === 'q') return null;
       if (/^\d+$/u.test(answer)) {
         const selected = choices[Number(answer) - 1];
@@ -59,7 +66,80 @@ function openPrompts() {
     }
   }
 
-  return { ask, choose, close: () => input.close() };
+  return { ask, choose, close, get closed() { return cancellation.signal.aborted; } };
+}
+
+async function chooseWithKeyboard<T>(
+  title: string,
+  choices: readonly Choice<T>[],
+  cancellation: AbortController,
+): Promise<T | null> {
+  const input = process.stdin;
+  const output = process.stdout;
+  const wasRaw = input.isRaw;
+  let selected = 0;
+  let top = 0;
+  let painted = 0;
+
+  function clear(): void {
+    if (painted === 0) return;
+    moveCursor(output, 0, -painted);
+    clearScreenDown(output);
+    painted = 0;
+  }
+
+  function render(): void {
+    clear();
+    const limit = Math.max(1, Math.min(10, (output.rows || 24) - 3));
+    top = Math.min(top, Math.max(0, choices.length - limit));
+    if (selected < top) top = selected;
+    if (selected >= top + limit) top = selected - limit + 1;
+    const rows = [
+      terminalText(title),
+      ...choices.slice(top, top + limit).map(({ label }, index) =>
+        `${top + index === selected ? '›' : ' '} ${terminalText(label)}`),
+      '↑/↓ Move · Enter Select · Esc Back',
+    ];
+    const width = Math.max(1, (output.columns || 80) - 1);
+    output.write(rows.map((row) => truncateToWidth(row, width)).join('\r\n') + '\r\n');
+    painted = rows.length;
+  }
+
+  let onKey: ((_input: string | undefined, key: Key) => void) | undefined;
+  let onEnd: (() => void) | undefined;
+  try {
+    emitKeypressEvents(input);
+    input.setRawMode(true);
+    return await new Promise<T | null>((resolve) => {
+      onEnd = () => {
+        cancellation.abort();
+        resolve(null);
+      };
+      onKey = (_input, key) => {
+        if (key.ctrl && (key.name === 'c' || key.name === 'd')) return onEnd?.();
+        // Node readline marks a bare Escape as a meta key.
+        if (key.sequence === '\x1b') return resolve(null);
+        if (key.ctrl || key.meta) return;
+        if (key.name === 'q') return resolve(null);
+        if (key.name === 'return' || key.name === 'enter') return resolve(choices[selected]!.value);
+        if (key.name === 'up' || key.name === 'down') {
+          selected = (selected + (key.name === 'up' ? -1 : 1) + choices.length) % choices.length;
+          render();
+        }
+      };
+      input.on('keypress', onKey);
+      input.once('end', onEnd);
+      input.resume();
+      print('');
+      render();
+    });
+  } finally {
+    if (onKey) input.off('keypress', onKey);
+    if (onEnd) input.off('end', onEnd);
+    input.pause();
+    if (input.isRaw !== wasRaw) input.setRawMode(wasRaw);
+    clear();
+  }
 }
 
 type Prompts = ReturnType<typeof openPrompts>;
@@ -89,12 +169,13 @@ export async function selectProject(
       return null;
     }
     for (;;) {
+      if (prompts.closed) return null;
       const recent = (await listNamed())
         .sort((a, b) => b.last_seen_at - a.last_seen_at || a.name.localeCompare(b.name));
       const entry = await prompts.choose<HostProjectRecord | 'create'>('Projects', [
         ...recent.map((project) => ({ label: `${project.name}  ·  ${project.canonical_root}`, value: project })),
         { label: 'Create a project', value: 'create' },
-      ], 0);
+      ]);
       if (entry === null) return null;
       let project: HostProjectRecord | null;
       try {
@@ -112,7 +193,7 @@ export async function selectProject(
         const action = await prompts.choose(`${project.name}`, [
           { label: 'Open Coordinator', value: 'open' },
           { label: 'Manage Discord channels', value: 'discord' },
-        ], 0);
+        ]);
         if (action === null) break;
         if (action === 'open') return project;
         await manageChannels(channels, project, prompts);
@@ -140,7 +221,7 @@ const DISCORD_ID = /^\d{5,25}$/u;
 
 async function manageChannels(client: CliApiClient, project: HostProjectRecord, prompts: Prompts): Promise<void> {
   const route = `/v1/projects/${encodeURIComponent(project.project_id)}/channels`;
-  for (;;) {
+  while (!prompts.closed) {
     let overview: ProjectChannelOverview | null;
     try {
       ({ overview } = await client.get<{ overview: ProjectChannelOverview | null }>(route));
@@ -161,7 +242,7 @@ async function manageChannels(client: CliApiClient, project: HostProjectRecord, 
     const choice = await prompts.choose('Discord settings', [
       { label: connection?.enabled ? 'Add a channel' : 'Connect a bot and add a channel', value: 'bind' },
       ...(connection?.enabled ? [{ label: 'Update bot token', value: 'token' }] : []),
-    ], 0);
+    ]);
     if (choice === null) return;
     try {
       if (choice === 'token') {
