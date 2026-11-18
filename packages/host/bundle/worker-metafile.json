@@ -387,12 +387,12 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/events/registry.ts": {
-      "bytes": 15822,
+      "bytes": 15957,
       "imports": [],
       "format": "esm"
     },
     "packages/agent-protocol/src/events/required.ts": {
-      "bytes": 11535,
+      "bytes": 11730,
       "imports": [],
       "format": "esm"
     },
@@ -629,7 +629,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/events/payloads.ts": {
-      "bytes": 30211,
+      "bytes": 30704,
       "imports": [],
       "format": "esm"
     },
@@ -2152,7 +2152,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/transcript/permission-progress.ts": {
-      "bytes": 4964,
+      "bytes": 5031,
       "imports": [],
       "format": "esm"
     },
@@ -2168,7 +2168,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/transcript/classification.ts": {
-      "bytes": 21384,
+      "bytes": 21461,
       "imports": [],
       "format": "esm"
     },
@@ -14898,12 +14898,12 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/worker-protocol.ts": {
-      "bytes": 31684,
+      "bytes": 31751,
       "imports": [],
       "format": "esm"
     },
     "packages/host/src/worker-transport.ts": {
-      "bytes": 5993,
+      "bytes": 6065,
       "imports": [
         {
           "path": "node:readline",
@@ -15461,7 +15461,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/project/legacy-sse-projector.ts": {
-      "bytes": 12075,
+      "bytes": 12563,
       "imports": [],
       "format": "esm"
     },
@@ -15471,7 +15471,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/translate/chat-event-translator.ts": {
-      "bytes": 33780,
+      "bytes": 34967,
       "imports": [
         {
           "path": "packages/agent-protocol/src/index.ts",
@@ -15839,7 +15839,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/engine/run-engine.ts": {
-      "bytes": 209624,
+      "bytes": 209637,
       "imports": [
         {
           "path": "packages/agent-core/src/index.ts",
@@ -16548,7 +16548,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-subagents/progress-bridge.ts": {
-      "bytes": 5270,
+      "bytes": 5486,
       "imports": [
         {
           "path": "packages/host/src/worker-subagents/progress-tracker.ts",
@@ -17183,7 +17183,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-subagents/service.ts": {
-      "bytes": 49637,
+      "bytes": 48801,
       "imports": [
         {
           "path": "node:crypto",
@@ -17315,7 +17315,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-frame-codec.ts": {
-      "bytes": 22484,
+      "bytes": 22542,
       "imports": [
         {
           "path": "packages/host/src/worker-logger.ts",
@@ -17484,8 +17484,14 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/adapters/run-engine-ports.ts": {
-      "bytes": 61339,
-      "imports": [],
+      "bytes": 61449,
+      "imports": [
+        {
+          "path": "packages/agent-runtime/src/translate/chat-event-translator.ts",
+          "kind": "import-statement",
+          "original": "../translate/chat-event-translator.js"
+        }
+      ],
       "format": "esm"
     },
     "packages/host/src/worker-run-composition.ts": {
@@ -35919,7 +35925,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-subagents/engine-run.ts": {
-      "bytes": 17970,
+      "bytes": 17952,
       "imports": [
         {
           "path": "packages/host/src/worker-engine-driver.ts",
@@ -35945,7 +35951,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-subagents/run-agent.ts": {
-      "bytes": 34892,
+      "bytes": 35624,
       "imports": [
         {
           "path": "packages/capabilities/src/AppServer/app-tool-namespace.ts",
@@ -36474,7 +36480,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/tools/execution/contracts.ts": {
-      "bytes": 2907,
+      "bytes": 2974,
       "imports": [],
       "format": "esm"
     },
@@ -43925,10 +43931,10 @@
           "bytesInOutput": 40
         },
         "packages/agent-protocol/src/events/registry.ts": {
-          "bytesInOutput": 6605
+          "bytesInOutput": 6726
         },
         "packages/agent-protocol/src/events/required.ts": {
-          "bytesInOutput": 3498
+          "bytesInOutput": 3640
         },
         "packages/agent-protocol/src/codecs.ts": {
           "bytesInOutput": 67
@@ -45773,7 +45779,7 @@
           "bytesInOutput": 889
         },
         "packages/memory/src/wakeup.ts": {
-          "bytesInOutput": 413
+          "bytesInOutput": 425
         },
         "packages/host/src/skills/paths.ts": {
           "bytesInOutput": 697
@@ -45806,13 +45812,13 @@
           "bytesInOutput": 2959
         },
         "packages/agent-runtime/src/project/legacy-sse-projector.ts": {
-          "bytesInOutput": 4340
+          "bytesInOutput": 4616
         },
         "packages/agent-runtime/src/legacy-sse-contract.ts": {
           "bytesInOutput": 180
         },
         "packages/agent-runtime/src/translate/chat-event-translator.ts": {
-          "bytesInOutput": 9691
+          "bytesInOutput": 10432
         },
         "packages/agent-runtime/src/transport/execution-channel.ts": {
           "bytesInOutput": 190
@@ -45902,7 +45908,7 @@
           "bytesInOutput": 2079
         },
         "packages/agent-runtime/src/engine/run-engine.ts": {
-          "bytesInOutput": 22029
+          "bytesInOutput": 22038
         },
         "packages/agent-runtime/src/engine/run-engine-execution.ts": {
           "bytesInOutput": 979
@@ -45992,7 +45998,7 @@
           "bytesInOutput": 1627
         },
         "packages/host/src/worker-context/background-notification.ts": {
-          "bytesInOutput": 409
+          "bytesInOutput": 422
         },
         "packages/capabilities/src/SubagentTool/constants.ts": {
           "bytesInOutput": 45
@@ -47645,7 +47651,7 @@
           "bytesInOutput": 3166
         },
         "packages/host/src/skills/fingerprint.ts": {
-          "bytesInOutput": 971
+          "bytesInOutput": 975
         },
         "packages/host/src/skills/scanFilter.ts": {
           "bytesInOutput": 154
@@ -47678,7 +47684,7 @@
           "bytesInOutput": 3020
         },
         "packages/host/src/worker-agents-md/nested-loader.ts": {
-          "bytesInOutput": 1874
+          "bytesInOutput": 1880
         },
         "packages/host/src/worker-prompts/modules/mappers/project.ts": {
           "bytesInOutput": 684
@@ -47720,7 +47726,7 @@
           "bytesInOutput": 708
         },
         "packages/memory/src/memory_paths.ts": {
-          "bytesInOutput": 610
+          "bytesInOutput": 616
         },
         "packages/host/src/worker-prompts/dynamic/environmentPreBuildHook.ts": {
           "bytesInOutput": 611
@@ -47819,7 +47825,7 @@
           "bytesInOutput": 660
         },
         "packages/memory/src/forget_ledger.ts": {
-          "bytesInOutput": 1552
+          "bytesInOutput": 1556
         },
         "packages/bot/src/domain/bot-id.ts": {
           "bytesInOutput": 244
@@ -47909,7 +47915,7 @@
           "bytesInOutput": 1611
         },
         "packages/host/src/worker-transport.ts": {
-          "bytesInOutput": 1454
+          "bytesInOutput": 1500
         },
         "packages/host/src/worker-modes/research-mode/research-events.ts": {
           "bytesInOutput": 330
@@ -47978,10 +47984,10 @@
           "bytesInOutput": 601
         },
         "packages/host/src/worker-subagents/progress-bridge.ts": {
-          "bytesInOutput": 1489
+          "bytesInOutput": 1629
         },
         "packages/host/src/worker-subagents/background-lifecycle.ts": {
-          "bytesInOutput": 8398
+          "bytesInOutput": 8397
         },
         "packages/host/src/worker-subagents/task-verification.ts": {
           "bytesInOutput": 1817
@@ -48035,7 +48041,7 @@
           "bytesInOutput": 0
         },
         "packages/host/src/worker-subagents/service.ts": {
-          "bytesInOutput": 16136
+          "bytesInOutput": 16259
         },
         "packages/agent-core/src/subagents/agent-type-registry.ts": {
           "bytesInOutput": 854
@@ -48053,7 +48059,7 @@
           "bytesInOutput": 621
         },
         "packages/host/src/worker-frame-codec.ts": {
-          "bytesInOutput": 5191
+          "bytesInOutput": 5211
         },
         "packages/host/src/worker-engine-driver.ts": {
           "bytesInOutput": 4471
@@ -48089,7 +48095,7 @@
           "bytesInOutput": 2259
         },
         "packages/agent-runtime/src/adapters/run-engine-ports.ts": {
-          "bytesInOutput": 4023
+          "bytesInOutput": 4057
         },
         "packages/agent-runtime/src/turns/run-identity.ts": {
           "bytesInOutput": 146
@@ -49343,7 +49349,7 @@
           "bytesInOutput": 0
         },
         "packages/host/src/worker-subagents/run-agent.ts": {
-          "bytesInOutput": 8444
+          "bytesInOutput": 8857
         },
         "packages/host/src/worker-subagents/tool-utils.ts": {
           "bytesInOutput": 793
@@ -49367,7 +49373,7 @@
           "bytesInOutput": 191
         },
         "packages/host/src/worker-subagents/engine-run.ts": {
-          "bytesInOutput": 1723
+          "bytesInOutput": 1720
         },
         "packages/host/src/worker-subagents/transcript.ts": {
           "bytesInOutput": 2164
@@ -49910,7 +49916,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 5859283
+      "bytes": 5861389
     }
   }
 }

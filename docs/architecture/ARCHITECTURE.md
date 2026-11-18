@@ -1262,6 +1262,20 @@ The plan 587/610 cutover moved execution out of `@duya/agent`. Current ownership
   and restore the selected session's persisted transcript. `/new`, `/clear`,
   and `/exit` are handled in the same entry. Non-interactive terminals retain
   the readline fallback.
+- A selected work session or subagent uses the same transcript viewport as the
+  parent. `session-transcript-observer.ts` owns Host history and run subscriptions
+  for inspected sessions, and `subagent-transcript.ts` projects scoped child
+  progress into the same block model. The terminal retains the parent's draft and
+  scroll position. `agent-switcher.ts` renders selection independently of Host
+  calls, and `focus-transcript.ts` projects the last turn without mutating it.
+- The TUI already uses the Host plugin inventory and exposes plugin mentions.
+  Future TUI extensions
+  can follow these internal boundaries with typed contributions for tool-row
+  presentation and bounded regions near the composer or in the sidebar.
+  Components would receive presentation data and return markup and named actions
+  for the TUI to measure and route. Terminal input, conversation subscriptions,
+  and permission decisions are owned by the TUI shell and Host. The current
+  modules are internal and do not constitute a public mod API.
 - A chat surface creates a Host session when it opens, because a run has to
   belong to one. A surface that is opened and closed without a message would
   leave that session behind, so the resume picker offers only sessions with a

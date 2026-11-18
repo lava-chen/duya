@@ -80,6 +80,7 @@ export const TUI_EFFORT_BY_MODEL_SETTING = 'cli.tui.effortByModel';
 
 export type TuiThemePreference = 'system' | ThemeName;
 export type TuiDisplayMode = 'fullscreen' | 'inline';
+export const TUI_FOCUS_VIEW_SETTING = 'cli.tui.focusView';
 export const TUI_SIDEBAR_WIDTH_SETTING = 'cli.tui.sidebarWidth';
 
 export interface TuiPreferences {
@@ -89,6 +90,7 @@ export interface TuiPreferences {
   readonly displayMode: TuiDisplayMode;
   /** Preferred fullscreen sidebar width; narrow terminals only clamp its display. */
   readonly sidebarWidth?: number;
+  readonly focusView?: boolean;
   readonly effort: EffortLevel;
   /**
    * Default effort per model id, overriding `effort` for that model only.
@@ -272,6 +274,7 @@ export function parseTuiPreferences(values: Readonly<Record<string, string>>): T
       ? DEFAULT_TUI_PREFERENCES.effort
       : normalizeEffort(storedEffort),
     effortByModel: parseEffortByModel(values[TUI_EFFORT_BY_MODEL_SETTING]),
+    ...(values[TUI_FOCUS_VIEW_SETTING] === 'true' ? { focusView: true } : {}),
     showThinking: parseBoolean(values[TUI_SHOW_THINKING_SETTING], DEFAULT_TUI_PREFERENCES.showThinking),
     expandBlocks: parseBoolean(values[TUI_EXPAND_BLOCKS_SETTING], DEFAULT_TUI_PREFERENCES.expandBlocks),
     showToolResults: parseBoolean(values[TUI_SHOW_TOOL_RESULTS_SETTING], DEFAULT_TUI_PREFERENCES.showToolResults),

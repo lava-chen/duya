@@ -197,6 +197,7 @@ export const REQUIRED_FIELDS = {
     agentName: true,
     agentDescription: false,
   },
+  'subagent.progress': { subagentId: true, sessionId: false, kind: true, data: false, toolName: false, toolInput: false, toolResult: false, partial: false, toolCallId: false, toolError: false },
   'subagent.completed': { subagentId: true, status: true, durationMs: true, summary: false },
   'hook.invoked': {
     agentEventType: true,

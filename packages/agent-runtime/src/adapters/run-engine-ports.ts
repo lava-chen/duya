@@ -98,6 +98,7 @@ import type {
   TurnAssemblyInput,
   TurnOutputSummary,
 } from '../index.js';
+import { projectSubagentProgress } from '../translate/chat-event-translator.js';
 import type { ToolSideEffectClass } from '@duya/agent-protocol';
 import type {
   AgentProgressEvent,
@@ -914,6 +915,7 @@ export function buildEnginePorts(sources: LegacyEngineSources): RunEnginePorts {
       void sources.emitter.emit(event);
     },
     proposeTerminal: (candidate) => sources.proposeTerminal(candidate),
+    projectSubagentProgress,
   };
 
   // Bound to locals rather than read off `sources` inside the closures: an

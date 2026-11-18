@@ -48,6 +48,7 @@ import {
 import { isDestructiveRequest, type QuestionAnswers } from './tui/overlay.js';
 import { HostEventStream } from './tui/host-event-stream.js';
 import { watchRunEventsWithResume } from './tui/run-event-resume.js';
+import { observeSessionTranscript } from './tui/session-transcript-observer.js';
 import { RemoteSessionWatch } from './tui/remote-session-watch.js';
 import { createRunSessionView, projectRunSessionView } from './tui/run-session-view.js';
 import { BackgroundTaskPoller } from './tui/background-task-poller.js';
@@ -606,6 +607,7 @@ async function listWorkspaceSessions(
 async function loadSessionMessages(
   client: HostSessionHttpClient,
   sessionId: string,
+  activeRuns?: ReadonlySet<RunId>,
 ) {
   const entries: Extract<DurableTimelineEntry, { type: 'message' | 'compaction' }>[] = [];
   let cursor: string | undefined;
@@ -616,7 +618,11 @@ async function loadSessionMessages(
       ...(cursor === undefined ? {} : { cursor }),
     });
     for (const item of page.messages) {
-      if (item.entry.type === 'message' || item.entry.type === 'compaction') entries.push(item.entry);
+      const entry = item.entry;
+      if (entry.type === 'compaction' || (entry.type === 'message'
+        && (entry.runId === undefined || entry.message.role === 'user' || !activeRuns?.has(entry.runId)))) {
+        entries.push(entry);
+      }
     }
     cursor = page.nextCursor ?? undefined;
   } while (cursor !== undefined);
@@ -1382,6 +1388,7 @@ export async function chatTui(
     // Transcript preferences, seeded from the saved set and moved live by
     // `/settings`. Seed + callback, never re-read: the loop owns `effort` and
     // the TUI owns the rest, and one owner each is what keeps them in step.
+    focusView: effectivePreferences.focusView ?? false,
     showThinking: effectivePreferences.showThinking,
     expandBlocks: effectivePreferences.expandBlocks,
     showToolResults: effectivePreferences.showToolResults,
@@ -1403,10 +1410,11 @@ export async function chatTui(
     // The task view is fed from two places: this poller (bash) and the run's
     // own frames (subagents). Opening the view asks for one current reading,
     // because the timer is deliberately quiet while nothing is live.
-    onBackgroundTasksRefresh: () => { void backgroundPoller.poll(); },
+    onBackgroundTasksRefresh: () => { void backgroundPoller.poll(true); },
     onBackgroundTaskOpen: (task) => { void openBackgroundTask(task); },
     onSessionDashboardOpen: (id) => openDashboardSession(id),
     onSessionDashboardSubmit: (prompt) => startBackgroundSession(prompt),
+    onSubagentOutput: (task) => client.readBackgroundTaskOutput(activeSession.id, task.id, 256 * 1024),
     onSubagentTranscriptLoad: async (task) => task.subagentSessionId === undefined
       ? []
       : loadSessionMessages(client, task.subagentSessionId),
@@ -1510,7 +1518,29 @@ export async function chatTui(
     tui.showPanel(summary.name, lines.map(escapeTags), { scrollable: true, footer: '/sessions to inspect a work session · Esc close' });
   }
 
-  async function inspectProjectSession(projectId: string, query: string): Promise<void> {
+  function viewHostSession(id: string, title: string): void {
+    if (finished || id === activeSession.id) return;
+    let stop: (() => void) | undefined;
+    const view = tui.showSessionTranscript(id, title, () => stop?.());
+    stop = observeSessionTranscript({
+      client, id, intervalMs: REMOTE_WATCH_INTERVAL_MS, push: view.push,
+      load: async (activeRuns) => {
+        try {
+          view.replace(await loadSessionMessages(client, id, activeRuns));
+        } catch (error) {
+          view.push({ type: 'error', data: { message: 'Could not read conversation: ' + errorText(error) } });
+          throw error;
+        }
+      },
+    });
+  }
+
+  async function openProjectSession(projectId: string, query: string): Promise<void> {
+    const knownSession = projectWorkbench?.sessions.find(({ id }) => id === query);
+    if (knownSession !== undefined) {
+      viewHostSession(knownSession.id, knownSession.title);
+      return;
+    }
     await refreshProjectWorkbench(projectId);
     if (finished || projectWorkbench === undefined) return;
     if (projectWorkbench.status === 'unavailable') {
@@ -1525,24 +1555,14 @@ export async function chatTui(
     const selected = sessions.find(({ id }) => id === query);
     const id = selected?.id ?? await tui.chooseFiltered('Project work sessions', sessions.map((session) => ({
       label: session.title, value: session.id, description: session.state,
-    })), { initialFilter: query, footer: '↑↓ select · Enter inspect · Esc back' });
+    })), { initialFilter: query, footer: '↑↓ select · Enter open · Esc back' });
     const session = sessions.find((candidate) => candidate.id === id);
     if (session === undefined || finished) return;
-    const page = await client.readAllMessages(session.id, { includeSuperseded: false });
-    const messages = projectTimelinePersistenceMessages(page.messages.flatMap(({ entry }) =>
-      entry.type === 'message' || entry.type === 'compaction' ? [entry] : []));
-    const recent = messages.filter((message) => message.role === 'user' || message.role === 'assistant').slice(-30);
-    const lines = recent.flatMap((message) => {
-      const content = typeof message.content === 'string' ? message.content
-        : message.content.flatMap((part) => part.type === 'text' ? [part.text] : []).join('\n');
-      return content.trim() === '' ? [] : [message.role === 'user' ? 'User' : 'Agent', ...content.slice(0, 4000).split('\n').map(projectDisplayLine), ''];
-    });
-    if (finished) return;
-    tui.showPanel(session.title, [session.state, '', ...(lines.length ? lines : ['No conversation text yet.'])].map(escapeTags),
-      { scrollable: true, footer: 'Read only · ↑↓ / PgUp / PgDn scroll · Esc back to Coordinator' });
+    viewHostSession(session.id, session.title);
   }
 
   backgroundPoller.start();
+  void backgroundPoller.poll(true);
 
   /** Enter on a task row: show its output or the subagent's latest activity. */
   async function openBackgroundTask(task: BackgroundTaskView): Promise<void> {
@@ -1591,8 +1611,14 @@ export async function chatTui(
     sessionId,
     isPaused: () => busy || sessionTransition || finished,
     isLocalRun: (runId) => localRunIds.has(runId),
+    loadHistory: async (liveRuns) => {
+      if (liveRuns.size === 0) return;
+      const id = watchedSessionId;
+      const messages = await loadSessionMessages(client, id, liveRuns);
+      if (!busy && !sessionTransition && !finished && activeSession.id === id) tui.replaceTranscript(messages);
+    },
     onFrame: (frame) => {
-      if (!busy && !sessionTransition && !finished) tui.push(frame);
+      if (!busy && !sessionTransition && !finished && frame.type !== 'done' && frame.type !== 'error') tui.push(frame);
     },
     onNotice: (text) => {
       if (!finished) tui.printNotice(text);
@@ -1600,7 +1626,9 @@ export async function chatTui(
     onRunSettled: async () => {
       if (finished || busy || sessionTransition || watchedSessionId !== activeSession.id) return;
       try {
-        tui.replaceTranscript(await loadSessionMessages(client, activeSession.id));
+        const id = activeSession.id;
+        const messages = await loadSessionMessages(client, id);
+        if (!finished && !busy && !sessionTransition && activeSession.id === id) tui.replaceTranscript(messages);
       } catch (error) {
         if (!finished) {
           tui.printError(
@@ -1652,11 +1680,7 @@ export async function chatTui(
     })();
   }
 
-  async function resumeSession(query: string): Promise<void> {
-    if (busy || queue.snapshot.pending.length > 0) {
-      tui.printError('Wait for the current turn to finish before switching sessions.');
-      return;
-    }
+  async function resumeSession(query: string): Promise<boolean> {
     const sessions = await listWorkspaceSessions(client, activeSession);
     sessionRows = sessions.map(sessionCompletionItem);
     const normalized = query.trim().toLowerCase();
@@ -1669,16 +1693,20 @@ export async function chatTui(
     }));
     if (choices.length === 0) {
       tui.printNotice('No sessions are available in this workspace.');
-      return;
+      return false;
     }
     const selectedId = idMatches.length === 1
       ? idMatches[0]?.session.id ?? null
       : await tui.chooseFiltered('Resume session', choices, { initialFilter: query });
-    if (selectedId === null) return;
+    if (selectedId === null || finished) return false;
     const selected = await client.get(selectedId, { includeAllSessions: true });
     if (selected === null) {
       tui.printError(`Session not found: ${selectedId}`);
-      return;
+      return false;
+    }
+    if (busy || queue.snapshot.pending.length > 0 || selected.agentType === 'subagent') {
+      viewHostSession(selected.id, selected.title || selected.id.slice(0, 8));
+      return false;
     }
     const previousModel = activeSession.model;
     activeSession = await resolvePlaceholderSession(client, selected);
@@ -1688,9 +1716,10 @@ export async function chatTui(
     void refreshPullRequestBadge(/*allowSync*/ false);
     await resyncEffortForModelChange(previousModel);
     watchSession(selectedId);
-    tui.replaceTranscript(await loadSessionMessages(client, selectedId));
+    tui.switchSessionTranscript(await loadSessionMessages(client, selectedId));
     tui.refreshTerminalTitle();
     tui.printNotice(`Resumed "${selected.title || 'Untitled session'}".`);
+    return true;
   }
 
   async function refreshSessionDashboard(): Promise<void> {
@@ -1760,11 +1789,10 @@ export async function chatTui(
       tui.printNotice('This is the session currently open.');
       return;
     }
-    if (refuseSessionSwitch('opening another session')) return;
+    if (sessionTransition) return;
     sessionTransition = true;
     try {
-      await resumeSession(sessionId);
-      tui.closeSessionsDashboard();
+      if (!(await resumeSession(sessionId))) return;
       const pending = await client.listPendingPermissionRequests(sessionId);
       for (const request of pending) {
         if (request.mode === 'ask_user_question') {
@@ -1882,7 +1910,7 @@ export async function chatTui(
     // TUI has talked to a Host whose plugin set differs from the cache.
     void pluginCandidates.refresh();
     sessionRows = (await listWorkspaceSessions(client, activeSession)).map(sessionCompletionItem);
-    tui.replaceTranscript(await loadSessionMessages(client, adopted.id));
+    tui.switchSessionTranscript(await loadSessionMessages(client, adopted.id));
     tui.refreshTerminalTitle();
     tui.printNotice(`Switched to "${adopted.title || 'Untitled session'}" (${adopted.id.slice(0, 8)}).`);
   }
@@ -2156,7 +2184,7 @@ export async function chatTui(
         if (name === 'exit' || name === 'quit' || name === 'q') close();
         else if (options.project !== undefined && name === 'status') await showProjectOverview(options.project.projectId);
         else if (options.project !== undefined && (name === 'sessions' || name === 'resume')) {
-          await inspectProjectSession(options.project.projectId, args);
+          await openProjectSession(options.project.projectId, args);
         }
         else if (options.project !== undefined && projectIncompatibleCommands.has(resolveTuiSlashCommand(name)?.name ?? name)) {
           tui.printNotice(name === 'new'

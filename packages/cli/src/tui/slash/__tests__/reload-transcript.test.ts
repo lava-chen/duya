@@ -95,6 +95,7 @@ vi.mock('../../index.js', () => ({
     start(): void {}
     stop(): void { this.stopped = true; }
     setBusy(_busy: boolean): void {}
+    setBackgroundTasks(): void {}
     refresh(): void {}
     printUser(_text: string): void {}
     push(_frame: unknown): void {}
@@ -145,6 +146,7 @@ function makeClient(): { client: HostSessionHttpClient; reads: () => number } {
     list: vi.fn(async () => ({ sessions: [], nextCursor: null })),
     getSettings: vi.fn(async () => ({})),
     listAgentRunsBySession: vi.fn(async () => []),
+    listBackgroundTasks: vi.fn(async () => ({ observed: false, tasks: [] })),
     readMessages: vi.fn(async () => {
       reads += 1;
       return {

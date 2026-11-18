@@ -236,7 +236,8 @@ export function convertSSEToAgentMessage(event: AgentStreamEvent): Record<string
       // subset), so the plan 571 `heartbeat` keepalive reaches the renderer as
       // its own event type instead of masquerading as `thinking` prose.
       const agentEvent = event.data as {
-        type: SubagentAgentEventType | string;
+        type?: SubagentAgentEventType | string;
+        agentEventType?: string;
         data?: string;
         toolName?: string;
         toolInput?: Record<string, unknown>;
@@ -250,11 +251,11 @@ export function convertSSEToAgentMessage(event: AgentStreamEvent): Record<string
         agentSessionId?: string;
       } | undefined;
       if (agentEvent) {
-        const { type: agentEventType, sessionId: _parentSessionId, agentSessionId, ...rest } = agentEvent;
+        const { type, agentEventType, sessionId: _parentSessionId, agentSessionId, ...rest } = agentEvent;
         return {
           ...rest,
           type: 'chat:agent_progress',
-          agentEventType,
+          agentEventType: agentEventType ?? type,
           sessionId: _parentSessionId,
           agentSessionId,
         };

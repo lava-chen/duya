@@ -130,8 +130,8 @@ export const SSE_EVENT_TO_PROTOCOL: Readonly<
   'compact:step': ['compaction.step'],
   'compact:over_threshold': ['compaction.over_threshold'],
 
-  // One bloated union with 8 `type` values splits three ways.
-  agent_progress: ['subagent.started', 'subagent.completed', 'hook.invoked'],
+  // Lifecycle, live child output, and hooks share the legacy frame.
+  agent_progress: ['subagent.started', 'subagent.progress', 'subagent.completed', 'hook.invoked'],
 };
 
 /**

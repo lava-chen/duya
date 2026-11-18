@@ -59,6 +59,7 @@ describe('reading a spawn off the tool call', () => {
       model: 'gpt-5',
       effort: 'high',
       brief: 'find the typecheck command',
+      runInBackground: true,
     });
   });
 

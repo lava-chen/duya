@@ -227,6 +227,7 @@ export const EVENT_META = {
   'compaction.over_threshold': { ...G1_0, durability: 'volatile', category: 'compaction', description: 'Retained tokens exceed the window.' },
 
   'subagent.started': { ...G1_0, durability: 'durable', category: 'subagent', description: 'Subagent spawned.' },
+  'subagent.progress': { ...G1_0, durability: 'ephemeral', category: 'subagent', description: 'Live output from a nested subagent.' },
   'subagent.completed': { ...G1_0, durability: 'durable', category: 'subagent', description: 'Subagent finished.' },
   'hook.invoked': { ...G1_0, durability: 'durable', category: 'subagent', description: 'A lifecycle hook ran. The legacy payload carried its own seq field; that third seq namespace is dropped.' },
 

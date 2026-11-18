@@ -269,6 +269,22 @@ export function projectToLegacyFrame(
         },
       };
 
+    case 'subagent.progress':
+      return {
+        type: 'agent_progress',
+        data: {
+          agentEventType: event.kind,
+          subagentId: event.subagentId,
+          agentSessionId: event.sessionId,
+          data: event.data,
+          toolName: event.toolName,
+          toolInput: event.toolInput,
+          toolResult: event.toolResult,
+          partial: event.partial,
+          toolCallId: event.toolCallId,
+          toolError: event.toolError,
+        },
+      };
     case 'subagent.completed':
       return {
         type: 'agent_progress',

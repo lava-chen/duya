@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { Writable, PassThrough } from 'stream';
 import { readFileSync } from 'fs';
 import { TUIApp } from '../TUIApp.js';
+import type { StyledSpan } from '../core/span.js';
 import { MIN_RENDER_INTERVAL_MS } from '../render-scheduler.js';
 import { TerminalIntegration } from '../terminal-integration.js';
 import { renderTranscript, escapeTags } from '../transcript-view.js';
@@ -706,7 +707,7 @@ describe('TUIApp integration', () => {
       await settleRendered();
 
       const internals = app as unknown as {
-        lastTranscriptRows: readonly (readonly { text: string }[])[];
+        lastTranscriptRows: readonly (readonly StyledSpan[])[];
         fullScreen: { measure(region: 'transcript'): { top: number; innerTop: number; left: number; innerLeft: number } | null };
       };
       const rowIndex = internals.lastTranscriptRows.findIndex((row) => row.map((span) => span.text).join('').includes('bash'));
@@ -748,11 +749,15 @@ describe('TUIApp integration', () => {
       await settleRendered();
       const hoveredRows = internals.lastTranscriptRows.slice(headerRow, bodyRow + 1);
       expect(hoveredRows.every((row) => row.some((span) => span.bg?.kind === 'indexed' && span.bg.index === 236))).toBe(true);
+      const hoveredOutput = internals.lastTranscriptRows[bodyRow]?.find((span) => span.text.includes('output-5'));
+      expect(hoveredOutput?.fg).toEqual({ kind: 'indexed', index: 254 });
 
       moveTo(79, 22);
       await settleRendered();
       const unhoveredRows = internals.lastTranscriptRows.slice(headerRow, bodyRow + 1);
       expect(unhoveredRows.every((row) => row.every((span) => span.bg?.kind !== 'indexed' || span.bg.index !== 236))).toBe(true);
+      const idleOutput = internals.lastTranscriptRows[bodyRow]?.find((span) => span.text.includes('output-5'));
+      expect(idleOutput?.fg).not.toEqual(hoveredOutput?.fg);
 
       clickAt(bodyColumn, bodyScreenRow);
       await new Promise((resolve) => setTimeout(resolve, 350));

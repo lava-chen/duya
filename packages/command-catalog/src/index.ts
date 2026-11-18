@@ -591,6 +591,17 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     availableWhileBusy: true,
   },
   {
+    name: 'focus',
+    label: 'Focus view',
+    labelZh: '专注视图',
+    description: 'Show the latest prompt, tool summary and reply',
+    descriptionZh: '只显示最近的提示、工具摘要和回复',
+    category: 'info',
+    surfaces: ['cli'],
+    requiresSession: true,
+    availableWhileBusy: true,
+  },
+  {
     name: 'transcript',
     label: 'Transcript stats',
     labelZh: '会话记录统计',

@@ -383,21 +383,9 @@ export interface DeferredToolContext {
  * "this is not authoritative state" is something the event type can assert and
  * an outcome field cannot.
  *
- * The destinations already exist. `agent_progress` splits three ways --
- * `subagent.started`, `subagent.completed`, `hook.invoked`
- * (`translate/chat-event-translator.ts:481`) -- and the three-way split is
- * already argued in the payload that names it
- * (`events/payloads.ts:601-615`).
- *
- * **The split cannot be done here, and the reason is load-bearing.** The
- * translator is fed a loose `RawFrame` and reads `subagentId`/`id`,
- * `agentEventType` and a FLAT hook payload. The event the drain actually carries
- * is the typed `AgentProgressEvent`, which has `agentId` (not `subagentId`),
- * no `agentEventType`, and a NESTED `hookEvent`
- * (`transcript/permission-progress.ts:94-120`). Fed to the translator as-is, a
- * `started` frame finds no `subagentId` and is dropped as unmapped, a `done`
- * frame matches neither `completed` nor `failed` and is misfiled as
- * `hook.invoked`, and a `hook_invoked` frame arrives with empty hook names.
+ * The Host projection separates lifecycle, ephemeral output, and hook events.
+ * It binds the parent tool call ID and flattens the nested hook payload before
+ * applying the same projection rules used by legacy worker frames.
  *
  * So the un-split event travels, and the host projects it. See
  * `RunEventStorePort.projectSubagentProgress` for why that is a port method and
@@ -1127,7 +1115,7 @@ export interface RunEventStorePort {
    * cause. A counted diagnostic is a failure someone can see; a dropped frame
    * is not a failure at all.
    */
-  projectSubagentProgress?(event: AgentProgressEvent): RunEvent | null;
+  projectSubagentProgress?(event: AgentProgressEvent, parentToolCallId: ToolCallId): RunEvent | null;
 }
 
 /** What the engine believes ended the run. Never the decision itself. */

@@ -250,11 +250,13 @@ export class BackgroundTaskModel {
    */
   applyBashSnapshot(snapshot: BackgroundTaskListV1): boolean {
     const bashRows: BackgroundTaskSummaryV1[] = [];
+    let subagentsChanged = false;
     for (const task of snapshot.tasks) {
-      if (task.kind === 'subagent') this.foldSnapshotSubagent(task);
-      else bashRows.push(task);
+      if (task.kind === 'subagent') {
+        if (this.foldSnapshotSubagent(task)) subagentsChanged = true;
+      } else bashRows.push(task);
     }
-    const changed = !this.bashObserved
+    const changed = subagentsChanged || !this.bashObserved
       || snapshot.observed !== this.bashObserved
       || !sameBashTasks(this.bash, bashRows);
     this.bashObserved = snapshot.observed;
@@ -273,7 +275,7 @@ export class BackgroundTaskModel {
    * producer (description, summary); a snapshot row only fills in what it
    * knows and never regresses a card the frames already drew.
    */
-  private foldSnapshotSubagent(task: BackgroundTaskSummaryV1): void {
+  private foldSnapshotSubagent(task: BackgroundTaskSummaryV1): boolean {
     const existing = this.subagents.get(task.id);
     const status = task.status === 'running'
       ? 'running'
@@ -290,7 +292,7 @@ export class BackgroundTaskModel {
       ? existing.status
       : status;
     this.rankOf('subagent', task.id);
-    this.subagents.set(task.id, {
+    const updated: BackgroundTaskView = {
       id: task.id,
       kind: 'subagent',
       title: existing?.title ?? task.label ?? task.agentType ?? 'Agent',
@@ -305,8 +307,13 @@ export class BackgroundTaskModel {
       ...(task.error === undefined ? {} : { error: task.error }),
       ...(existing?.summary === undefined ? {} : { summary: existing.summary }),
       ...(task.subagentSessionId === undefined ? (existing?.subagentSessionId === undefined ? {} : { subagentSessionId: existing.subagentSessionId }) : { subagentSessionId: task.subagentSessionId }),
-    });
+    };
+    if (existing !== undefined && updated.status === existing.status
+      && updated.endedAtMs === existing.endedAtMs && updated.error === existing.error
+      && updated.detail === existing.detail && updated.subagentSessionId === existing.subagentSessionId) return false;
+    this.subagents.set(task.id, updated);
     this.trimTerminalSubagents();
+    return true;
   }
 
   /**

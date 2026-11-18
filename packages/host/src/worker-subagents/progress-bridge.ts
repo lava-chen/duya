@@ -75,6 +75,9 @@ export function buildChatAgentProgressPayload(
   if (event.toolName !== undefined) payload.toolName = event.toolName
   if (event.toolInput !== undefined) payload.toolInput = event.toolInput
   if (event.toolResult !== undefined) payload.toolResult = event.toolResult
+  if (event.partial !== undefined) payload.partial = event.partial
+  if (event.toolCallId !== undefined) payload.toolCallId = event.toolCallId
+  if (event.toolError !== undefined) payload.toolError = event.toolError
   return payload
 }
 

@@ -1,7 +1,6 @@
 import type { SceneCanvas, UIComponent, Viewport } from '../core/component.js';
 import { truncateToWidth } from '../width.js';
 import { escapeTags, type Styles } from '../transcript-view.js';
-import { DISPLAY_PROFILES, type DisplayProfileId } from '../display-profiles.js';
 import { formatTaskDuration, taskStatusGlyph, type BackgroundTaskView } from '../background-tasks.js';
 import { prStateLabel, prTone, type PrBadge } from '../pr-badge.js';
 import type { ProjectWorkbenchSummary } from '../project-workbench.js';
@@ -25,8 +24,6 @@ export interface WorkbenchSidebarProps {
   readonly pullRequest: PrBadge | null;
   readonly contextTokens: number | null;
   readonly contextBudget: number | null;
-  readonly profile: DisplayProfileId | 'custom';
-  readonly tools: { readonly total: number; readonly running: number; readonly errors: number };
 }
 
 /** A bounded projection of existing Host/session and display state. No IO. */
@@ -78,7 +75,7 @@ export class WorkbenchSidebar implements UIComponent<WorkbenchSidebarProps> {
       if (project.taskCounts.length > 0) {
         text('TASKS');
         for (const { label, count } of project.taskCounts) text(`${count} ${label}`);
-      } else if (project.status === 'current') text('No tasks yet');
+      }
       text('');
       action('Work sessions', '/sessions');
       if (project.status === 'current' && project.sessions.length === 0) text('No work sessions yet');
@@ -101,9 +98,6 @@ export class WorkbenchSidebar implements UIComponent<WorkbenchSidebarProps> {
         text('Working tree clean');
       } else {
         action(`${number(workspace.changedFiles)} changed files`, '/diff');
-        for (const change of workspace.changes) text(`${change.status} ${change.path}`);
-        const remaining = (workspace.changedFiles ?? 0) - workspace.changes.length;
-        if (remaining > 0) text(`+ ${remaining} more · /diff`);
       }
       if (this.props.pullRequest !== null) {
         const badge = this.props.pullRequest;
@@ -112,31 +106,22 @@ export class WorkbenchSidebar implements UIComponent<WorkbenchSidebarProps> {
         lines.push({ text: styles[prTone(badge.state)](clipped), command: '/pr' });
       }
     }
-    text('');
-    text('ACTIVITY');
-    const activity = escapeTags(truncateToWidth(this.props.activity.replace(/[\r\n\t]/gu, ' '), width));
-    lines.push({ text: this.props.activityActive ? styles.accent(activity) : styles.muted(activity) });
+    if (this.props.activityActive) {
+      text('');
+      const activity = escapeTags(truncateToWidth(this.props.activity.replace(/[\r\n\t]/gu, ' '), width));
+      lines.push({ text: styles.accent(activity) });
+    }
     if (this.props.tasks.length > 0) {
-      text('BACKGROUND TASKS');
+      text('');
+      text('BACKGROUND');
       for (const task of this.props.tasks.slice(0, 6)) taskAction(task);
     }
-    text('');
-    text('CONTEXT');
     const used = this.props.contextTokens;
     const budget = this.props.contextBudget;
-    const percent = used !== null && budget !== null && budget > 0
-      ? Math.min(100, Math.round((used / budget) * 100))
-      : null;
-    text(`Context  ${number(used)} / ${number(budget)}${percent === null ? '' : ` · ${percent}%`}`);
-    text('');
-    text('DISPLAY');
-    for (const profile of DISPLAY_PROFILES) {
-      action(profile.label, `/display ${profile.id}`, profile.id === this.props.profile);
+    if (used !== null && budget !== null && budget > 0) {
+      text('');
+      action(`Context ${Math.min(100, Math.round((used / budget) * 100))}%`, '/context');
     }
-    if (this.props.profile === 'custom') text('Custom settings');
-    text('');
-    text(`Tools ${this.props.tools.total} · ${this.props.tools.running} running · ${this.props.tools.errors} errors`);
-    action('Context details', '/context');
     this.viewportRows = Math.max(0, viewport.height - 1);
     this.documentRows = lines.length;
     const first = Math.min(this.scrollTop, Math.max(0, lines.length - this.viewportRows));

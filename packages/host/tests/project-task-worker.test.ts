@@ -50,7 +50,7 @@ async function waitFor(check: () => Promise<boolean>, diagnostic: () => string):
   throw new Error(`Project Worker acceptance timed out: ${diagnostic()}`);
 }
 
-it('creates and updates a Task through a real Coordinator Worker, delegates it, and requires human acceptance', async () => {
+it('delegates through the Coordinator, inspects live work and subagent transcripts, and accepts evidence', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'duya-project-task-worker-'));
   const workspace = path.join(root, 'workspace');
   await fs.mkdir(workspace);
@@ -63,6 +63,11 @@ it('creates and updates a Task through a real Coordinator Worker, delegates it, 
   let terminal: IPty | undefined;
   let client: HostSessionHttpClient | undefined;
   let projectId = '';
+  let finishChild!: () => void;
+  const childCanFinish = new Promise<void>((resolve) => { finishChild = resolve; });
+  let childStreaming = false;
+  let finishSubagent!: () => void;
+  const subagentCanFinish = new Promise<void>((resolve) => { finishSubagent = resolve; });
   const requests: string[] = [];
   const errors: string[] = [];
   const server = http.createServer((request, response) => {
@@ -72,11 +77,35 @@ it('creates and updates a Task through a real Coordinator Worker, delegates it, 
       const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { messages?: unknown[]; tools?: { name: string; input_schema?: { properties?: Record<string, unknown> } }[] };
       const transcript = JSON.stringify(body.messages ?? []);
       requests.push(transcript);
+      const prompt = latestPrompt(body.messages ?? []);
       let result: string;
       if (!body.tools?.length) {
         result = text('OK');
-      } else if (latestPrompt(body.messages ?? []).includes('PROJECT_TASK_CHILD:')) {
-        result = text('PROJECT_TASK_CHILD_DONE');
+      } else if (prompt.includes('NESTED_TASK_CHILD:')) {
+        const content = text('NESTED_TASK_STREAM');
+        const boundary = content.indexOf('event: content_block_stop');
+        response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        response.write(content.slice(0, boundary));
+        await subagentCanFinish;
+        response.end(content.slice(boundary));
+        return;
+      } else if (transcript.includes('NESTED_TASK_PARENT:')) {
+        result = transcript.includes('nested-task-call') || prompt.includes('[completed] task')
+          ? text('NESTED_TASK_PARENT_DONE')
+          : tool('task', 'nested-task-call', { prompt: 'NESTED_TASK_CHILD: stream a marker', description: 'Nested session', auto_wake: false });
+      } else if (prompt.includes('PROJECT_TASK_CHILD:') || prompt.includes('checkout proof')) {
+        if (!prompt.includes('checkout proof')) {
+          result = tool('read', 'child-read-fixture', { file_path: 'fixture.txt' });
+        } else {
+          const content = text('PROJECT_TASK_CHILD_DONE');
+          const boundary = content.indexOf('event: content_block_stop');
+          response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+          response.write(content.slice(0, boundary));
+          childStreaming = true;
+          await childCanFinish;
+          response.end(content.slice(boundary));
+          return;
+        }
       } else if (!transcript.includes('coordinator-create-task')) {
         expect(body.tools?.map((item) => item.name)).toEqual(expect.arrayContaining(['project', 'session']));
         expect(body.tools?.some((item) => ['bash', 'read', 'write'].includes(item.name))).toBe(false);
@@ -137,7 +166,7 @@ it('creates and updates a Task through a real Coordinator Worker, delegates it, 
       if (parent?.status === 'running') return false;
       expect(parent?.status, diagnostic()).toBe('completed');
       const rows = (await client!.getProjectContinuity(projectId))!.tasks;
-      return rows.length === 1 && rows[0]?.task?.status === 'completed';
+      return childStreaming && rows.length === 1 && !!rows[0]?.link.workSessionId;
     }, diagnostic);
     const coordinatorLog = await fs.readFile(path.join(root, 'logs', 'agent', `agent-${coordinator.id}.log`), 'utf8');
     expect(coordinatorLog).toContain('App Connection: 0 descriptors cached');
@@ -146,9 +175,7 @@ it('creates and updates a Task through a real Coordinator Worker, delegates it, 
     const snapshot = (await client.getProjectContinuity(projectId))!;
     expect(snapshot.tasks).toHaveLength(1);
     const row = snapshot.tasks[0]!;
-    expect(row).toMatchObject({ task: { subject: 'Worker proof', description: 'Return PROJECT_TASK_CHILD_DONE as the execution evidence', status: 'completed' },
-      link: { acceptanceStatus: 'pending' }, attempts: [{ status: 'completed' }] });
-    expect(row.attempts).toHaveLength(1);
+    expect(row.link.acceptanceStatus).toBe('pending');
     const child = await client.get(row.link.workSessionId as SessionId, { includeAllSessions: true });
     expect(child?.agentProfileId).toBe('code-expert');
     const { state: childCheckout } = await client.controlSessionCheckout(child!.id, { action: 'status' });
@@ -157,10 +184,6 @@ it('creates and updates a Task through a real Coordinator Worker, delegates it, 
     expect(await fs.readFile(path.join(childCheckout.cwd, 'fixture.txt'), 'utf8')).toBe('checkout proof');
     expect(execFileSync('git', ['branch', '--show-current'], { cwd: childCheckout.cwd, encoding: 'utf8' }).trim())
       .toBe(`duya/session/${child!.id}`);
-    const childRun = await client.getAgentRun(row.attempts![0]!.runId!);
-    expect(childRun).toMatchObject({ status: 'completed', sessionId: row.link.workSessionId, parentRunId: started.runId });
-    const events = await client.readAgentRunEvents(childRun!.runId, { afterSeq: 0 });
-    expect(events.some((event) => event.payload.type === 'assistant.text_block' && event.payload.text.includes('PROJECT_TASK_CHILD_DONE'))).toBe(true);
     let raw = '';
     const screen = () => raw.replace(/\u001b\[(\d*)C/g, (_match, count: string) => ' '.repeat(Number(count || 1)))
       .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '').replace(/\s+/g, ' ');
@@ -184,8 +207,36 @@ it('creates and updates a Task through a real Coordinator Worker, delegates it, 
     terminal.write('\r');
     await waitFor(async () => raw.slice(beforeReopen).includes('› Open Coordinator'), screen);
     terminal.write('\r');
-    await waitFor(async () => screen().includes('PROJECT_COORDINATOR_DISPATCHED') && screen().includes('F1 help'), screen);
+    await waitFor(async () => screen().includes('PROJECT_COORDINATOR_DISPATCHED'), screen);
+    await waitFor(async () => screen().includes('F7 [Coordinator]'), screen);
+    const beforeChild = raw.length;
+    terminal.write('\x1b[18~');
+    await waitFor(async () => raw.slice(beforeChild).includes('Read only') && raw.slice(beforeChild).includes('PROJECT_TASK_CHILD_DONE'), screen);
+    expect(raw.slice(beforeChild)).toMatch(/fixture\.txt/);
+    const [running] = await client.listAgentRunsBySession(child!.id, 1);
+    expect(running?.status).toBe('running');
+    const beforeBack = raw.length;
+    terminal.write('\x1b');
+    await waitFor(async () => raw.slice(beforeBack).includes('PROJECT_COORDINATOR_DISPATCHED'), screen);
+    finishChild();
+    await waitFor(async () => (await client!.getProjectContinuity(projectId))?.tasks[0]?.task?.status === 'completed', screen);
+    const settled = (await client.getProjectContinuity(projectId))!.tasks[0]!;
+    expect(settled).toMatchObject({ task: { status: 'completed' }, link: { acceptanceStatus: 'pending' },
+      attempts: [{ status: 'completed' }] });
+    expect(settled.attempts).toHaveLength(1);
+    const childRun = await client.getAgentRun(settled.attempts![0]!.runId!);
+    expect(childRun).toMatchObject({ status: 'completed', sessionId: row.link.workSessionId, parentRunId: started.runId });
+    const events = await client.readAgentRunEvents(childRun!.runId, { afterSeq: 0 });
+    expect(events.some((event) => event.payload.type === 'assistant.text_block' && event.payload.text.includes('PROJECT_TASK_CHILD_DONE'))).toBe(true);
+    terminal.write('/focus');
     await delay(300);
+    terminal.write('\r');
+    await waitFor(async () => (await client!.getSettings())['cli.tui.focusView'] === 'true' &&
+      screen().includes('3 tool calls'), screen);
+    terminal.write('/focus off');
+    await delay(300);
+    terminal.write('\r');
+    await waitFor(async () => (await client!.getSettings())['cli.tui.focusView'] === 'false', screen);
     terminal.write(`/project-task ${row.link.taskId} accept Worker evidence verified`);
     await delay(300);
     terminal.write('\r');
@@ -196,7 +247,38 @@ it('creates and updates a Task through a real Coordinator Worker, delegates it, 
     const reviewed = (await client.getProjectContinuity(projectId))!;
     expect(reviewed.activity.filter((item) => item.type === 'task.accepted')).toHaveLength(1);
     expect(reviewed.activity.find((item) => item.type === 'task.accepted')?.source.type).toBe('user_action');
+    terminal.kill();
+    raw = '';
+    const main = await client.create({ workspaceId: binding.workspaceId, workspaceRootId: binding.rootId,
+      workspaceRelativePath: binding.relativePath, title: 'Nested parent', status: 'active', model: 'test-model',
+      providerId: 'local-test', permissionMode: 'auto' });
+    terminal = pty.spawn(process.execPath, [path.resolve('packages/cli/bundle/cli.cjs'), 'tui', '--session', main.id], {
+      name: 'xterm-256color', cols: 100, rows: 30, cwd: workspace,
+      env: { ...process.env, DUYA_TUI_ATTACH: '1', DUYA_TUI_HOST_ORIGIN: host.origin, DUYA_TUI_HOST_TOKEN: 'project-task-fixture-token',
+        DUYA_TUI_INLINE: '', DUYA_CLI_TUI: '1', CI: '', TERM: 'xterm-256color' },
+    });
+    terminal.onData((chunk) => { raw += chunk; });
+    await waitFor(async () => screen().includes('F1 help'), screen);
+    terminal.write('NESTED_TASK_PARENT: start a subagent');
+    await delay(300);
+    terminal.write('\r');
+    await waitFor(async () => screen().includes('F7 [Main]') && screen().includes('NESTED_TASK_PARENT_DONE'),
+      () => screen().slice(-2000) + diagnostic().slice(-2000));
+    const [parentRun] = await client.listAgentRunsBySession(main.id, 1);
+    const parentEvents = await client.readAgentRunEvents(parentRun!.runId, { afterSeq: 0 });
+    expect(parentEvents.some(({ payload }) => payload.type === 'subagent.started' && payload.parentToolCallId === 'nested-task-call'))
+      .toBe(true);
+    const beforeSubagent = raw.length;
+    terminal.write('\x1b[18~');
+    await waitFor(async () => raw.slice(beforeSubagent).includes('Read only') && raw.slice(beforeSubagent).includes('NESTED_TASK_STREAM'),
+      () => screen().slice(-4000) + diagnostic().slice(-2000));
+    const beforeMain = raw.length;
+    terminal.write('\x1b');
+    await waitFor(async () => raw.slice(beforeMain).includes('NESTED_TASK_PARENT'), screen);
+    finishSubagent();
   } finally {
+    finishChild();
+    finishSubagent();
     try { terminal?.kill(); } catch { /* The terminal may have exited already. */ }
     await host?.close();
     server.closeAllConnections();

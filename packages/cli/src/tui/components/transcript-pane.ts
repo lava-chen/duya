@@ -116,7 +116,7 @@ export class TranscriptPane implements UIComponent<TranscriptPaneProps> {
   /** The cache key for the assembled document at `width`. */
   private documentKey(width: number): string {
     const options = this.optionsFor(width);
-    return `${this.props.revision ?? 0}|${renderOptionsKey(options, options.width ?? 0)}`;
+    return `${this.props.revision ?? 0}|${options.focusView === true}|${renderOptionsKey(options, options.width ?? 0)}`;
   }
 
   /** Every line of the document, assembled once per (revision, options) pair. */
@@ -251,9 +251,12 @@ export class TranscriptPane implements UIComponent<TranscriptPaneProps> {
           if (hover === null) {
             scene.writeTagged(row, viewport.column, written, viewport.width);
           } else {
-            const text = tagsToSpans(written).map((span) => span.text).join('');
+            const theme = options.theme ?? DARK_THEME_TAGS;
+            const brighter = written.replaceAll(`{${theme.muted}}`, `{${theme.text}}`)
+              .replaceAll(`{/${theme.muted}}`, `{/${theme.text}}`);
+            const text = tagsToSpans(brighter).map((span) => span.text).join('');
             const padding = ' '.repeat(Math.max(0, viewport.width - visibleWidth(text)));
-            scene.writeTagged(row, viewport.column, `{${hover}}${written}${padding}{/${hover}}`, viewport.width);
+            scene.writeTagged(row, viewport.column, `{${hover}}${brighter}${padding}{/${hover}}`, viewport.width);
           }
           linesPainted += 1;
         }

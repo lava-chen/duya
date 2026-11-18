@@ -1,5 +1,5 @@
 {
-  "count": 39,
+  "count": 40,
   "types": [
     "assistant.goal_updated",
     "assistant.message_finalized",
@@ -28,6 +28,7 @@
     "run.paused",
     "run.started",
     "subagent.completed",
+    "subagent.progress",
     "subagent.started",
     "tool.arguments_delta",
     "tool.call_completed",
@@ -203,6 +204,12 @@
     },
     "subagent.completed": {
       "durability": "durable",
+      "category": "subagent",
+      "minProtocol": "1.0",
+      "minSchemaRevision": 1
+    },
+    "subagent.progress": {
+      "durability": "ephemeral",
       "category": "subagent",
       "minProtocol": "1.0",
       "minSchemaRevision": 1

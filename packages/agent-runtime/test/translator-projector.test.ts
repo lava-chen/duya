@@ -277,12 +277,24 @@ describe('translateFrame — the producer vocabulary', () => {
     expect(payload.providerMeta?.['untranslatedBlocks']).toHaveLength(1);
   });
 
-  it('splits agent_progress three ways on the worker own discriminator', () => {
+  it('distinguishes agent lifecycle, live output and hooks', () => {
     const started = roundTrip({ type: 'agent_progress', data: { agentEventType: 'subagent_started', subagentId: 's9', agentName: 'a' } });
     expect(started.event.type).toBe('subagent.started');
 
     const done = roundTrip({ type: 'agent_progress', data: { agentEventType: 'subagent_completed', subagentId: 's9' } });
     expect(done.event.type).toBe('subagent.completed');
+
+    const progress = roundTrip({ type: 'agent_progress', data: {
+      agentEventType: 'text', subagentId: 's9', agentSessionId: 'child-session', partial: true, data: 'streamed',
+    } });
+    expect(progress.event).toMatchObject({ type: 'subagent.progress', kind: 'text', sessionId: 'child-session', partial: true });
+    expect(progress.frame).toMatchObject({ type: 'agent_progress', data: { subagentId: 's9', partial: true, data: 'streamed' } });
+
+    const result = roundTrip({ type: 'agent_progress', data: {
+      agentEventType: 'tool_result', subagentId: 's9', toolCallId: 'read-1', toolResult: 'missing file', toolError: true,
+    } });
+    expect(result.event).toMatchObject({ type: 'subagent.progress', toolCallId: 'read-1', toolError: true });
+    expect(result.frame).toMatchObject({ type: 'agent_progress', data: { toolCallId: 'read-1', toolResult: 'missing file', toolError: true } });
 
     const hook = roundTrip({ type: 'agent_progress', data: { agentEventType: 'hook', hookName: 'PreToolUse', async: true } });
     expect(hook.event.type).toBe('hook.invoked');

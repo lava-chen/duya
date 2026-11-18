@@ -1879,7 +1879,7 @@ export class RunEngineImpl implements RunEngine {
             // two mechanisms for one symptom -- which is how a frame ends up
             // emitted twice instead of emitted once.
             const project = ports.events.projectSubagentProgress;
-            const mapped = project === undefined ? null : project.call(ports.events, item.event);
+            const mapped = project === undefined ? null : project.call(ports.events, item.event, item.callId);
             if (mapped === null) {
               ports.events.publish({
                 type: 'diagnostic',

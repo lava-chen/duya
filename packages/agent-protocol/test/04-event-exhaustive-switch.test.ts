@@ -72,6 +72,7 @@ function fold(events: readonly RunEvent[], seen: { missing: EventType[] }) {
       case 'compaction.over_threshold':
         tally['compaction'] = (tally['compaction'] ?? 0) + 1;
         break;
+      case 'subagent.progress':
       case 'subagent.started':
       case 'subagent.completed':
       case 'hook.invoked':

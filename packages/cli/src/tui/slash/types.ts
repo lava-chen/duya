@@ -133,6 +133,7 @@ export interface TuiSlashHost {
    */
   copyToTerminalClipboard?(text: string): boolean;
   /** Enter the background task view (same as F6). */
+  setFocusView?(enabled?: boolean): boolean | undefined;
   openTasks?(): void;
 }
 

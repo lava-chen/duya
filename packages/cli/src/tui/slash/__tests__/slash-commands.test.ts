@@ -293,6 +293,7 @@ describe('slash registry', () => {
       'doctor',
       'effort',
       'export',
+      'focus',
       'fork',
       'hotkeys',
       'init',
