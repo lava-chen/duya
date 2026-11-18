@@ -44,3 +44,7 @@ CLI 菜单创建、选择项目和引导绑定 Discord。Coordinator TUI 显示�
 | `npm run check:packaged-artifacts:bundle` | 1。基线提交的 bundle 和用户试用检出的 bundle 同样报 `ajv-formats/dist/formats` 及 4 处动态 `require`。问题留在原基线，PR 保持草稿等待评估。 |
 
 用户的数据库与原试用检出用于只读诊断。验证使用独立的临时项目、Host、测试 Provider 和 PTY。真实 Discord 与用户模型尚待验收。远端 Host 调度为设计接续，当前派发限本地。
+
+### 交付与接续
+
+菜单 `ad055099c`，派发和 Worker bundle `bf809bbd7`。在 `bf809bbd7` 上运行 `npm run bundle:verify` 返回 0，1132 个一方输入全部匹配。已发布任务分支并创建 [Draft PR #642](https://github.com/lava-chen/duya/pull/642)，base 为试用分支 `codex/project-operator-tui`。独立 worktree 保留，未合并且没有集成授权。接下来在该检出的 CLI 复测用户模型和真实 Discord，评估基线打包检查，再按 PR 门禁集成。
