@@ -1,6 +1,6 @@
 # Project Coordinator 提示词系统设计
 
-状态：active · 负责人：Codex / chat 01a1b0b5-d6ad-7803-ac4e-c8285d15903e · 更新：2026-11-06
+状态：active · 负责人：Codex / chat 01a1b0b5-d6ad-7803-ac4e-c8285d15903e · 更新：2026-11-19（第三轮工具合同对账，见文末）
 分支：`codex/project-coordinator-prompt-design` · worktree：`D:/codex/worktrees/project-prompt-design/duya` · base：`54dde175170178f030caebeffde2c1f543c40f40`（从初始 `7eaad892` 接到 #621 最新 head）
 
 ## 目标与边界
@@ -116,3 +116,39 @@
 - 验证：`npm run build:packages` exit 0（22 包；含 Web 生产构建）；`npm run bundle:worker` exit 0（worker 5.50 MB，按当前 dirty 源码重建）；Project/Host/dispatch 相关 7 个 Vitest 文件 / 44 tests exit 0（其中最终 allowlist 测试 11/11）；`npm run -w @duya/host typecheck` exit 0；`npm run architecture:check` exit 0，无新增违规。bundle freshness 需在 merge commit 后复核。
 - 冲突修复提交：`c166cb6d7874ded8362beb03a61893e0ea257731`（merge master + Coordinator session contract alignment）。提交后 `node scripts/architecture/bundle-verify.mjs --json` 为 FRESH，0/1120 inputs changed。
 - 下一步：推送更新后的 PR #622 分支，刷新 `mergeable` 与 CI 状态；review / 必需 CI 通过后再处理 Draft。
+
+## 第三轮接续：工具合同对账与下一轮设计（2026-11-19）
+
+Owner：当前会话（子 agent）。独立 linked worktree：`/home/lavachen/.duya/worktrees/duya-97c2295ce3ca/prompts-reconcile-6d6ea333`；分支 `codex/project-coordinator-prompts-reconcile`；base `origin/master` `2a37f8fe6`。本轮只改文档，不改生产源码、不改共享检出。
+
+### 事实更正
+
+- PR #622 已以 `8d8666e1e` 并入 master；本计划此前记录的 Draft 状态与设计 §11 的“尚未合并”已过期。
+- 交接记录 master 为 `6d6ea333f`；开工时 `origin/master` 已前进到 `2a37f8fe6`（#639）。新检出以该 SHA 为 base，下列对账也以它为准。
+- 未合入分支 `codex/project-coordinator-tool-picker` tip `8ec6ea86b`，base 同为 `2a37f8fe6`；其成果不作为 master 行为。
+
+### 本轮交付
+
+- 设计新增 §13：§13.1 重写工具/action 当前状态，§13.2 刷新缺口表，§13.3 列出仅存在于分支的新接缝，§13.4 给出 D0–D4 的下一轮提示词与工具集设计，§13.5 同步 T1–T9 并新增 T10–T17，§13.6 列出必须改代码才能闭环的待裁定项。
+- §12 保留为 2026-11-06 的历史结论，只在其后追加第三轮补充入口，不回填新事实。
+
+### 对账结论（摘要）
+
+- 已在 master 解决：Coordinator 的 `todo` 准入风险（白名单只剩 `session`、`project`，并有回归断言）；工具名使用 canonical `session`；Task 验收 HTTP 强制 `user_message` 来源。
+- 仍未解决（master 与分支均无）：transcript/artifact 全文读取、standalone 自动唤醒（回执仍是 `query`）、Run 中途阻塞事件、活 Run steer/lease 读面、PR 观察、项目配置写、截断后的 total/omitted 合同。
+- 仅存在于未合入分支：`project create_task/update_task/list_channels`、Coordinator 窄 `send_message`、`projectTask.taskId/expectedRevision`、Host 自有 checkout 与默认隔离 worktree、Task revision/attempt 生命周期、TUI 验收控制面、`ensureCoordinatorSession`、Discord 项目频道。
+
+### 验证记录
+
+| SHA / 范围 | 环境 | 命令或操作 | 退出码 / 结果 |
+| --- | --- | --- | --- |
+| base `2a37f8fe6` + 两份文档 | Linux / Node v26.13.0 | Python 相对链接与 UTF-8 扫描 | 0 断链；两份文件 UTF-8 可读 |
+| 同上 | 同上 | `npm run check:encoding` | 0；`no new violations (11 known)` |
+| 同上 | 同上 | `git diff --check` | 0 |
+| 同上 | 同上 | `npm run architecture:check` | 未完成：`ERR_MODULE_NOT_FOUND: Cannot find package 'yaml'` |
+
+- 全量 `typecheck:all` 与 `architecture:check` 未能执行：本检出没有 `node_modules`，`scripts/junction-worktree.mjs` 只补 workspace `@duya/*` 链接，不提供第三方依赖；按规则未穿过缺失依赖安装或放宽门禁。本轮无源码/构建产物改动，记录首个可执行错误，不用文档检查结果冒充代码门禁通过。
+
+### 下一步
+
+等待用户评审 §13 与七项待裁定。分支进入 master 后，按 D1–D4 依次修改 `operation`/`delegation`/`identity`/`reporting`/`context-policy` 与工具 schema，并在最新 PR head 上重跑对应验收。未经授权不合并、不回收检出。

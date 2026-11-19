@@ -6,6 +6,8 @@
 
 第二轮补充：[Claude 一手体验/技术/缺陷资料](../references/claude-projects-coordinator.md#2026-11-06一手体验技术解析与工具闭环复核) 与本文 §12。§12 核对实际 action、回执和存储路径，修正自动唤醒、全文读取和 todo 独立性的假设；实施默认准入已收敛为 project/session，并禁用 Coordinator 的 catalog/invoke 路由。
 
+第三轮补充（2026-11-19）：提示词与上下文已在 PR #622（`8d8666e1e`）并入 master；本轮以 master `2a37f8fe6` 和未合入分支 `codex/project-coordinator-tool-picker`（`8ec6ea86b`）只读对账，重写 §12.1/§12.2 的当前状态并给出下一轮合同设计，见 §13。§12 保留为 2026-11-06 的历史结论，不回填新事实。
+
 ## 1. 已理解的实现与真实边界
 
 ```mermaid
@@ -542,3 +544,110 @@ todo 风险已用本检出的已构建 capability 做**内存复现**：向假 T
 | T7 | Coordinator recycle / 模型或配置变更 | 有效工具重新核验，旧名称/旧提示词不能凭历史继续调用 |
 | T8 | cancel requested、迟到结果和已生成 PR | 请求、实际终态、保留产物分别报告，不把停止当回滚 |
 | T9 | 用户要配置、记忆或验收 | 只调用实际写面；需要用户 actor 的字段保持受保护，未保存不得声称已保存 |
+
+## 13. 工具合同对账与下一轮设计（2026-11-19）
+
+**口径。** `master` 为 `2a37f8fe6`（#639 合并后；交接时记录的 `6d6ea333f` 是其父提交）。未合入分支 `codex/project-coordinator-tool-picker` tip `8ec6ea86b`，base 同为 `2a37f8fe6`，因此 `git diff origin/master...branch` 只含该分支自身成果。PR #622 已以 `8d8666e1e` 进入 master，§11 的“尚未合并”与 2026-11-06 计划里的 Draft 状态均已过期。
+
+**状态词。** 标“master”的行为是当前可发布事实；标“分支”的只存在于未合并分支，**不能当成产品现状，也不能先写进 master 提示词**。
+
+### 13.1 §12.1 表的当前状态
+
+源码入口：[project tool](../../packages/capabilities/src/project/tool.ts)、[Project 工具服务](../../packages/host/src/project/tool-service.ts)、[Coordinator 身份与白名单](../../packages/host/src/project/identity.ts)、[Session 服务](../../packages/host/src/session-service.ts)、[派工端口](../../packages/host/src/project/dispatch.ts)。分支侧另有 [task-lifecycle.ts](https://github.com/lava-chen/duya/blob/8ec6ea86b/packages/host/src/project/task-lifecycle.ts)、[coordinator-session.ts](https://github.com/lava-chen/duya/blob/8ec6ea86b/packages/host/src/project/coordinator-session.ts)、[project-channels](https://github.com/lava-chen/duya/tree/8ec6ea86b/packages/host/src/project-channels)。
+
+| 工具/action | master `2a37f8fe6` | 分支 `8ec6ea86b` | 对提示词/合同的结论 |
+| --- | --- | --- | --- |
+| `project get` | 五个 action；返回 state/Task/决定/记忆/Activity；Task 只有 status 与 acceptance | 增加 Task `revision` 与最近 attempt 的 `launch=starting/running/completed/failed/unknown (reason)` | 分支回执更足以解释“为什么没起来”；合入前 master 提示词不能承诺 attempt 可见 |
+| `project context` | 有界投影，200–16000 字符，返回 sourceRefs | 同左 | 仍不是 transcript/文件/artifact 读取器 |
+| `project update_state` | 有 `expectedRevision`，CAS | 同左 | 无变化 |
+| `project record_decision` | 仅 `proposed/superseded`；`accepted` 被 Host 拒绝 | 同左 | 无变化 |
+| `project record_memory` | 仅 `candidate/superseded/retired`；`active` 被拒 | 同左 | 无变化 |
+| `project create_task` | **不存在** | 新增：`requestId` 幂等键、`subject`≤160、`description`≤12000；只建 canonical Task，不启动 Run | 是“先建 Task 再派工”的基础；未合入前不能写进提示词 |
+| `project update_task` | **不存在** | 新增：`taskId`+`expectedRevision`；可改 subject/description 或置 `pending`；活跃 attempt 或已验收拒绝；编辑会把 acceptance 重置为 pending | 解决“编辑已完成 brief 却不失效旧证据”的接缝；同样是分支能力 |
+| `project list_channels` | **不存在** | 新增：只列出 enabled binding 的 `bindingId/label/canReply/canProactive`，不返回平台目标或 token | 与 `send_message` 成对；未合入前不能描述 |
+| `session spawn` | `workingDirectory` **必填**且必须等于父会话 cwd；`projectTask` 只接受 `subject/description`（创建即派发） | `workingDirectory` 省略，Host 用父绑定的工作区；Project Task 默认创建独立 Git worktree 与分支；`projectTask` 支持 `{taskId, expectedRevision}`；共享目录必须显式 `use_worktree=false` | 直接决定 delegation 段怎么写；master 现状仍要求模型猜绝对路径 |
+| `session list/get/reply/cancel/rename` | 当前 Coordinator 可管理项目绑定旧 Session；`reply` 在 Run 进行中被拒 | 同左，并补 attempt 回执与失败记录 | 提示词可继续用，但“活 Run steer”仍不存在 |
+| `todo` | **已移出 Coordinator 准入**；白名单只有 `session`、`project` | 同左 | T2 的主要风险已关闭；通用 todo 留给其他角色 |
+| `duya_app` `session_*` | 仓库存在，但 Coordinator 不引用；canonical `session` 才带 `projectTask` | 同左 | 不要因为 MCP 工具存在就改提示词名称 |
+| `send_message` | **不在 Coordinator 白名单** | 加入白名单，并新增窄字段 `channelBindingId/text/requestId/replyToInboundId`；身份取自可信 caller attempt，返回 `deliveryId/status` | 是外部频道能力，必须与频道合同一起合入；master 无此能力 |
+| Task 验收 | HTTP `updateProjectTaskAcceptance` 存在且强制 `user_message` 来源，但**没有模型 action** | 新增 TUI 控制面 `/project-task <id> accept\|reject <note>`，Host 写不可变 `user_action` receipt | 验收仍在用户控制面，不是模型工具；提示词只能描述“请用户验收” |
+
+### 13.2 §12.2 缺口表的刷新
+
+| 接缝 | 2026-11-06 结论 | 2026-11-19 状态 | 依据 |
+| --- | --- | --- | --- |
+| todo 与项目任务隔离 | 有删除 canonical Task 的可达风险，建议移出准入 | **已解决（master）**：白名单只剩 `session`、`project`，并有回归断言 | `identity.ts`、`worker-profiles/types.test.ts` |
+| 完整证据读面 | 无 transcript/artifact 全文读 | **仍未解决**：`project context` 是有界投影，`session get` 结果上限 16000，`session_read` 未准入；分支未新增读取面 | `context.ts`、`session-tool.ts` |
+| 自动唤醒合同 | 回执是 `query`，描述却暗示自动唤醒 | **部分解决，仍不能承诺**：settlement 写 Activity + durable mailbox，Desktop 有 idle wake；standalone Host 仍无 idle dispatcher，回执仍是 `query`。分支未改 | `reconciliation.ts`、`session-service.ts` |
+| 中途阻塞事件 | settlement 只接受 Run 终态 | **仍未解决**：running 被跳过；没有 approval/blocked 中途事件投影 | `reconciliation.ts` |
+| 用户决定/验收/配置 | 只有五个 project action；无验收/配置写面 | **验收在控制面闭环**：master 有带用户来源的 HTTP 验收；分支补 TUI 控制面。**配置写仍缺**；模型仍不能验收 | `project-api.ts`、分支 `task-lifecycle.ts` |
+| 活 Run 指导和接管 | reply 拒绝 `run_in_progress`，无 steer | **仍未解决**：分支也未新增 steer/lease 读面 | `session-tool.ts`、`session-service.ts` |
+| PR/成果/进度 | 无独立 PR 检查/合并工具 | **仍未解决**：继续由 work Session 返回引用 | 工具清单 |
+| 大项目枚举与截断 | Task 不按 Activity cursor 分页，输出裁剪无总数 | **部分改善**：分支给 Task 加 revision/attempt，仍无稳定的 total/omitted 合同 | 分支 `tool.ts` 的 `formatSnapshot` |
+| 派工目录（新增） | 模型需要提供绝对路径，Host 只校验等于父 cwd | **分支已修**：Host 从父绑定继承工作区，Project Task 默认隔离 worktree；`bf809bbd7` 的日志证据是 54 次派发未启动、51 次目录不匹配 | 分支 `session-service.ts`、operator TUI 计划 |
+| Coordinator 会话创建（新增） | Desktop IPC 各自 ensure | **分支新增**：共享 `ensureCoordinatorSession`，按项目并发去重，CLI/Desktop 共用 | 分支 `coordinator-session.ts` |
+| 外部频道（新增） | 无 | **仅分支**：Discord 连接/绑定/入站/投递账本、`list_channels`、受限 `send_message` | 分支 `2026-11-17-project-channels.md` |
+
+### 13.3 新暴露的接缝（仅分支）
+
+- **Task 生命周期**：`create → dispatch_starting → running → completed/failed/unknown`，每次派工有 attempt 行；启动失败、caller 失效、Coordinator 替换都会落失败原因。`unknown` 需要恢复对账，不是自动重派。
+- **验收控制面**：接受/拒绝要求 revision 与用户确认，写不可变 review receipt；拒绝后同一 Task 可回到 `pending`。模型侧仍无验收 action。
+- **Host 自有 checkout**：Project Task 默认隔离 worktree 与分支；`use_worktree=false` 才共享；没有 Git checkout 时直接失败，而不是退回共享目录。
+- **频道权限面**：`list_channels` 只暴露 Host 铸造的 binding id 与两项权限；`send_message` 不接收 actor/project/session/run/epoch/平台目标，发送前再次校验连接与绑定 revision。
+- **Coordinator Session ensure**：同一 Host 进程内并发去重；绑定失效时替换，不改变 projectId。
+
+### 13.4 下一轮提示词与工具集设计
+
+原则不变：**提示词只描述已经合入并可调用的能力**。因此 master 侧现在不应新增 `create_task`、`list_channels`、`send_message`、`projectTask.taskId` 或 worktree 默认隔离的表述；这些必须先由分支合入。
+
+**依赖顺序**
+
+| 阶段 | 前置 | 要改的内容 | 验收 |
+| --- | --- | --- | --- |
+| D0 合入 | `codex/project-operator-tui` 及其上的 PR #642（head `codex/project-coordinator-tool-picker`）按栈序合入 `master` | 只合代码与工具合同，不同时改 master 提示词 | T10–T13 |
+| D1 派工正文 | D0 的 Task 生命周期与 Host checkout | `operation.hbs` 把“spawn 顺带创建 Task”改为“先 `create_task`，再用 `projectTask.taskId/expectedRevision` 派工”；`delegation.hbs` 采用分支现有版本，删除与 operation 重复的创建说明 | T12、T13、T16 |
+| D2 频道正文 | D0 的 channel 合同 | `identity.hbs` 说明外部频道是项目的公开声音；`reporting.hbs` 说明频道文本对成员可见、不得含凭据；`context-policy.hbs` 说明入站 id 与投递状态；工具 description 对齐 `queued ≠ sent` | T14 |
+| D3 验收措辞 | D0 的 TUI 控制面 | `reporting.hbs` 明确“请用户在控制面接受/拒绝”，不要暗示模型能代验收 | T15 |
+| D4 收窄 schema | D1 后 | `project` 的 `status` enum 不再同时列出所有状态的并集；按 action 拆 schema 或移除 `accepted/active`，让 Host 拒绝成为唯一来源 | T17 |
+
+**具体增删**
+
+- 常驻段：D1 改 `operation`/`delegation`；D2 改 `identity`/`reporting`/`context-policy`。不改 `projectIdentity` 的职责边界，不把频道说明塞进 system 通用段。
+- 工具 description：`project` 的 create/update/list_channels 说明已由分支提供，合入后直接采用；`session` 的 spawn 说明必须与 Host checkout 行为一致（默认隔离、失败不回退共享）；`send_message` 用窄 schema，不把 Bot 的 widget/attachment/secret 语义投影给 Coordinator。
+- 收窄/移除：`project` schema 的 `status` 并集（见 D4）；`session spawn` 的 `subject/description` 创建即派发简写（合入 create_task 后保留一个迁移窗口，随后收窄，避免两套创建路径）。
+- 不新增：唤醒、steer、transcript 全文读取、用户配置写、模型验收 action。它们仍是缺口，不能用提示词补。
+
+### 13.5 T1–T9 状态与新增验收
+
+| 编号 | 2026-11-19 状态 |
+| --- | --- |
+| T1 | master 已满足“项目绑定旧 Session 可管理”；工具说明与授权一致 |
+| T2 | **已满足（master）**：todo 不在准入，且测试断言 |
+| T3 | 未闭环：回执仍是 `query`，standalone 无 idle dispatcher |
+| T4 | 未满足：无中途阻塞事件 |
+| T5 | 部分：有界 context，无全文读取与 cursor |
+| T6 | 部分：AGENTS.md 指令文件索引/正文可注入；设计中的 `project_instructions` revision 与截断回执仍无写面 |
+| T7 | 部分：ensure 与绑定替换已有，旧工具重核验未全覆盖 |
+| T8 | 部分：cancel 有 requested 回执，迟到结果对账已有 |
+| T9 | 部分：验收控制面已有（master HTTP、分支 TUI），配置写仍缺 |
+
+| 编号 | 条件 | 必须证明 |
+| --- | --- | --- |
+| T10 | `create_task` 重放同一 `requestId` | 返回同一 taskId；同 id 不同 subject/description 被拒绝为冲突 |
+| T11 | `update_task` 在活跃 attempt / 已验收 / 旧 revision | 分别拒绝；编辑已完成 brief 会把 acceptance 置回 pending |
+| T12 | 派发已有 Task 失败后重试 | 复用同一 taskId 与 attempt 历史，不新建替代 Task；`unknown` 不自动重派 |
+| T13 | Project Task 默认派工 | Host 从父绑定取工作区并建隔离 worktree；显式路径仍校验；隔离失败不回退共享 |
+| T14 | `list_channels` + `send_message` | 只暴露 binding id 与两项权限；回复需真实入站 id，主动发送需 `allowProactive`；`queued/sent/failed/unknown` 与账本一致 |
+| T15 | 用户验收 | 只有用户控制面 action 改变 acceptance；模型任何工具调用都不能代验收 |
+| T16 | Coordinator 替换/并发 ensure | 同一项目只得到一个绑定；旧绑定失效时替换；旧 Coordinator 不能继续管理 |
+| T17 | `project` schema 收窄 | 模型看不到不可写的 `accepted/active`；Host 仍对旧客户端拒绝 |
+
+### 13.6 待裁定项（必须改代码才能闭环）
+
+1. **`project` 的 `status` 并集**：当前 schema 同时列出 `accepted/active`，靠 Host 拒绝。建议按 action 拆 schema 或移除不可写值；这是 schema 合同变更，不是文档能定的。
+2. **`send_message` 同名双形态**：Bot 投影与 Coordinator 窄投影共用一个 canonical 名称。需要明确 registry 只注册一份、按 profile 选择 schema，并保证 TUI 的普通 assistant 文本不会被“唯一声音”语义隐藏。
+3. **创建路径重复**：`create_task` 与 `session spawn` 的 `subject/description` 简写同时存在。需要决定迁移窗口与最终收窄方式，避免模型在重试时走错路径。
+4. **验收是否需要模型 action**：当前只有控制面。若未来给模型一个受保护 action，必须要求真实用户动作凭证，不能复用 session 来源。
+5. **standalone 唤醒**：`completionNotification` 仍是 `query`。若要承诺自动继续，需要 Host drain 持久义务并验收；否则提示词必须继续承认限制。
+6. **`unknown` attempt 的重试入口**：当前只能重新读状态再决定。是否暴露“重试同一 Task”的显式 action，需要先定义幂等与迟到启动处理。
+7. **频道入站到 Coordinator 的身份与回复范围**：入站消息进入当前 Coordinator 时，reply scope 绑定 Run/epoch；需要确认提示词只能引用 Host 给的 inbound id，不能自造平台目标。
