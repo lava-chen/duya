@@ -202,12 +202,9 @@ export function createHostSessionService(options: HostSessionServiceOptions) {
     const child = await options.sessions.get(sessionId, { includeAllSessions: true });
     requireCurrentCaller(caller);
     if (!child) return null;
-    if (child.parentSessionId === caller.sessionId) return child;
+    if (child.parentSessionId === caller.sessionId && !options.projectDispatch?.requiresProjectAuthority(sessionId)) return child;
 
-    // Work Sessions outlive the Coordinator Session that created them. The
-    // project port authorizes the currently bound Coordinator through the
-    // durable project→task→work-session link; ordinary Sessions keep the
-    // parent-only ownership check above.
+    // Project authority follows the current Coordinator, not historical parentage.
     if (!options.projectDispatch) return null;
     const callerSession = await options.sessions.get(caller.sessionId, { includeAllSessions: true });
     requireCurrentCaller(caller);
@@ -224,11 +221,17 @@ export function createHostSessionService(options: HostSessionServiceOptions) {
     prompt: string,
     caller: SessionServiceCaller,
     model?: string,
-  ): Promise<{ readonly runId: string; readonly operationId: string } | { readonly reason: string }> {
+    validateLaunch?: () => void,
+  ): Promise<{ readonly runId: string; readonly operationId: string } | { readonly reason: string; readonly runId?: string; readonly uncertain?: boolean }> {
     try {
       options.validateCaller(caller);
     } catch {
       return { reason: 'caller_attempt_not_current' };
+    }
+    try {
+      validateLaunch?.();
+    } catch (error) {
+      return { reason: error instanceof Error ? error.message : 'not_current_project_work' };
     }
     let started: Awaited<ReturnType<HostRunExecutionApiV1['startAgentRun']>>;
     try {
@@ -242,17 +245,23 @@ export function createHostSessionService(options: HostSessionServiceOptions) {
         origin: 'agent',
       }, caller);
     } catch (error) {
-      return { reason: error instanceof Error ? error.message : String(error) };
+      return { reason: error instanceof Error ? error.message : String(error), uncertain: true };
     }
     if (!started.accepted) return { reason: `${started.stage}: ${started.reason}` };
     const runId = started.runId as string;
-    if (!callerIsCurrent(caller)) {
+    let authorityFailure: string | undefined;
+    try { validateLaunch?.(); } catch (error) {
+      authorityFailure = error instanceof Error ? error.message : 'not_current_project_work';
+    }
+    if (!callerIsCurrent(caller) || authorityFailure) {
+      const reason = authorityFailure ?? 'caller_attempt_not_current';
+      let cancelled = false;
       try {
-        await options.execution.cancelAgentRun(runId, 'caller attempt expired while starting child run');
+        cancelled = (await options.execution.cancelAgentRun(runId, reason)).requested;
       } catch {
-        // The run identity is not persisted until the current caller is rechecked.
+        // Preserve an unknown launch receipt when cancellation cannot be confirmed.
       }
-      return { reason: 'caller_attempt_not_current' };
+      return { reason: cancelled ? reason : `${reason}; run_cancel_failed`, runId, uncertain: true };
     }
     const identityFailure = 'run_started_but_child_run_identity_was_not_persisted';
     const compensateUntrackedRun = async (): Promise<string> => {
@@ -273,6 +282,7 @@ export function createHostSessionService(options: HostSessionServiceOptions) {
     let update: Awaited<ReturnType<HostSessionServiceOptions['sessions']['update']>>;
     try {
       update = await options.sessions.update(session.id, undefined, {
+        status: 'active',
         extensions: {
           [SPAWN_METADATA_KEY]: {
             runId,
@@ -282,10 +292,16 @@ export function createHostSessionService(options: HostSessionServiceOptions) {
         },
       });
     } catch {
-      return { reason: await compensateUntrackedRun() };
+      return { reason: await compensateUntrackedRun(), runId, uncertain: true };
     }
     if (!update.updated) {
-      return { reason: await compensateUntrackedRun() };
+      return { reason: await compensateUntrackedRun(), runId, uncertain: true };
+    }
+    try {
+      options.validateCaller(caller);
+      validateLaunch?.();
+    } catch {
+      return { reason: await compensateUntrackedRun(), runId, uncertain: true };
     }
     return { runId, operationId: runId };
   }
@@ -337,99 +353,122 @@ export function createHostSessionService(options: HostSessionServiceOptions) {
           if (!workspace) return { ok: false, reason: 'parent_workspace_unbound' };
 
           let projectTaskId: string | undefined;
+          let projectAttemptId: string | undefined;
           if (dispatchPlan.kind === 'project') {
             const created = options.projectDispatch!.createTask(dispatchPlan, caller.sessionId);
             if (!created.ok) return { ok: false, reason: created.reason };
             projectTaskId = created.taskId;
+            projectAttemptId = created.attemptId;
           }
 
-          let child: HostSessionRecord;
-          try {
-            requireCurrentCaller(caller);
-            const input: HostSessionCreateInput = {
-              workspaceId: workspace.workspaceId,
-              workspaceRootId: workspace.rootId,
-              workspaceRelativePath: workspace.relativePath,
-              title: `[Spawn] ${prompt.split('\n')[0]?.slice(0, 60) || 'task'}`,
-              status: 'active',
-              model: model ?? parent.record.model,
-              providerId: parent.record.providerId,
-              mode: parent.record.mode,
-              permissionMode: parent.record.permissionMode,
-              // A restricted Project Coordinator delegates into a real work
-              // role; its management-only allowlist must not leak to the child.
-              agentProfileId: options.projectDispatch
-                ? options.projectDispatch.workSessionProfileId(parent.record.agentProfileId)
-                : parent.record.agentProfileId,
-              parentSessionId: parent.record.id,
-              spawn: { type: 'session', reason: 'session-tool' },
-              agentType: 'spawn',
-              extensions: { [SPAWN_METADATA_KEY]: { status: 'starting' } },
-            };
-            child = await options.sessions.create(input);
-          } catch (error) {
-            return { ok: false, reason: error instanceof Error ? error.message : String(error) };
-          }
-
-          if (dispatchPlan.kind === 'project' && projectTaskId) {
-            const linked = options.projectDispatch!.bindWorkSession(dispatchPlan, projectTaskId, child.id);
-            if (!linked) {
-              await markCreatedChildFailed(child.id, 'project_task_binding_failed');
-              options.projectDispatch!.setTaskStatus(projectTaskId, 'pending');
-              return { ok: false, sessionId: child.id, reason: 'project_task_binding_failed' };
-            }
-          }
-
-          if (!callerIsCurrent(caller)) {
-            const failureReason = 'caller_attempt_not_current';
-            const failed = await markCreatedChildFailed(child.id, failureReason);
-            return {
-              ok: false,
-              sessionId: child.id,
-              parentId: parent.record.id,
-              reason: failed ? failureReason : `${failureReason}; child_failure_metadata_write_failed`,
-            };
-          }
-
-          let childCwd = parent.workingDirectory;
-          let checkout: import('@duya/agent-protocol').SessionCheckoutAttachment | null = null;
-          if (options.checkoutService) {
+          function projectFailed(reason: string, uncertain = false, runId?: string): string {
+            if (!projectTaskId) return reason;
             try {
-              const prepared = await options.checkoutService.createChildCheckout(child.id, parent.workingDirectory, caller, isolated,
-                requireString(payload, 'source_branch') ?? undefined, requireString(payload, 'branch_name') ?? undefined);
-              childCwd = prepared.state.cwd;
-              checkout = prepared.state.checkout;
-              requireCurrentCaller(caller);
-            } catch (error) {
-              await markCreatedChildFailed(child.id, error instanceof Error ? error.message : String(error));
-              return { ok: false, sessionId: child.id, reason: error instanceof Error ? error.message : String(error) };
+              options.projectDispatch!.recordStartResult(projectTaskId, uncertain ? 'unknown' : 'failed', reason, runId, projectAttemptId);
+              return reason;
+            } catch {
+              return `${reason}; project_failure_receipt_write_failed`;
             }
           }
-          const started = await startRun(child, childCwd, prompt, caller, model);
-          if ('reason' in started) {
-            const failureReason = started.reason;
-            const failed = await markCreatedChildFailed(child.id, failureReason);
-            if (projectTaskId) options.projectDispatch!.setTaskStatus(projectTaskId, 'pending');
+          let launchMayHaveStarted = false;
+          let createdChildId: string | undefined;
+          try {
+            let child: HostSessionRecord;
+            try {
+              requireCurrentCaller(caller);
+              const input: HostSessionCreateInput = {
+                workspaceId: workspace.workspaceId,
+                workspaceRootId: workspace.rootId,
+                workspaceRelativePath: workspace.relativePath,
+                title: `[Spawn] ${prompt.split('\n')[0]?.slice(0, 60) || 'task'}`,
+                status: 'active',
+                model: model ?? parent.record.model,
+                providerId: parent.record.providerId,
+                mode: parent.record.mode,
+                permissionMode: parent.record.permissionMode,
+                // A restricted Project Coordinator delegates into a real work
+                // role; its management-only allowlist must not leak to the child.
+                agentProfileId: options.projectDispatch
+                  ? options.projectDispatch.workSessionProfileId(parent.record.agentProfileId)
+                  : parent.record.agentProfileId,
+                parentSessionId: parent.record.id,
+                spawn: { type: 'session', reason: 'session-tool' },
+                agentType: 'spawn',
+                extensions: { [SPAWN_METADATA_KEY]: { status: 'starting' } },
+              };
+              child = await options.sessions.create(input);
+              createdChildId = child.id;
+            } catch (error) {
+              return { ok: false, taskId: projectTaskId, reason: projectFailed(error instanceof Error ? error.message : String(error)) };
+            }
+
+            if (dispatchPlan.kind === 'project' && projectTaskId) {
+              const linked = options.projectDispatch!.bindWorkSession(dispatchPlan, projectTaskId, child.id);
+              if (!linked) {
+                await markCreatedChildFailed(child.id, 'project_task_binding_failed');
+                return { ok: false, taskId: projectTaskId, sessionId: child.id, reason: projectFailed('project_task_binding_failed') };
+              }
+            }
+
+            if (!callerIsCurrent(caller)) {
+              const failureReason = 'caller_attempt_not_current';
+              const failed = await markCreatedChildFailed(child.id, failureReason);
+              return {
+                ok: false,
+                sessionId: child.id,
+                parentId: parent.record.id,
+                taskId: projectTaskId,
+                reason: projectFailed(failed ? failureReason : `${failureReason}; child_failure_metadata_write_failed`),
+              };
+            }
+
+            let childCwd = parent.workingDirectory;
+            let checkout: import('@duya/agent-protocol').SessionCheckoutAttachment | null = null;
+            if (options.checkoutService) {
+              try {
+                const prepared = await options.checkoutService.createChildCheckout(child.id, parent.workingDirectory, caller, isolated,
+                  requireString(payload, 'source_branch') ?? undefined, requireString(payload, 'branch_name') ?? undefined);
+                childCwd = prepared.state.cwd;
+                checkout = prepared.state.checkout;
+                requireCurrentCaller(caller);
+              } catch (error) {
+                await markCreatedChildFailed(child.id, error instanceof Error ? error.message : String(error));
+                return { ok: false, taskId: projectTaskId, sessionId: child.id, reason: projectFailed(error instanceof Error ? error.message : String(error)) };
+              }
+            }
+            launchMayHaveStarted = true;
+            const started = await startRun(child, childCwd, prompt, caller, model, projectTaskId
+              ? () => options.projectDispatch!.assertCanStart(projectTaskId!, caller.sessionId, child.id)
+              : undefined);
+            if ('reason' in started) {
+              const failureReason = started.reason;
+              const failed = await markCreatedChildFailed(child.id, failureReason);
+              return {
+                ok: false,
+                taskId: projectTaskId,
+                sessionId: child.id,
+                parentId: parent.record.id,
+                reason: projectFailed(failed ? failureReason : `${failureReason}; child_failure_metadata_write_failed`, started.uncertain, started.runId),
+              };
+            }
+            if (projectTaskId) options.projectDispatch!.recordStartResult(projectTaskId, 'running', undefined, started.runId, projectAttemptId);
             return {
-              ok: false,
+              ok: true,
               sessionId: child.id,
               parentId: parent.record.id,
-              reason: failed ? failureReason : `${failureReason}; child_failure_metadata_write_failed`,
+              ...(projectTaskId ? { taskId: projectTaskId } : {}),
+              runId: started.runId,
+              operationId: started.operationId,
+              completionNotification: 'query',
+              workingDirectory: childCwd,
+              isolation: isolated ? 'worktree' : 'shared',
+              ...(checkout ? { checkout, branchName: requireString(payload, 'branch_name') ?? `duya/session/${child.id.replace(/[^A-Za-z0-9._-]/g, '-')}` } : {}),
             };
+          } catch (error) {
+            const reason = error instanceof Error ? error.message : String(error);
+            if (createdChildId && !launchMayHaveStarted) await markCreatedChildFailed(createdChildId, reason);
+            return { ok: false, taskId: projectTaskId, sessionId: createdChildId, reason: projectFailed(reason, launchMayHaveStarted) };
           }
-          if (projectTaskId) options.projectDispatch!.setTaskStatus(projectTaskId, 'in_progress');
-          return {
-            ok: true,
-            sessionId: child.id,
-            parentId: parent.record.id,
-            ...(projectTaskId ? { taskId: projectTaskId } : {}),
-            runId: started.runId,
-            operationId: started.operationId,
-            completionNotification: 'query',
-            workingDirectory: childCwd,
-            isolation: isolated ? 'worktree' : 'shared',
-            ...(checkout ? { checkout, branchName: requireString(payload, 'branch_name') ?? `duya/session/${child.id.replace(/[^A-Za-z0-9._-]/g, '-')}` } : {}),
-          };
         }
 
         case 'session:spawnList': {
@@ -524,6 +563,7 @@ export function createHostSessionService(options: HostSessionServiceOptions) {
             ok: true,
             runId: metadata?.runId,
             runStatus: run?.status ?? metadata?.status,
+            failureReason: metadata?.failureReason,
             operationId: metadata?.operationId,
             output,
             session: {
@@ -570,21 +610,39 @@ export function createHostSessionService(options: HostSessionServiceOptions) {
             if (!childCanonical || (!managedCursor && !sameCanonicalDirectory(parent.workingDirectory, childCanonical))) {
               return { ok: false, reason: 'working_directory_must_match_parent' };
             }
-            const started = await startRun(session, childCanonical, prompt, caller, model);
-            if ('reason' in started) {
-              requireCurrentCaller(caller);
-              await options.sessions.update(session.id, undefined, {
-                extensions: {
-                  [SPAWN_METADATA_KEY]: {
-                    ...(metadata?.runId ? { runId: metadata.runId } : {}),
-                    status: 'failed',
-                    failureReason: started.reason,
+            const projectReceipt = options.projectDispatch?.prepareReply(parent.record.agentProfileId, caller.sessionId, session.id) ?? null;
+            const projectTaskId = projectReceipt?.taskId;
+            const projectAttemptId = projectReceipt?.attemptId;
+            let replyRunId: string | undefined;
+            try {
+              const started = await startRun(session, childCanonical, prompt, caller, model, projectTaskId
+                ? () => options.projectDispatch!.assertCanStart(projectTaskId, caller.sessionId, session.id)
+                : undefined);
+              replyRunId = started.runId;
+              if ('reason' in started) {
+                if (projectTaskId) options.projectDispatch!.recordStartResult(projectTaskId, started.uncertain ? 'unknown' : 'failed', started.reason, started.runId, projectAttemptId);
+                const failureReceipt = await options.sessions.update(session.id, undefined, {
+                  extensions: {
+                    [SPAWN_METADATA_KEY]: {
+                      ...(started.runId ? { runId: started.runId } : {}),
+                      status: 'failed',
+                      failureReason: started.reason,
+                    },
                   },
-                },
-              });
-              return { ok: false, sessionId, reason: started.reason };
+                });
+                return { ok: false, sessionId, ...(projectTaskId ? { taskId: projectTaskId } : {}),
+                  reason: failureReceipt.updated ? started.reason : `${started.reason}; child_failure_metadata_write_failed` };
+              }
+              if (projectTaskId) options.projectDispatch!.recordStartResult(projectTaskId, 'running', undefined, started.runId, projectAttemptId);
+              return { ok: true, sessionId, ...(projectTaskId ? { taskId: projectTaskId } : {}), runId: started.runId, operationId: started.operationId, completionNotification: 'query' };
+            } catch (error) {
+              let reason = error instanceof Error ? error.message : String(error);
+              if (projectTaskId) {
+                try { options.projectDispatch!.recordStartResult(projectTaskId, 'unknown', reason, replyRunId, projectAttemptId); }
+                catch { reason += '; project_failure_receipt_write_failed'; }
+              }
+              return { ok: false, sessionId, ...(projectTaskId ? { taskId: projectTaskId } : {}), reason };
             }
-            return { ok: true, sessionId, runId: started.runId, operationId: started.operationId, completionNotification: 'query' };
           });
         }
 

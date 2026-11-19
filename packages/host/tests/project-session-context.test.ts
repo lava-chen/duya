@@ -81,7 +81,7 @@ describe('Session-bound project prompt context over the real store', () => {
     tasks.update('task', { status: 'completed' });
     const snapshot = (await api.getProjectContinuity(projectId))!;
     const completed = buildProjectContext({ snapshot, recentActivity: [] });
-    expect(completed.text).toContain('[completed; acceptance=pending]');
+    expect(completed.text).toContain('[completed; revision=0; acceptance=pending]');
     const missing = buildProjectContext({ snapshot: { ...snapshot, tasks: [{ ...snapshot.tasks[0], task: null }] }, recentActivity: [] });
     expect(missing.text).toContain('record unavailable');
   });

@@ -14,6 +14,7 @@
 
 import {
   createProjectRunSettlementService,
+  createProjectTaskLifecycle,
   type ProjectRunSettlementService,
 } from '@duya/host/project/reconciliation';
 import { getCoreStores, type CoreStores } from '../db/core-connection';
@@ -33,6 +34,7 @@ function serviceFor(stores: CoreStores): ProjectRunSettlementService {
   if (bound !== null && bound.stores === stores) return bound.service;
   const service = createProjectRunSettlementService({
     stores,
+    taskLifecycle: createProjectTaskLifecycle(stores),
     wake: ({ mailboxItem }) => {
       const row = coreMailboxToIpcRow(mailboxItem);
       emitMailCreated(row);

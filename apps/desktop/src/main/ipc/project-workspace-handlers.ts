@@ -21,13 +21,13 @@
  * existed. So the Host projects them together and the renderer reads one
  * thing.
  *
- * ## Why the coordinator is created here
+ * ## Why the Coordinator operation belongs to Host
  *
- * The coordinator conversation is a normal Session that the PROJECT owns. It is
- * created through the Host's own session API (so the workspace binding, the
- * permission profile and the session row all come from the one authority), and
- * then bound to the project. Creating it anywhere else — in the renderer, in
- * the Agent Server — would put a second session authority next to the Host's.
+ * The Coordinator conversation is a normal Session that the Project owns. The
+ * Host's shared Project API creates it (so the workspace binding, permission
+ * profile and session row all come from the one authority), then binds it to
+ * the Project. This IPC only exposes that operation to the renderer; the CLI
+ * uses the same Host API rather than maintaining a second creation path.
  *
  * The binding is durable: the next call finds the session and says
  * `created: false`. Replacing the coordinator later does not change the
@@ -45,7 +45,6 @@ import type {
 } from '../../contracts/project-workspace';
 import {
   getDesktopHostProjectApi,
-  getDesktopHostSessionApi,
   getDesktopHostSessionInputApi,
 } from '../cli/desktop-host-api';
 import { getAgentServerPort } from '../agents/agent-server-lifecycle';
@@ -84,50 +83,6 @@ async function readAgentServerSessionStatus(port: number, sessionId: string): Pr
   }
 }
 
-/**
- * The project's coordinator conversation, created on first use.
- *
- * Three cases, and they are different:
- *
- *   - the project has no coordinator yet → create one and bind it;
- *   - the project has one and the session still exists → return it;
- *   - the project has one but the session is gone → the binding is stale, so
- *     it is replaced. A project whose coordinator row was deleted should not
- *     be permanently unusable, and a stale id would otherwise fail every
- *     later read of the project state.
- */
-async function ensureCoordinatorSession(projectId: string): Promise<{ sessionId: string; created: boolean }> {
-  const projectApi = getDesktopHostProjectApi();
-  const sessionApi = getDesktopHostSessionApi();
-
-  const project = await projectApi.getProject(projectId);
-  if (!project) throw new Error(`Project "${projectId}" does not exist`);
-
-  const boundSessionId = project.coordinator_session_id;
-  if (isNonEmptyString(boundSessionId)) {
-    const existing = await sessionApi.get(boundSessionId, { includeAllSessions: true });
-    if (existing) return { sessionId: boundSessionId, created: false };
-  }
-
-  // The coordinator works in the project's own directory, so the workspace
-  // binding is registered through the Host first — the Desktop never persists
-  // a raw path on a session row.
-  const workspace = await sessionApi.registerLocalDirectory(project.canonical_root);
-  const created = await sessionApi.create({
-    ...(workspace?.state === 'bound'
-      ? {
-          workspaceId: workspace.workspaceId,
-          workspaceRootId: workspace.rootId,
-          workspaceRelativePath: workspace.relativePath,
-        }
-      : {}),
-    title: project.name ? `${project.name} 协调` : '项目协调',
-    projectName: project.name,
-  });
-  await projectApi.bindCoordinatorSession(projectId, created.id);
-  return { sessionId: created.id, created: true };
-}
-
 export function registerProjectWorkspaceHandlers(): void {
   if (registered) return;
   registered = true;
@@ -151,7 +106,7 @@ export function registerProjectWorkspaceHandlers(): void {
       return { success: false, error: 'Invalid projectId: must be a non-empty string' };
     }
     try {
-      const { sessionId, created } = await ensureCoordinatorSession(rawProjectId);
+      const { sessionId, created } = await getDesktopHostProjectApi().ensureCoordinatorSession(rawProjectId);
       return { success: true, sessionId, created };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

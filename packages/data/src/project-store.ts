@@ -64,6 +64,33 @@ export interface ProjectTaskLinkRow {
   work_session_id: string | null;
   updated_at: number;
   acceptance_status: 'pending' | 'accepted' | 'rejected';
+  revision?: number;
+}
+
+/** A launch receipt, not a second Task status. Retained across retries. */
+export interface ProjectTaskAttemptRow {
+  attempt_id: string;
+  project_id: string;
+  task_id: string;
+  coordinator_session_id: string;
+  work_session_id: string | null;
+  run_id: string | null;
+  prior_run_ids: string;
+  status: 'starting' | 'running' | 'completed' | 'failed' | 'unknown';
+  reason: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface ProjectTaskReviewRow {
+  review_id: string;
+  project_id: string;
+  task_id: string;
+  session_id: string;
+  expected_revision: number;
+  status: 'accepted' | 'rejected';
+  note: string;
+  created_at: number;
 }
 
 export interface ProjectDecisionRow {
@@ -146,7 +173,7 @@ export function projectPaths(row: Pick<ProjectRow, 'paths'>): ProjectPathEntry[]
 }
 
 export class ProjectStore {
-  /** Project migrations use ids 61–65, above the current core schema maximum. */
+  /** Project migrations use ids 61–65 and 67; MessageLog owns 66. */
   static readonly migrations: Migration[] = [
     {
       id: 61,
@@ -288,6 +315,36 @@ export class ProjectStore {
             WHERE event_type = 'run.terminal' AND source_type = 'run';
           CREATE INDEX IF NOT EXISTS idx_project_task_sessions_work_session
             ON project_task_sessions(work_session_id);
+        `);
+      },
+    },
+    {
+      id: 67,
+      name: 'project_task_lifecycle',
+      up: (db) => {
+        const columns = db.prepare('PRAGMA table_info(project_task_sessions)').all() as Array<{ name: string }>;
+        if (!columns.some((column) => column.name === 'revision')) {
+          db.exec('ALTER TABLE project_task_sessions ADD COLUMN revision INTEGER NOT NULL DEFAULT 0');
+        }
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS project_task_attempts (
+            attempt_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, task_id TEXT NOT NULL,
+            coordinator_session_id TEXT NOT NULL, work_session_id TEXT, run_id TEXT,
+            prior_run_ids TEXT NOT NULL DEFAULT '[]',
+            status TEXT NOT NULL CHECK(status IN ('starting','running','completed','failed','unknown')),
+            reason TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+            FOREIGN KEY(project_id, task_id) REFERENCES project_task_sessions(project_id, task_id) ON DELETE CASCADE
+          );
+          CREATE UNIQUE INDEX IF NOT EXISTS uq_project_task_open_attempt
+            ON project_task_attempts(task_id) WHERE status IN ('starting','running','unknown');
+          CREATE INDEX IF NOT EXISTS idx_project_task_attempt_session ON project_task_attempts(work_session_id);
+          CREATE TABLE IF NOT EXISTS project_task_reviews (
+            review_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, task_id TEXT NOT NULL,
+            session_id TEXT NOT NULL, expected_revision INTEGER NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('accepted','rejected')), note TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY(project_id, task_id) REFERENCES project_task_sessions(project_id, task_id) ON DELETE CASCADE
+          );
         `);
       },
     },
@@ -447,10 +504,48 @@ export class ProjectStore {
     return (this.db.prepare('SELECT * FROM project_task_sessions WHERE task_id = ?').get(taskId) as ProjectTaskLinkRow | undefined) ?? null;
   }
 
-  /** The newest link that dispatched the given work Session, if any. */
+  /** Historical attempts remain attributable after a retry changes the current binding. */
   getTaskLinkByWorkSession(workSessionId: string): ProjectTaskLinkRow | null {
-    return (this.db.prepare('SELECT * FROM project_task_sessions WHERE work_session_id = ? ORDER BY updated_at DESC LIMIT 1')
-      .get(workSessionId) as ProjectTaskLinkRow | undefined) ?? null;
+    return (this.db.prepare(`SELECT * FROM project_task_sessions WHERE work_session_id = ?
+      OR task_id IN (SELECT task_id FROM project_task_attempts WHERE work_session_id = ?)
+      ORDER BY updated_at DESC LIMIT 1`).get(workSessionId, workSessionId) as ProjectTaskLinkRow | undefined) ?? null;
+  }
+
+  bumpTaskRevision(taskId: string, expectedRevision: number): boolean {
+    return this.db.prepare(`UPDATE project_task_sessions SET revision = revision + 1, updated_at = ?
+      WHERE task_id = ? AND revision = ?`).run(Date.now(), taskId, expectedRevision).changes === 1;
+  }
+
+  listTaskAttempts(taskId: string): ProjectTaskAttemptRow[] {
+    return this.db.prepare('SELECT * FROM project_task_attempts WHERE task_id = ? ORDER BY rowid DESC')
+      .all(taskId) as ProjectTaskAttemptRow[];
+  }
+
+  listOpenTaskAttempts(): ProjectTaskAttemptRow[] {
+    return this.db.prepare("SELECT * FROM project_task_attempts WHERE status IN ('starting','running','unknown') ORDER BY rowid")
+      .all() as ProjectTaskAttemptRow[];
+  }
+
+  insertTaskAttempt(row: ProjectTaskAttemptRow): void {
+    this.db.prepare(`INSERT INTO project_task_attempts
+      (attempt_id, project_id, task_id, coordinator_session_id, work_session_id, run_id, prior_run_ids, status, reason, created_at, updated_at)
+      VALUES (@attempt_id, @project_id, @task_id, @coordinator_session_id, @work_session_id, @run_id, @prior_run_ids, @status, @reason, @created_at, @updated_at)`).run(row);
+  }
+
+  updateTaskAttempt(attemptId: string, patch: Pick<ProjectTaskAttemptRow, 'work_session_id' | 'run_id' | 'prior_run_ids' | 'status' | 'reason'>): void {
+    this.db.prepare(`UPDATE project_task_attempts SET work_session_id = @work_session_id, run_id = @run_id,
+      prior_run_ids = @prior_run_ids, status = @status, reason = @reason, updated_at = @updated_at WHERE attempt_id = @attempt_id`)
+      .run({ ...patch, attempt_id: attemptId, updated_at: Date.now() });
+  }
+
+  getTaskReview(reviewId: string): ProjectTaskReviewRow | null {
+    return this.db.prepare('SELECT * FROM project_task_reviews WHERE review_id = ?').get(reviewId) as ProjectTaskReviewRow | undefined ?? null;
+  }
+
+  insertTaskReview(row: ProjectTaskReviewRow): void {
+    this.db.prepare(`INSERT INTO project_task_reviews
+      (review_id, project_id, task_id, session_id, expected_revision, status, note, created_at)
+      VALUES (@review_id, @project_id, @task_id, @session_id, @expected_revision, @status, @note, @created_at)`).run(row);
   }
 
   bindTask(projectId: string, taskId: string, coordinatorSessionId: string): ProjectTaskLinkRow {

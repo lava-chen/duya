@@ -537,7 +537,9 @@ export function createHostWorkerDbBridge(options: HostWorkerDbBridgeOptions): Wo
           return options.projectToolApi.dispatch({
             action: toolAction,
             payload: (toolPayload ?? {}) as Record<string, unknown>,
-            callerSessionId: caller.sessionId,
+            // The attempt, not the payload: a channel send is authorised
+            // against the run that is actually executing this call.
+            caller: { sessionId: caller.sessionId, runId: caller.runId, epoch: caller.epoch },
           });
         }
         case 'session:checkoutControl': {

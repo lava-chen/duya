@@ -3,7 +3,7 @@ import type {
   SendMessagePort,
   SendMessageRow,
 } from '@duya/capabilities/SendMessageTool/ports';
-import { channelDb, messageDb, sendMessageStateDb } from '../worker-db-client.js';
+import { channelDb, messageDb, projectDb, sendMessageStateDb } from '../worker-db-client.js';
 import { logger } from '../worker-logger.js';
 
 /** Bind SendMessage effects to the existing Main worker DB/IPC routes. */
@@ -56,6 +56,25 @@ export function createWorkerSendMessagePort(): SendMessagePort {
           },
         },
       ]);
+    },
+    async sendToProjectChannel(input) {
+      // The worker sends a REQUEST, not an identity: the Host resolves the
+      // project, the run and the epoch from this worker attempt and decides
+      // whether the binding, the reply scope and `allowProactive` permit it.
+      // Nothing in this payload names a session, a run, or a Discord target.
+      const result = await projectDb.tool({
+        action: 'send_channel_message',
+        payload: {
+          requestId: input.requestId,
+          channelBindingId: input.channelBindingId,
+          text: input.text,
+          ...(input.replyToInboundId === undefined ? {} : { replyToInboundId: input.replyToInboundId }),
+        },
+      }) as { ok: true; delivery?: { deliveryId: string; status: string } } | { ok: false; reason: string };
+
+      if (!result.ok) return { ok: false, reason: result.reason };
+      if (result.delivery === undefined) return { ok: false, reason: 'channel_send_failed' };
+      return { ok: true, deliveryId: result.delivery.deliveryId, status: result.delivery.status };
     },
     logError(message, error, context, component) {
       logger.error(message, error, context, component);

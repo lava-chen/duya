@@ -20,7 +20,7 @@ export const PROJECT_WORK_SESSION_PROFILE_ID = 'code-expert';
  * accept `projectTask`, which is required to create and bind the canonical
  * Project Task. The shared todo replace operation can delete those Tasks.
  */
-export const PROJECT_COORDINATOR_ALLOWED_TOOLS = ['session', 'project'] as const;
+export const PROJECT_COORDINATOR_ALLOWED_TOOLS = ['session', 'project', 'send_message'] as const;
 
 export const PROJECT_TASK_SUBJECT_MAX_LENGTH = 160;
 export const PROJECT_TASK_DESCRIPTION_MAX_LENGTH = 12_000;

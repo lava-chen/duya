@@ -62,6 +62,8 @@ import { normalizeEffort } from './tui/theme.js';
 import { readPrBadge } from './tui/pr-refresh.js';
 import type { PrBadge } from './tui/pr-badge.js';
 import { readWorkbenchWorkspace, type WorkbenchWorkspaceSummary } from './tui/workbench-workspace.js';
+import { projectDisplayLine, readProjectWorkbench, type ProjectWorkbenchSummary } from './tui/project-workbench.js';
+import { escapeTags } from './tui/transcript-view.js';
 import { shellDraftOf } from './tui/shell-command.js';
 import {
   DEFAULT_TUI_PREFERENCES,
@@ -106,6 +108,7 @@ export interface ChatCommandOptions {
   readonly model?: string;
   readonly providerId?: string;
   readonly apiFormat?: 'anthropic' | 'openai';
+  readonly project?: { readonly projectId: string; readonly name: string };
 }
 
 interface ResolvedConnection {
@@ -774,6 +777,10 @@ export async function chatTui(
     changedFiles: null,
     changes: [],
   };
+  let projectWorkbench: ProjectWorkbenchSummary | undefined = options.project === undefined ? undefined : {
+    name: projectDisplayLine(options.project.name), taskCounts: [], sessions: [], status: 'loading',
+  };
+  let projectRefresh: Promise<void> | undefined;
   let workspaceStatusTimer: ReturnType<typeof setInterval> | null = null;
   let sessionDashboardTimer: ReturnType<typeof setInterval> | null = null;
   let dashboardRefreshInFlight = false;
@@ -798,7 +805,9 @@ export async function chatTui(
   // next normal submission (see `tui/shell-context.ts`).
   let pendingShellContext: { command: string; context: string } | null = null;
 
-  let sessionRows = (await listWorkspaceSessions(client, activeSession)).map(sessionCompletionItem);
+  let sessionRows = options.project === undefined
+    ? (await listWorkspaceSessions(client, activeSession)).map(sessionCompletionItem) : [];
+  const projectIncompatibleCommands = new Set(['archive', 'delete', 'fork', 'new', 'project']);
   const sessionSlashRows = (): PopoverItem[] => {
     const commands: readonly (readonly [string, string, string, string])[] = [
       ['/resume', 'resume', 'Search and resume a previous session', '搜索并切换到之前的会话'],
@@ -809,7 +818,12 @@ export async function chatTui(
       ['/help', 'help', 'Show chat commands', '显示聊天命令'],
       ['/exit', 'exit', 'End this chat', '结束当前聊天'],
     ];
-    return commands.map(([label, specName, english, chinese]) => {
+    const projectCommands = [
+      ...commands.filter(([label]) => label !== '/new' && label !== '/resume' && label !== '/sessions'),
+      ['/status', '', 'Show project overview', '查看项目概况'],
+      ['/sessions', '', 'Inspect project work sessions', '查看项目工作会话'],
+    ] as const;
+    return (options.project === undefined ? commands : projectCommands).map(([label, specName, english, chinese]) => {
       const spec = findSpec(specName);
       return {
         label,
@@ -845,8 +859,18 @@ export async function chatTui(
   });
   void pluginCandidates.refresh();
   const completionSources: CompletionSources = {
-    slash: () => [...sessionSlashRows(), ...buildSlashCompletionRows({ locale })],
-    slashOptions: (command) => command === '/resume' || command === '/sessions' ? sessionRows : [],
+    slash: () => [...sessionSlashRows(), ...buildSlashCompletionRows({ locale }).filter(
+      ({ label }) => options.project === undefined
+        || (label !== '/status' && label !== '/sessions' && !projectIncompatibleCommands.has(label.slice(1))),
+    )],
+    slashOptions: (command) => {
+      if (command !== '/resume' && command !== '/sessions') return [];
+      if (options.project === undefined) return sessionRows;
+      return (projectWorkbench?.sessions ?? []).map(({ title, id, state }) => ({
+        label: title, value: id, description: state,
+        kind: 'slash_command', category: 'command', group: 'settings',
+      }));
+    },
     slashOptionsOnBare: (command) => command === '/resume' || command === '/sessions',
     // Plugin rows lead, file paths follow: `@<pluginId>` inserts a MENTION the
     // submit path rewrites (see `runTurn`), `@<path>` stays the file reference
@@ -1276,7 +1300,7 @@ export async function chatTui(
   }
 
   const tui = new TUIApp({
-    title: 'duya',
+    title: options.project === undefined ? 'duya' : `${options.project.name || 'Project'} Coordinator`,
     // The tab bar is the only surface that distinguishes two windows once the
     // terminal is not focused. A session that has not been named yet falls back
     // to its id prefix — the same eight characters the status bar shows — which
@@ -1312,7 +1336,11 @@ export async function chatTui(
     onSteer: steerDraft,
     onQueueDraft: queueDraft,
     onInterruptAndSend: interruptAndSend,
-    statusText: () => `${describeTuiModelStatus(activeSession.providerId, activeSession.model, options.model).statusText} · ${activeSession.id.slice(0, 8)} · ${executionCwd()}`,
+    statusText: () => projectWorkbench === undefined
+      ? `${describeTuiModelStatus(activeSession.providerId, activeSession.model, options.model).statusText} · ${activeSession.id.slice(0, 8)} · ${executionCwd()}`
+      : `Project · ${projectWorkbench.status === 'current'
+        ? `${projectWorkbench.sessions.filter((session) => session.state === 'Running').length} running`
+        : projectWorkbench.status === 'loading' ? 'loading' : 'status unavailable'} · /status · /sessions`,
     // The footer's right-hand column. Same facts as the status text above, but
     // split so the model can be right-aligned against the token counters
     // instead of sharing one crowded row with them.
@@ -1320,6 +1348,7 @@ export async function chatTui(
     // footer's badge. The loop owns the reading; the footer only draws it.
     pullRequestBadge: () => pullRequestBadge,
     workbenchWorkspace: () => workbenchWorkspace,
+    ...(options.project === undefined ? {} : { workbenchProject: () => projectWorkbench }),
     modelLabel: () => {
       const modelStatus = describeTuiModelStatus(activeSession.providerId, activeSession.model, options.model);
       return {
@@ -1439,12 +1468,78 @@ export async function chatTui(
   }
 
   async function refreshWorkbenchWorkspace(): Promise<void> {
+    if (options.project !== undefined) return refreshProjectWorkbench(options.project.projectId);
     const sessionId = activeSession.id;
     const cwd = executionCwd();
     const workspace = await readWorkbenchWorkspace(cwd);
     if (finished || activeSession.id !== sessionId || executionCwd() !== cwd) return;
     workbenchWorkspace = workspace;
     tui.refresh();
+  }
+
+  function refreshProjectWorkbench(projectId: string): Promise<void> {
+    if (projectRefresh !== undefined) return projectRefresh;
+    projectRefresh = readProjectWorkbench(client, projectId).then((summary) => {
+      projectWorkbench = { ...summary, status: 'current' };
+    }).catch((error: unknown) => {
+      if (projectWorkbench !== undefined) {
+        projectWorkbench = { ...projectWorkbench, status: 'unavailable', error: errorText(error) };
+      }
+    }).finally(() => {
+      projectRefresh = undefined;
+      if (!finished) tui.refresh();
+    });
+    return projectRefresh;
+  }
+
+  async function showProjectOverview(projectId: string): Promise<void> {
+    const [, continuity] = await Promise.all([
+      refreshProjectWorkbench(projectId),
+      client.getProjectContinuity(projectId, { limit: 1 }).catch(() => null),
+    ]);
+    const summary = projectWorkbench;
+    if (finished || summary === undefined) return;
+    const lines = [
+      ...(summary.status === 'unavailable' ? ['Status unavailable · showing last available data'] : []),
+      ...(continuity?.state?.currentState ? ['Project state', ...continuity.state.currentState.slice(0, 1500).split('\n').map(projectDisplayLine), ''] : []),
+      ...(continuity?.state?.nextStep ? ['Next step', ...continuity.state.nextStep.slice(0, 1000).split('\n').map(projectDisplayLine), ''] : []),
+      summary.taskCounts.length ? summary.taskCounts.map(({ label, count }) => `${count} ${label}`).join(' · ') : 'No tasks recorded',
+      '',
+      ...(summary.sessions.length ? summary.sessions.map(({ title, state }) => `${state} · ${title}`) : ['No work sessions yet']),
+    ];
+    tui.showPanel(summary.name, lines.map(escapeTags), { scrollable: true, footer: '/sessions to inspect a work session · Esc close' });
+  }
+
+  async function inspectProjectSession(projectId: string, query: string): Promise<void> {
+    await refreshProjectWorkbench(projectId);
+    if (finished || projectWorkbench === undefined) return;
+    if (projectWorkbench.status === 'unavailable') {
+      tui.printError('Could not read the current project sessions: ' + (projectWorkbench.error ?? 'Host unavailable'));
+      return;
+    }
+    const { sessions } = projectWorkbench;
+    if (sessions.length === 0) {
+      tui.printNotice('No work sessions in this project yet.');
+      return;
+    }
+    const selected = sessions.find(({ id }) => id === query);
+    const id = selected?.id ?? await tui.chooseFiltered('Project work sessions', sessions.map((session) => ({
+      label: session.title, value: session.id, description: session.state,
+    })), { initialFilter: query, footer: '↑↓ select · Enter inspect · Esc back' });
+    const session = sessions.find((candidate) => candidate.id === id);
+    if (session === undefined || finished) return;
+    const page = await client.readAllMessages(session.id, { includeSuperseded: false });
+    const messages = projectTimelinePersistenceMessages(page.messages.flatMap(({ entry }) =>
+      entry.type === 'message' || entry.type === 'compaction' ? [entry] : []));
+    const recent = messages.filter((message) => message.role === 'user' || message.role === 'assistant').slice(-30);
+    const lines = recent.flatMap((message) => {
+      const content = typeof message.content === 'string' ? message.content
+        : message.content.flatMap((part) => part.type === 'text' ? [part.text] : []).join('\n');
+      return content.trim() === '' ? [] : [message.role === 'user' ? 'User' : 'Agent', ...content.slice(0, 4000).split('\n').map(projectDisplayLine), ''];
+    });
+    if (finished) return;
+    tui.showPanel(session.title, [session.state, '', ...(lines.length ? lines : ['No conversation text yet.'])].map(escapeTags),
+      { scrollable: true, footer: 'Read only · ↑↓ / PgUp / PgDn scroll · Esc back to Coordinator' });
   }
 
   backgroundPoller.start();
@@ -2037,7 +2132,7 @@ export async function chatTui(
       if (activeRunId !== null) pendingCancellations.delete(activeRunId);
       activeStream = null;
       activeRunId = null;
-      if (!finished && !cancellationRequested) {
+      if (!finished && !cancellationRequested && options.project === undefined) {
         try {
           sessionRows = (await listWorkspaceSessions(client, activeSession)).map(sessionCompletionItem);
         } catch {
@@ -2059,6 +2154,15 @@ export async function chatTui(
       const args = command[2]?.trim() ?? '';
       try {
         if (name === 'exit' || name === 'quit' || name === 'q') close();
+        else if (options.project !== undefined && name === 'status') await showProjectOverview(options.project.projectId);
+        else if (options.project !== undefined && (name === 'sessions' || name === 'resume')) {
+          await inspectProjectSession(options.project.projectId, args);
+        }
+        else if (options.project !== undefined && projectIncompatibleCommands.has(resolveTuiSlashCommand(name)?.name ?? name)) {
+          tui.printNotice(name === 'new'
+            ? 'Ask the Coordinator to delegate a task to start a project work session.'
+            : 'This command changes sessions. Use duya project to open a different Coordinator.');
+        }
         else if (name === 'resume' || name === 'sessions' || name === 'new') {
           if (sessionTransition) return;
           sessionTransition = true;
@@ -2094,6 +2198,7 @@ export async function chatTui(
             {
               client,
               session: activeSession,
+              ...(options.project === undefined ? {} : { projectId: options.project.projectId }),
               tui,
               busy,
               // Actions only this loop can perform: they touch the queue, the
@@ -2149,9 +2254,19 @@ export async function chatTui(
         }
         else if (name === 'help') {
           tui.printNotice(locale === 'zh' ? '可用命令：' : 'Available commands:');
+          if (options.project !== undefined) {
+            tui.printNotice(locale === 'zh'
+              ? '/status  项目概况 · /sessions  只读查看工作会话'
+              : '/status  Project overview · /sessions  Inspect work sessions');
+          }
           for (const section of [...helpSections(locale), ...buildSlashHelpSections(locale)]) {
+            const lines = options.project === undefined ? section.lines : section.lines.filter((line) => {
+              const name = /^\s*\/([\w-]+)/u.exec(line)?.[1] ?? '';
+              return name !== 'status' && name !== 'sessions' && name !== 'resume' && !projectIncompatibleCommands.has(name);
+            });
+            if (lines.length === 0) continue;
             tui.printNotice(`[${section.title}]`);
-            for (const line of section.lines) tui.printNotice(`  ${line}`);
+            for (const line of lines) tui.printNotice(`  ${line}`);
           }
         }
         else tui.printError(`Unknown command: /${name}`);
@@ -2218,7 +2333,9 @@ export async function chatTui(
   // strip. The log path is not: it is how a stuck run gets diagnosed, and it
   // only appears when diagnostics were asked for.
   if (savedPreferences.startupBanner) {
-    tui.printNotice(`session ${sessionId} · type a message, /resume to switch sessions`);
+    tui.printNotice(options.project === undefined
+      ? `session ${sessionId} · type a message, /resume to switch sessions`
+      : `${options.project.name} · /status for project overview · /sessions for work sessions`);
   }
   if (options.diagnosticsLogPath !== undefined) tui.printNotice('Logs: ' + options.diagnosticsLogPath);
   tui.start();

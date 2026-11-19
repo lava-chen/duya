@@ -85,9 +85,46 @@ async function startProjectServer(): Promise<{ origin: string; client: HostSessi
       getBotSessionsDir: (agentId, root) => path.join(root, 'agents', agentId, 'sessions'),
     },
   });
-  dataHosts.push(dataHost);
-  return startServer({ projectApi: createHostProjectApi(dataHost.stores.projects) });
+  const sessionRows = new Map<string, { id: string; status: string; agentProfileId?: string | null }>();
+  let createdCount = 0;
+  const projectApi = createHostProjectApi(dataHost.stores.projects, dataHost.stores.tasks, undefined, {
+    sessions: {
+      async get(sessionId) { return sessionRows.get(sessionId) ?? null; },
+      async create(input) {
+        const id = `coordinator-${++createdCount}`;
+        const row = { id, status: 'active', agentProfileId: input.agentProfileId };
+        sessionRows.set(id, row);
+        return row;
+      },
+    } as unknown as HostSessionApiV1,
+    workspaces: {
+      async registerLocalDirectory(directory) {
+        return { state: 'bound', workspaceId: `workspace-${directory}`, rootId: 'root', relativePath: '' };
+      },
+    },
+  });
+  const started = await startServer({ projectApi });
+  return { ...started, sessionRows, createdCount: () => createdCount };
 }
+
+describe('POST /v1/projects/:id/coordinator/ensure', () => {
+  it('creates one profiled Coordinator and reuses its durable binding', async () => {
+    const { client, sessionRows, createdCount } = await startProjectServer();
+    const project = await client.createProject({
+      name: 'codex',
+      paths: [{ path: '/projects/codex', description: null }],
+    });
+
+    const first = await client.ensureCoordinatorSession(project.project_id);
+    const second = await client.ensureCoordinatorSession(project.project_id);
+
+    expect(first).toEqual({ sessionId: 'coordinator-1', created: true });
+    expect(second).toEqual({ sessionId: 'coordinator-1', created: false });
+    expect(createdCount()).toBe(1);
+    expect(sessionRows.get(first.sessionId)?.agentProfileId).toBe('project-coordinator');
+    expect((await client.getProject(project.project_id))?.coordinator_session_id).toBe(first.sessionId);
+  });
+});
 
 describe('GET /v1/projects', () => {
   it('answers 404 project_api_unavailable when the capability is not wired', async () => {

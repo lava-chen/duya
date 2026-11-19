@@ -1,4 +1,14 @@
 import type { PluginAuditEvent } from './plugins/audit.js';
+import type {
+  ConfigureProjectChannelConnectionInput,
+  CreateProjectChannelBindingInput,
+  DisconnectProjectChannelInput,
+  HostProjectChannelApiV1,
+  ProjectChannelErrorCode,
+  RevokeProjectChannelBindingInput,
+  UpdateProjectChannelBindingInput,
+} from '@duya/agent-protocol/project-channels';
+import { ProjectChannelServiceError } from './project-channels/types.js';
 import type { HostPluginManagementApiV1, HostPluginManagementInstallInput } from '@duya/agent-protocol/plugin-management';
 import { routePluginManagement } from './plugins/http.js';
 import { timingSafeEqual } from 'node:crypto';
@@ -288,6 +298,51 @@ function optionalFiniteNumber(value: unknown): value is number | undefined {
   return value === undefined || (typeof value === 'number' && Number.isFinite(value));
 }
 
+/**
+ * HTTP status for a project-channel domain code.
+ *
+ * Grouped by remedy rather than by severity: "the thing you named is gone",
+ * "somebody changed it under you", "what you sent is not acceptable", "the
+ * platform is not reachable right now" — and `delivery_unknown` stays a 500
+ * because the Host genuinely does not know whether the message went out.
+ */
+function projectChannelHttpStatus(code: ProjectChannelErrorCode): number {
+  switch (code) {
+    case 'project_not_found':
+    case 'connection_not_found':
+    case 'binding_not_found':
+    case 'delivery_not_found':
+      return 404;
+    case 'connection_exists':
+    case 'bot_identity_conflict':
+    case 'binding_conflict':
+    case 'binding_revoked':
+    case 'generation_stale':
+    case 'stale_revision':
+    case 'request_conflict':
+    case 'inbound_fingerprint_conflict':
+    case 'delivery_conflict':
+    case 'connection_disabled':
+      return 409;
+    case 'credential_invalid':
+    case 'credential_not_configured':
+    case 'invalid_allowlist':
+    case 'invalid_target':
+    case 'invalid_request':
+    case 'unauthorized_member':
+    case 'reply_scope_invalid':
+    case 'proactive_not_allowed':
+      return 400;
+    case 'transport_unavailable':
+    case 'delivery_retryable':
+      return 503;
+    case 'delivery_failed':
+    case 'delivery_unknown':
+    case 'internal':
+      return 500;
+  }
+}
+
 function isHostMailboxKind(value: unknown): value is HostMailboxKind {
   return typeof value === 'string' && HOST_MAILBOX_KINDS.includes(value as HostMailboxKind);
 }
@@ -492,6 +547,17 @@ export interface HostSessionHttpServerOptions {
   readonly modeStateApi?: HostModeStateApiV1;
   readonly taskApi: HostTaskApiV1;
   readonly projectApi?: HostProjectApiV1;
+  /**
+   * The Project channel control plane (credential, bindings, deliveries).
+   *
+   * Optional, and separate from `projectApi`: a Host composed without a Discord
+   * transport cannot configure a bot, and its routes answer 404
+   * `project_channel_api_unavailable` — "this Host cannot do that" rather than
+   * an empty overview that would read as "this project has no channels".
+   *
+   * These routes carry a credential in, and never carry one out.
+   */
+  readonly projectChannelApi?: HostProjectChannelApiV1;
   readonly permissionRequestApi?: HostPermissionRequestApiV1;
   readonly toolApprovalApi?: HostToolApprovalApiV1;
   readonly lockApi?: HostLockApiV1;
@@ -3406,7 +3472,283 @@ export class HostSessionHttpServer {
     }
   }
 
+  /**
+   * Project channel control plane.
+   *
+   * Reachable only through the authenticated local control plane: there is no
+   * inbound webhook here, and no route accepts a caller-supplied `senderId`,
+   * `projectId` or bot identity. The project id is always the path segment, and
+   * the credential is verified by the domain service against the platform
+   * before it is ever stored.
+   */
+  async #routeProjectChannels(req: IncomingMessage, url: URL, res: ServerResponse): Promise<void> {
+    const api = this.#options.projectChannelApi;
+    if (!api) {
+      this.#sendJson(res, 404, { error: { code: 'project_channel_api_unavailable' } });
+      return;
+    }
+
+    const connectionMatch = /^\/v1\/projects\/([^/]+)\/channels\/connection$/.exec(url.pathname);
+    const disconnectMatch = /^\/v1\/projects\/([^/]+)\/channels\/connection\/disconnect$/.exec(url.pathname);
+    const bindingsMatch = /^\/v1\/projects\/([^/]+)\/channels\/bindings$/.exec(url.pathname);
+    const bindingMatch = /^\/v1\/projects\/([^/]+)\/channels\/bindings\/([^/]+)$/.exec(url.pathname);
+    const deliveryMatch = /^\/v1\/projects\/([^/]+)\/channels\/deliveries\/([^/]+)$/.exec(url.pathname);
+    const overviewMatch = /^\/v1\/projects\/([^/]+)\/channels$/.exec(url.pathname);
+
+    try {
+      if (overviewMatch && req.method === 'GET') {
+        const projectId = this.#decodePathPart(overviewMatch[1]!, res);
+        if (projectId === null) return;
+        const cursor = Number(url.searchParams.get('cursor') ?? 0);
+        const limit = Number(url.searchParams.get('limit') ?? 50);
+        const overview = await api.getProjectChannels(
+          projectId,
+          Number.isFinite(cursor) ? cursor : 0,
+          Number.isFinite(limit) ? limit : 50,
+        );
+        this.#sendJson(res, overview ? 200 : 404, { overview });
+        return;
+      }
+
+      if (connectionMatch && req.method === 'PUT') {
+        const projectId = this.#decodePathPart(connectionMatch[1]!, res);
+        if (projectId === null) return;
+        const body = await this.#readJson(req, res);
+        if (body === null) return;
+        const input = this.#parseChannelConnection(projectId, body);
+        if (!input) {
+          this.#sendJson(res, 400, { error: { code: 'invalid_request' } });
+          return;
+        }
+        // The token is consumed here and never sent back: the response is the
+        // connection projection, which carries `credentialConfigured` only.
+        this.#sendJson(res, 200, { connection: await api.configureDiscordConnection(input) });
+        return;
+      }
+
+      if (disconnectMatch && req.method === 'POST') {
+        const projectId = this.#decodePathPart(disconnectMatch[1]!, res);
+        if (projectId === null) return;
+        const body = await this.#readJson(req, res);
+        if (body === null) return;
+        const input = this.#parseChannelDisconnect(projectId, body);
+        if (!input) {
+          this.#sendJson(res, 400, { error: { code: 'invalid_request' } });
+          return;
+        }
+        const connection = await api.disconnectConnection(input);
+        this.#sendJson(res, connection ? 200 : 404, { connection });
+        return;
+      }
+
+      if (bindingsMatch) {
+        const projectId = this.#decodePathPart(bindingsMatch[1]!, res);
+        if (projectId === null) return;
+        if (req.method !== 'POST') {
+          this.#sendJson(res, 405, { error: { code: 'method_not_allowed' } });
+          return;
+        }
+        const body = await this.#readJson(req, res);
+        if (body === null) return;
+        const input = this.#parseChannelBindingCreate(projectId, body);
+        if (!input) {
+          this.#sendJson(res, 400, { error: { code: 'invalid_request' } });
+          return;
+        }
+        this.#sendJson(res, 201, { binding: await api.createBinding(input) });
+        return;
+      }
+
+      if (bindingMatch) {
+        const projectId = this.#decodePathPart(bindingMatch[1]!, res);
+        const bindingId = this.#decodePathPart(bindingMatch[2]!, res);
+        if (projectId === null || bindingId === null) return;
+        if (req.method === 'PATCH') {
+          const body = await this.#readJson(req, res);
+          if (body === null) return;
+          const input = this.#parseChannelBindingUpdate(projectId, bindingId, body);
+          if (!input) {
+            this.#sendJson(res, 400, { error: { code: 'invalid_request' } });
+            return;
+          }
+          const binding = await api.updateBinding(input);
+          this.#sendJson(res, binding ? 200 : 404, { binding });
+          return;
+        }
+        if (req.method === 'DELETE') {
+          // A revoke is still a compare-and-set. The precondition may arrive in
+          // a JSON body or as query parameters: the shared CLI client's DELETE
+          // carries no body, and a body-carrying DELETE is exactly the kind of
+          // request an intermediary is entitled to strip.
+          const contentType = req.headers['content-type'];
+          let input: RevokeProjectChannelBindingInput | null;
+          if (typeof contentType === 'string' && /^application\/json(?:\s*;|$)/i.test(contentType)) {
+            const body = await this.#readJson(req, res);
+            if (body === null) return;
+            input = this.#parseChannelBindingRevoke(projectId, bindingId, body);
+          } else {
+            const revision = Number(url.searchParams.get('expectedRevision'));
+            input = this.#parseChannelBindingRevoke(projectId, bindingId, {
+              requestId: url.searchParams.get('requestId') ?? undefined,
+              // A missing or non-numeric value must fail the shape check, not
+              // coerce to 0 and then be reported as a stale revision.
+              expectedRevision: Number.isInteger(revision) ? revision : undefined,
+            });
+          }
+          if (!input) {
+            this.#sendJson(res, 400, { error: { code: 'invalid_request' } });
+            return;
+          }
+          const binding = await api.revokeBinding(input);
+          this.#sendJson(res, binding ? 200 : 404, { binding });
+          return;
+        }
+        this.#sendJson(res, 405, { error: { code: 'method_not_allowed' } });
+        return;
+      }
+
+      if (deliveryMatch && req.method === 'GET') {
+        const projectId = this.#decodePathPart(deliveryMatch[1]!, res);
+        const deliveryId = this.#decodePathPart(deliveryMatch[2]!, res);
+        if (projectId === null || deliveryId === null) return;
+        const delivery = await api.getDelivery(projectId, deliveryId);
+        this.#sendJson(res, delivery ? 200 : 404, { delivery });
+        return;
+      }
+
+      this.#sendJson(res, 404, { error: { code: 'not_found' } });
+    } catch (error) {
+      this.#sendApiError(res, error);
+    }
+  }
+
+  #parseChannelConnection(
+    projectId: string,
+    body: Record<string, unknown>,
+  ): ConfigureProjectChannelConnectionInput | null {
+    const requestId = body.requestId;
+    const token = body.token;
+    if (typeof requestId !== 'string' || requestId.trim() === '') return null;
+    // A masked or empty token is not a credential. Refusing here keeps the
+    // service from making a platform call it is certain to lose.
+    if (typeof token !== 'string' || token.trim() === '') return null;
+    if (body.expectedRevision !== undefined && typeof body.expectedRevision !== 'number') return null;
+    if (body.label !== undefined && typeof body.label !== 'string') return null;
+    return {
+      projectId,
+      requestId,
+      token,
+      ...(typeof body.expectedRevision === 'number' ? { expectedRevision: body.expectedRevision } : {}),
+      ...(typeof body.label === 'string' ? { label: body.label } : {}),
+    };
+  }
+
+  #parseChannelBindingCreate(
+    projectId: string,
+    body: Record<string, unknown>,
+  ): CreateProjectChannelBindingInput | null {
+    const requestId = body.requestId;
+    const connectionId = body.connectionId;
+    const guildId = body.guildId;
+    const channelId = body.channelId;
+    const allowedUserIds = this.#parseIdList(body.allowedUserIds);
+    if (typeof requestId !== 'string' || requestId.trim() === '') return null;
+    if (typeof connectionId !== 'string' || connectionId.trim() === '') return null;
+    if (typeof guildId !== 'string' || guildId.trim() === '') return null;
+    if (typeof channelId !== 'string' || channelId.trim() === '') return null;
+    // An empty allowlist is an authorization accident, not a permissive default.
+    if (allowedUserIds === null || allowedUserIds.length === 0) return null;
+    if (body.allowProactive !== undefined && typeof body.allowProactive !== 'boolean') return null;
+    if (body.label !== undefined && typeof body.label !== 'string') return null;
+    return {
+      projectId,
+      requestId,
+      connectionId,
+      guildId,
+      channelId,
+      allowedUserIds,
+      ...(typeof body.allowProactive === 'boolean' ? { allowProactive: body.allowProactive } : {}),
+      ...(typeof body.label === 'string' ? { label: body.label } : {}),
+    };
+  }
+
+  #parseChannelBindingUpdate(
+    projectId: string,
+    bindingId: string,
+    body: Record<string, unknown>,
+  ): UpdateProjectChannelBindingInput | null {
+    const requestId = body.requestId;
+    if (typeof requestId !== 'string' || requestId.trim() === '') return null;
+    if (typeof body.expectedRevision !== 'number') return null;
+    const patch: {
+      -readonly [K in keyof UpdateProjectChannelBindingInput]: UpdateProjectChannelBindingInput[K];
+    } = { projectId, bindingId, requestId, expectedRevision: body.expectedRevision };
+    if (body.allowedUserIds !== undefined) {
+      const ids = this.#parseIdList(body.allowedUserIds);
+      if (ids === null) return null;
+      // Clearing the allowlist is refused by the domain; refusing it here too
+      // means the caller learns it from the request, not from a 409 later.
+      if (ids.length === 0) return null;
+      patch.allowedUserIds = ids;
+    }
+    if (body.allowProactive !== undefined) {
+      if (typeof body.allowProactive !== 'boolean') return null;
+      patch.allowProactive = body.allowProactive;
+    }
+    if (body.enabled !== undefined) {
+      if (typeof body.enabled !== 'boolean') return null;
+      patch.enabled = body.enabled;
+    }
+    if (body.label !== undefined) {
+      if (typeof body.label !== 'string') return null;
+      patch.label = body.label;
+    }
+    return patch;
+  }
+
+  #parseChannelBindingRevoke(
+    projectId: string,
+    bindingId: string,
+    body: Record<string, unknown>,
+  ): RevokeProjectChannelBindingInput | null {
+    const requestId = body.requestId;
+    if (typeof requestId !== 'string' || requestId.trim() === '') return null;
+    if (typeof body.expectedRevision !== 'number') return null;
+    return { projectId, bindingId, requestId, expectedRevision: body.expectedRevision };
+  }
+
+  #parseChannelDisconnect(
+    projectId: string,
+    body: Record<string, unknown>,
+  ): DisconnectProjectChannelInput | null {
+    const requestId = body.requestId;
+    const connectionId = body.connectionId;
+    if (typeof requestId !== 'string' || requestId.trim() === '') return null;
+    if (typeof connectionId !== 'string' || connectionId.trim() === '') return null;
+    if (typeof body.expectedRevision !== 'number') return null;
+    return { projectId, connectionId, requestId, expectedRevision: body.expectedRevision };
+  }
+
+  /** A list of platform ids; anything else is a shape error, not a coercion. */
+  #parseIdList(value: unknown): string[] | null {
+    if (!Array.isArray(value)) return null;
+    const ids: string[] = [];
+    for (const item of value) {
+      if (typeof item !== 'string' || item.trim() === '') return null;
+      ids.push(item.trim());
+    }
+    return ids;
+  }
+
   async #routeProjects(req: IncomingMessage, url: URL, res: ServerResponse): Promise<void> {
+    // Channel routes are their own surface with their own composition guard, so
+    // they are dispatched before the project API is required: a Host that can
+    // configure a bot but not read project continuity still answers them.
+    if (/^\/v1\/projects\/[^/]+\/channels(?:\/|$)/.test(url.pathname)) {
+      await this.#routeProjectChannels(req, url, res);
+      return;
+    }
+
     const api = this.#options.projectApi;
     if (!api) {
       this.#sendJson(res, 404, { error: { code: 'project_api_unavailable' } });
@@ -3508,18 +3850,53 @@ export class HostSessionHttpServer {
       } catch (error) { this.#sendApiError(res, error); }
       return;
     }
+    const taskRecordMatch = /^\/v1\/projects\/([^/]+)\/task-records(?:\/([^/]+))?$/.exec(url.pathname);
+    if (taskRecordMatch) {
+      const projectId = this.#decodePathPart(taskRecordMatch[1]!, res);
+      const taskId = taskRecordMatch[2] ? this.#decodePathPart(taskRecordMatch[2], res) : undefined;
+      if (projectId === null || taskId === null) return;
+      const body = await this.#readJson(req, res); if (!body) return;
+      try {
+        if (!taskId && req.method === 'POST' && typeof body.coordinatorSessionId === 'string' &&
+          typeof body.requestId === 'string' && typeof body.subject === 'string' && typeof body.description === 'string' &&
+          Object.keys(body).every((key) => ['coordinatorSessionId', 'requestId', 'subject', 'description'].includes(key))) {
+          const task = await api.createProjectTask({ projectId, coordinatorSessionId: body.coordinatorSessionId,
+            requestId: body.requestId, subject: body.subject, description: body.description });
+          this.#sendJson(res, 200, { task }); return;
+        }
+        if (taskId && req.method === 'PATCH' && typeof body.coordinatorSessionId === 'string' &&
+          Number.isSafeInteger(body.expectedRevision) &&
+          (body.subject === undefined || typeof body.subject === 'string') &&
+          (body.description === undefined || typeof body.description === 'string') &&
+          (body.status === undefined || body.status === 'pending') &&
+          Object.keys(body).every((key) => ['coordinatorSessionId', 'expectedRevision', 'subject', 'description', 'status'].includes(key))) {
+          const task = await api.updateProjectTask({ projectId, taskId, coordinatorSessionId: body.coordinatorSessionId,
+            expectedRevision: body.expectedRevision as number,
+            ...(typeof body.subject === 'string' ? { subject: body.subject } : {}),
+            ...(typeof body.description === 'string' ? { description: body.description } : {}),
+            ...(body.status === 'pending' ? { status: 'pending' as const } : {}) });
+          this.#sendJson(res, 200, { task }); return;
+        }
+        this.#sendJson(res, 400, { error: { code: 'invalid_project_task' } });
+      } catch (error) { this.#sendJson(res, 409, { error: { code: 'project_task_conflict', message: error instanceof Error ? error.message : String(error) } }); }
+      return;
+    }
     const acceptanceMatch = /^\/v1\/projects\/([^/]+)\/tasks\/([^/]+)\/acceptance$/.exec(url.pathname);
     if (acceptanceMatch) {
       const projectId = this.#decodePathPart(acceptanceMatch[1]!, res), taskId = this.#decodePathPart(acceptanceMatch[2]!, res);
       if (projectId === null || taskId === null) return;
       const body = await this.#readJson(req, res); if (!body) return;
-      if (req.method !== 'PUT' || !['accepted', 'rejected'].includes(String(body.status)) || !isProjectSource(body.source)) {
+      if (req.method !== 'PUT' || !['accepted', 'rejected'].includes(String(body.status)) ||
+        typeof body.sessionId !== 'string' || typeof body.requestId !== 'string' ||
+        typeof body.note !== 'string' || !Number.isSafeInteger(body.expectedRevision) ||
+        Object.keys(body).some((key) => !['status', 'sessionId', 'requestId', 'note', 'expectedRevision'].includes(key))) {
         this.#sendJson(res, 400, { error: { code: 'invalid_task_acceptance' } }); return;
       }
       try {
-        const task = await api.updateProjectTaskAcceptance({ projectId, taskId, status: body.status as 'accepted' | 'rejected', source: body.source });
+        const task = await api.updateProjectTaskAcceptance({ projectId, taskId, status: body.status as 'accepted' | 'rejected',
+          sessionId: body.sessionId, requestId: body.requestId, note: body.note, expectedRevision: body.expectedRevision as number });
         this.#sendJson(res, task ? 200 : 404, { task });
-      } catch (error) { this.#sendApiError(res, error); }
+      } catch (error) { this.#sendJson(res, 409, { error: { code: 'project_task_conflict', message: error instanceof Error ? error.message : String(error) } }); }
       return;
     }
     const taskMatch = /^\/v1\/projects\/([^/]+)\/tasks(?:\/([^/]+)\/work-session)?$/.exec(url.pathname);
@@ -3545,6 +3922,16 @@ export class HostSessionHttpServer {
           return;
         }
         this.#sendJson(res, 400, { error: { code: 'invalid_project_task_link' } });
+      } catch (error) { this.#sendApiError(res, error); }
+      return;
+    }
+    const ensureCoordinatorMatch = /^\/v1\/projects\/([^/]+)\/coordinator\/ensure$/.exec(url.pathname);
+    if (ensureCoordinatorMatch && req.method === 'POST') {
+      const projectId = this.#decodePathPart(ensureCoordinatorMatch[1]!, res);
+      if (projectId === null) return;
+      try {
+        const coordinator = await api.ensureCoordinatorSession(projectId);
+        this.#sendJson(res, 200, { coordinator });
       } catch (error) { this.#sendApiError(res, error); }
       return;
     }
@@ -5824,6 +6211,16 @@ export class HostSessionHttpServer {
     }
     if (error instanceof HostProjectApiError) {
       this.#sendJson(res, 409, { error: { code: error.code, message: error.message } });
+      return;
+    }
+    if (error instanceof ProjectChannelServiceError) {
+      // The status follows the domain code, not a guess made here: a stale
+      // revision (409), a rejected credential (400) and a bot that cannot reach
+      // Discord (503) need different remedies, and a 500 for any of them would
+      // misreport what the Host actually knows.
+      this.#sendJson(res, projectChannelHttpStatus(error.code), {
+        error: { code: error.code, message: error.message },
+      });
       return;
     }
     if (error instanceof HostProviderApiError) {

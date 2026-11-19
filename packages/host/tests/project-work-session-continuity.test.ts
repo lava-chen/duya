@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { HostSessionRecord } from '@duya/agent-protocol/session-api';
 import { createHostSessionService } from '../src/session-service.js';
 import { createProjectDispatchPort } from '../src/project/dispatch.js';
+import { projectTaskFixture } from './project-task-fixture.js';
 
 describe('Project work Session continuity', () => {
   it('lets the currently bound Coordinator find and continue a prior Coordinator work Session', async () => {
@@ -24,6 +25,10 @@ describe('Project work Session continuity', () => {
     const starts: string[] = [];
     let runSequence = 0;
     const caller = { sessionId: coordinator.id, runId: 'coordinator-run', epoch: 1 };
+    const fixture = projectTaskFixture(coordinator.id);
+    fixture.tasks.create({ id: 'task-old', sessionId: 'coordinator-old', subject: 'Old work', description: 'Continue it' });
+    fixture.projects.bindTask(fixture.projectId, 'task-old', 'coordinator-old');
+    fixture.projects.bindWorkSession(fixture.projectId, 'task-old', work.id);
     const service = createHostSessionService({
       sessions: {
         get: async (id: string) => records.get(id) ?? null,
@@ -57,15 +62,7 @@ describe('Project work Session continuity', () => {
       readLocalSession: async (id: string) => records.has(id)
         ? { id, workingDirectory: workspace, extensions: {} } as never
         : null,
-      projectDispatch: createProjectDispatchPort({
-        projects: {
-          getByCoordinatorSession: (id: string) => id === coordinator.id ? { project_id: 'project-1' } : null,
-          listTaskLinks: () => [{ work_session_id: work.id }],
-          bindTask: () => { throw new Error('not used'); },
-          bindWorkSession: () => null,
-        } as never,
-        tasks: { create: () => undefined, update: () => undefined } as never,
-      }),
+      projectDispatch: createProjectDispatchPort(fixture.stores),
       validateCaller: (value) => {
         if (value.sessionId !== caller.sessionId || value.runId !== caller.runId || value.epoch !== caller.epoch) {
           throw new Error('caller attempt is not current');

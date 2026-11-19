@@ -1,0 +1,217 @@
+import { randomUUID } from 'node:crypto';
+import { homedir } from 'node:os';
+import * as path from 'node:path';
+import { createInterface } from 'node:readline/promises';
+import { Writable } from 'node:stream';
+import type { ProjectChannelBinding, ProjectChannelConnection, ProjectChannelOverview } from '@duya/agent-protocol/project-channels';
+import type { HostProjectRecord } from '@duya/agent-protocol/projects';
+import type { HostSessionHttpClient } from '@duya/host/http-client';
+import { CliApiClient } from '../api/client.js';
+import { CliApiError } from '../api/errors.js';
+import { PROJECT_CHANNEL_TOKEN_ENV } from './project-channel.js';
+
+type Choice<T> = { label: string; value: T };
+const print = (line: string): void => { process.stdout.write(`${line}\n`); };
+const terminalText = (value: string): string => value.replace(/[\u0000-\u001f\u007f-\u009f]/gu, ' ');
+
+function openPrompts() {
+  let secret = false;
+  const output = new Writable({
+    write(chunk, _encoding, done) {
+      if (secret) done();
+      else process.stdout.write(chunk, done);
+    },
+  });
+  const input = createInterface({ input: process.stdin, output, terminal: true, historySize: 0 });
+  const cancellation = new AbortController();
+  input.once('close', () => cancellation.abort());
+  input.on('SIGINT', () => input.close());
+
+  async function ask(label: string, options: { fallback?: string; hidden?: boolean } = {}): Promise<string | null> {
+    if (cancellation.signal.aborted) return null;
+    const prompt = options.fallback === undefined ? `${label}: ` : `${label} [${terminalText(options.fallback)}]: `;
+    secret = options.hidden === true;
+    if (secret) process.stdout.write(prompt);
+    try {
+      const answer = (await input.question(secret ? '' : prompt, { signal: cancellation.signal })).trim();
+      return answer || options.fallback || '';
+    } catch (error) {
+      if (cancellation.signal.aborted) return null;
+      throw error;
+    } finally {
+      if (secret) print('');
+      secret = false;
+    }
+  }
+
+  async function choose<T>(title: string, choices: readonly Choice<T>[], fallback?: number): Promise<T | null> {
+    print(`\n${terminalText(title)}`);
+    choices.forEach(({ label }, index) => print(`  ${index + 1}) ${terminalText(label)}`));
+    for (;;) {
+      const answer = await ask('Choose a number or q to go back',
+        fallback === undefined ? {} : { fallback: String(fallback + 1) });
+      if (answer === null || answer.toLowerCase() === 'q') return null;
+      if (/^\d+$/u.test(answer)) {
+        const selected = choices[Number(answer) - 1];
+        if (selected !== undefined) return selected.value;
+      }
+      print(`Enter a number from 1 to ${choices.length}.`);
+    }
+  }
+
+  return { ask, choose, close: () => input.close() };
+}
+
+type Prompts = ReturnType<typeof openPrompts>;
+
+export async function selectProject(
+  client: HostSessionHttpClient,
+  connection: { origin: string; token: string },
+  options: { projectId?: string; channelsOnly?: boolean },
+): Promise<HostProjectRecord | null> {
+  const listNamed = async () => (await client.listProjects()).filter(({ name, canonical_root }) => name.trim() !== '' && canonical_root.trim() !== '');
+  const specified = options.projectId === undefined ? null : await client.getProject(options.projectId.trim());
+  if (options.projectId !== undefined && specified === null) throw new Error(`Project "${options.projectId}" does not exist.`);
+  if (specified !== null && !options.channelsOnly) return specified;
+
+  if (process.stdin.isTTY !== true || process.stdout.isTTY !== true) {
+    if (options.channelsOnly) throw new Error('Channel setup needs an interactive terminal. Use channel connect and bind for scripting.');
+    const projects = await listNamed();
+    if (projects.length === 1) return projects[0]!;
+    throw new Error('Run duya project in a terminal to create or choose a project, or pass --project <id>.');
+  }
+
+  const prompts = openPrompts();
+  const channels = new CliApiClient(connection.origin, connection.token);
+  try {
+    if (specified !== null) {
+      await manageChannels(channels, specified, prompts);
+      return null;
+    }
+    for (;;) {
+      const recent = (await listNamed())
+        .sort((a, b) => b.last_seen_at - a.last_seen_at || a.name.localeCompare(b.name));
+      const entry = await prompts.choose<HostProjectRecord | 'create'>('Projects', [
+        ...recent.map((project) => ({ label: `${project.name}  ·  ${project.canonical_root}`, value: project })),
+        { label: 'Create a project', value: 'create' },
+      ], 0);
+      if (entry === null) return null;
+      let project: HostProjectRecord | null;
+      try {
+        project = entry === 'create' ? await createProject(client, prompts) : entry;
+      } catch (error) {
+        print(`Could not create the project. ${error instanceof Error ? terminalText(error.message) : 'Try another folder.'}`);
+        continue;
+      }
+      if (project === null) continue;
+      if (options.channelsOnly) {
+        await manageChannels(channels, project, prompts);
+        return null;
+      }
+      for (;;) {
+        const action = await prompts.choose(`${project.name}`, [
+          { label: 'Open Coordinator', value: 'open' },
+          { label: 'Manage Discord channels', value: 'discord' },
+        ], 0);
+        if (action === null) break;
+        if (action === 'open') return project;
+        await manageChannels(channels, project, prompts);
+      }
+    }
+  } finally {
+    prompts.close();
+  }
+}
+
+async function createProject(client: HostSessionHttpClient, prompts: Prompts): Promise<HostProjectRecord | null> {
+  const folder = await prompts.ask('Existing project folder', { fallback: process.cwd() });
+  if (folder === null) return null;
+  const canonical = path.resolve(folder === '~' ? homedir() : /^~[/\\]/u.test(folder) ? path.join(homedir(), folder.slice(2)) : folder);
+  const name = await prompts.ask('Project name', { fallback: path.basename(canonical) || 'Project' });
+  if (name === null) return null;
+  if ((await prompts.ask(`Create "${terminalText(name)}" in ${terminalText(canonical)}? (y/N)`))?.toLowerCase() !== 'y') return null;
+  const project = await client.createProject({ name, paths: [{ path: canonical, description: null }] });
+  print(`Created ${terminalText(project.name)}.`);
+  return project;
+}
+
+const DISCORD_CHANNEL_LINK = /^https:\/\/(?:discord\.com|discordapp\.com)\/channels\/(\d{5,25})\/(\d{5,25})\/?$/u;
+const DISCORD_ID = /^\d{5,25}$/u;
+
+async function manageChannels(client: CliApiClient, project: HostProjectRecord, prompts: Prompts): Promise<void> {
+  const route = `/v1/projects/${encodeURIComponent(project.project_id)}/channels`;
+  for (;;) {
+    let overview: ProjectChannelOverview | null;
+    try {
+      ({ overview } = await client.get<{ overview: ProjectChannelOverview | null }>(route));
+    } catch (error) {
+      if (error instanceof CliApiError && error.httpStatus === 404) {
+        print('This Host has no Discord channel support. Close Duya clients using this data directory, then run duya serve. Reopen duya project in a second terminal.');
+      } else {
+        print('Could not read Discord channel settings. Check that the Host is running.');
+      }
+      return;
+    }
+    const connection = overview?.connection ?? null;
+    const status = connection === null ? 'Bot not configured' : overview?.observation?.state ?? 'Bot configured · connection unobserved';
+    print(`\nDiscord · ${terminalText(project.name)} · ${status}`);
+    for (const binding of overview?.bindings ?? []) {
+      print(`  ${terminalText(binding.label || binding.channelId)} · ${binding.enabled ? 'enabled' : 'disabled'} · ${binding.allowedUserIds.length} allowed`);
+    }
+    const choice = await prompts.choose('Discord settings', [
+      { label: connection?.enabled ? 'Add a channel' : 'Connect a bot and add a channel', value: 'bind' },
+      ...(connection?.enabled ? [{ label: 'Update bot token', value: 'token' }] : []),
+    ], 0);
+    if (choice === null) return;
+    try {
+      if (choice === 'token') {
+        await configureBot(client, route, connection, prompts);
+        continue;
+      }
+      const target = await prompts.ask('Discord channel link (Copy Channel Link)');
+      if (target === null || target === '') continue;
+      const match = DISCORD_CHANNEL_LINK.exec(target);
+      if (!match) { print('Paste the full https://discord.com/channels/server/channel link.'); continue; }
+      const [, guildId, channelId] = match;
+      if ((overview?.bindings ?? []).some((item) => item.guildId === guildId && item.channelId === channelId && item.enabled)) {
+        print('This channel is already connected.'); continue;
+      }
+      const members = await prompts.ask('Allowed Discord user IDs, separated by spaces or commas');
+      if (members === null) continue;
+      const allowedUserIds = [...new Set(members.split(/[\s,]+/u).filter(Boolean))];
+      if (allowedUserIds.length === 0 || !allowedUserIds.every((id) => DISCORD_ID.test(id))) {
+        print('Enter at least one numeric user ID (Copy User ID in Discord Developer Mode).'); continue;
+      }
+      const label = await prompts.ask('Channel label (optional)');
+      if (label === null) continue;
+      if ((await prompts.ask(`Allow these ${allowedUserIds.length} users to talk to the Coordinator in this channel? (y/N)`))?.toLowerCase() !== 'y') continue;
+      const active = connection?.enabled ? connection : await configureBot(client, route, connection, prompts);
+      if (active === null) continue;
+      const { binding } = await client.post<{ binding: ProjectChannelBinding }>(`${route}/bindings`, {
+        requestId: randomUUID(), connectionId: active.connectionId, guildId, channelId, allowedUserIds,
+        ...(label ? { label } : {}),
+      }, { timeoutMs: 20_000 });
+      print(`Channel ${terminalText(binding.label || binding.channelId)} linked. Mention the bot in Discord to try it.`);
+    } catch (error) {
+      const status = error instanceof CliApiError ? error.httpStatus : undefined;
+      print(status === 409 ? 'The settings changed. Read them again and retry.'
+        : status === 503 ? 'Discord is unreachable. Check the bot connection and retry.'
+        : 'Discord setup was refused. Check the token, channel link and bot permissions.');
+    }
+  }
+}
+
+async function configureBot(
+  client: CliApiClient, route: string, connection: ProjectChannelConnection | null, prompts: Prompts,
+): Promise<ProjectChannelConnection | null> {
+  const envToken = process.env[PROJECT_CHANNEL_TOKEN_ENV]?.trim();
+  const useEnv = envToken && (await prompts.ask(`Use ${PROJECT_CHANNEL_TOKEN_ENV}? (y/N)`))?.toLowerCase() === 'y';
+  const token = useEnv ? envToken : await prompts.ask('Discord bot token (hidden)', { hidden: true });
+  if (!token) return null;
+  const result = await client.put<{ connection: ProjectChannelConnection }>(`${route}/connection`, {
+    requestId: randomUUID(), token,
+    ...(connection === null ? {} : { expectedRevision: connection.revision }),
+  }, { timeoutMs: 45_000 });
+  print('Discord bot verified and saved.');
+  return result.connection;
+}

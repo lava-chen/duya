@@ -4,6 +4,7 @@ import { escapeTags, type Styles } from '../transcript-view.js';
 import { DISPLAY_PROFILES, type DisplayProfileId } from '../display-profiles.js';
 import { formatTaskDuration, taskStatusGlyph, type BackgroundTaskView } from '../background-tasks.js';
 import { prStateLabel, prTone, type PrBadge } from '../pr-badge.js';
+import type { ProjectWorkbenchSummary } from '../project-workbench.js';
 import type { WorkbenchWorkspaceSummary } from '../workbench-workspace.js';
 
 export interface SidebarTarget {
@@ -20,6 +21,7 @@ export interface WorkbenchSidebarProps {
   readonly activityActive: boolean;
   readonly tasks: readonly BackgroundTaskView[];
   readonly workspace: WorkbenchWorkspaceSummary;
+  readonly project?: ProjectWorkbenchSummary | undefined;
   readonly pullRequest: PrBadge | null;
   readonly contextTokens: number | null;
   readonly contextBudget: number | null;
@@ -52,7 +54,7 @@ export class WorkbenchSidebar implements UIComponent<WorkbenchSidebarProps> {
       scene.writeTagged(viewport.row + row, viewport.column, styles.muted('│'));
     }
     if (viewport.height < 4 || width < 16) return;
-    scene.writeTagged(viewport.row, viewport.column + 2, styles.accent('WORKBENCH'));
+    scene.writeTagged(viewport.row, viewport.column + 2, styles.accent(this.props.project === undefined ? 'WORKBENCH' : 'PROJECT'));
     const lines: Array<{ text: string; command?: string; task?: BackgroundTaskView }> = [];
     const text = (value: string): void => { lines.push({ text: styles.muted(escapeTags(truncateToWidth(value.replace(/[\r\n\t]/gu, ' '), width))) }); };
     const action = (label: string, command: string, selected = false): void => {
@@ -67,29 +69,48 @@ export class WorkbenchSidebar implements UIComponent<WorkbenchSidebarProps> {
       lines.push({ text: tone(clipped), task });
     };
     const number = (value: number | null): string => value === null ? '—' : value.toLocaleString('en-US');
-    const workspace = this.props.workspace;
-    text(this.props.sessionTitle);
-    action('New session', '/new');
-    action('All sessions', '/sessions');
-    text('');
-    text('WORKTREE');
-    text(`${workspace.branch ?? 'detached'} · ${workspace.linkedWorktree ? 'linked worktree' : 'repository'}`);
-    text(workspace.root);
-    if (!workspace.observed) {
-      text('Git status unavailable');
-    } else if (workspace.changedFiles === 0) {
-      text('Working tree clean');
+    const project = this.props.project;
+    if (project !== undefined) {
+      text(project.name);
+      action('Overview', '/status');
+      if (project.status === 'loading') text('Loading project status…');
+      else if (project.status === 'unavailable') text('Status unavailable · last known');
+      if (project.taskCounts.length > 0) {
+        text('TASKS');
+        for (const { label, count } of project.taskCounts) text(`${count} ${label}`);
+      } else if (project.status === 'current') text('No tasks yet');
+      text('');
+      action('Work sessions', '/sessions');
+      if (project.status === 'current' && project.sessions.length === 0) text('No work sessions yet');
+      for (const session of project.sessions.slice(0, 8)) {
+        action(`${session.state} · ${session.title}`, `/sessions ${session.id}`);
+      }
+      if (project.sessions.length > 8) text(`+ ${project.sessions.length - 8} more in /sessions`);
     } else {
-      action(`${number(workspace.changedFiles)} changed files`, '/diff');
-      for (const change of workspace.changes) text(`${change.status} ${change.path}`);
-      const remaining = (workspace.changedFiles ?? 0) - workspace.changes.length;
-      if (remaining > 0) text(`+ ${remaining} more · /diff`);
-    }
-    if (this.props.pullRequest !== null) {
-      const badge = this.props.pullRequest;
-      const label = `${badge.label} · ${prStateLabel(badge.state)}`;
-      const clipped = escapeTags(truncateToWidth(`› ${label}`, width));
-      lines.push({ text: styles[prTone(badge.state)](clipped), command: '/pr' });
+      const workspace = this.props.workspace;
+      text(this.props.sessionTitle);
+      action('New session', '/new');
+      action('All sessions', '/sessions');
+      text('');
+      text('WORKTREE');
+      text(`${workspace.branch ?? 'detached'} · ${workspace.linkedWorktree ? 'linked worktree' : 'repository'}`);
+      text(workspace.root);
+      if (!workspace.observed) {
+        text('Git status unavailable');
+      } else if (workspace.changedFiles === 0) {
+        text('Working tree clean');
+      } else {
+        action(`${number(workspace.changedFiles)} changed files`, '/diff');
+        for (const change of workspace.changes) text(`${change.status} ${change.path}`);
+        const remaining = (workspace.changedFiles ?? 0) - workspace.changes.length;
+        if (remaining > 0) text(`+ ${remaining} more · /diff`);
+      }
+      if (this.props.pullRequest !== null) {
+        const badge = this.props.pullRequest;
+        const label = `${badge.label} · ${prStateLabel(badge.state)}`;
+        const clipped = escapeTags(truncateToWidth(`› ${label}`, width));
+        lines.push({ text: styles[prTone(badge.state)](clipped), command: '/pr' });
+      }
     }
     text('');
     text('ACTIVITY');

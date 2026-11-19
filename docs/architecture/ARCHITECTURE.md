@@ -87,6 +87,21 @@ entry points. Its shared architecture separates these layers:
   Desktop adapter validates the caller against the durable run/epoch and starts
   work through its existing Agent Server execution API. Ordinary Desktop
   session delegation still uses the legacy notification path.
+- **Project Task loop**: `project/task-lifecycle.ts` owns revision-checked task
+  operations over the canonical `TaskStore`. `ProjectStore` retains Task bindings,
+  launch attempts and immutable human review receipts, not duplicate task content.
+  Launch admission reserves a unique open attempt before asynchronous Session
+  creation; retries preserve Task identity and earlier attempts. Unknown launches
+  block duplicate dispatch until reconciled against the durable Run ledger at boot.
+  Successful Run settlement marks execution completed, never acceptance. The
+  Coordinator tool exposes create/update but no acceptance action; the authenticated
+  client control plane persists explicit `user_action` review receipts. TUI
+  `/project-task` confirms the human action and submits the observed revision;
+  forged `user_message` references are not accepted as review provenance.
+  Canonical Tasks have no legacy `chat_sessions` cascade: migration 68 rebuilds
+  existing tables transactionally while preserving incoming Project FKs, indexes
+  and triggers. This lets Host-only Coordinators create Tasks and keeps Project
+  work reachable after an old conversation is deleted.
 - **AI Layer**: `@duya/ai` multi-protocol adapter
 - **Managed checkout execution**: Host checks ownership for local Write/Edit/
   ApplyPatch and shell dispatch, including deferred calls and shell workers,
@@ -134,6 +149,11 @@ multipart ACKs and signed failure retries preserve the provider recovery window.
 Their per-binding inbox replaces the old global message-ID cache for dedup.
 This path is opt-in through S3c scheduler ownership; legacy channel retirement
 remains S7.
+
+Project Discord channels use the separate Project channel service. A persistent
+`duya serve` with a worker composes Gateway's Discord transport through its
+public subpath. The Host owns the connection lifecycle and message ledgers.
+The client-scoped TUI Host and ledger-only Host do not start Project sockets.
 
 | Layer | Technology |
 |-------|------------|

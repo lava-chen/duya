@@ -26,6 +26,25 @@ export interface SendMessageChannelActivity {
   mediaUrl?: string;
 }
 
+/** One external send, with the fields the project-channel contract allows. */
+export interface SendMessageProjectChannelInput {
+  readonly requestId: string;
+  readonly channelBindingId: string;
+  readonly text: string;
+  readonly replyToInboundId?: string;
+}
+
+/**
+ * Outcome of a project-channel send.
+ *
+ * `status` is the ledger's own word. A port that cannot answer must refuse
+ * rather than report success: "queued" is not "delivered", and a request that
+ * never reached the transport has no receipt at all.
+ */
+export type SendMessageProjectChannelResult =
+  | { readonly ok: true; readonly deliveryId: string; readonly status: string }
+  | { readonly ok: false; readonly reason: string; readonly message?: string };
+
 export interface SendMessagePort {
   appendMessage(sessionId: string, messages: readonly SendMessageRow[]): Promise<unknown>;
   createWidgetPending(input: {
@@ -63,6 +82,12 @@ export interface SendMessagePort {
     mediaAlt?: string;
   }): Promise<{ success?: boolean; reason?: string; queued?: boolean; deliveryId?: string } | undefined>;
   appendChannelActivity(input: SendMessageChannelActivity): Promise<unknown>;
+  /**
+   * Send to a Project's authorized Discord channel. Absent outside a composed
+   * Project Host, which makes the branch refuse instead of falling back to the
+   * legacy in-app or channel path.
+   */
+  sendToProjectChannel?(input: SendMessageProjectChannelInput): Promise<SendMessageProjectChannelResult>;
   logError(message: string, error: Error, context: Record<string, unknown>, component: string): void;
   logDebug(message: string, context: Record<string, unknown>): void;
 }

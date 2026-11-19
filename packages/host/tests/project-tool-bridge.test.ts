@@ -38,7 +38,9 @@ describe('the standalone Host project tool domain', () => {
     expect(dispatch).toHaveBeenCalledWith({
       action: 'get',
       payload: { limit: 5 },
-      callerSessionId: 'coordinator-1',
+      // The bridge forwards the whole attempt: a channel send is authorised
+      // against the run that is executing it, not against a session id.
+      caller: { sessionId: 'coordinator-1', runId: 'run-1', epoch: 0 },
     });
     expect(result).toEqual({ ok: true, snapshot: undefined });
   });

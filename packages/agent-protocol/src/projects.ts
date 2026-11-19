@@ -44,6 +44,30 @@ export interface HostProjectTaskLink {
   readonly workSessionId: string | null;
   readonly updatedAt: number;
   readonly acceptanceStatus: 'pending' | 'accepted' | 'rejected';
+  readonly revision?: number;
+}
+
+export interface ProjectTaskAttempt {
+  readonly attemptId: string;
+  readonly workSessionId: string | null;
+  readonly runId: string | null;
+  readonly status: 'starting' | 'running' | 'completed' | 'failed' | 'unknown';
+  readonly reason: string | null;
+}
+
+export type ProjectTaskDispatchInput = { subject: string; description: string } | { taskId: string; expectedRevision: number };
+
+export interface ProjectTaskCreateInput {
+  projectId: string; coordinatorSessionId: string; requestId: string; subject: string; description: string;
+}
+export interface ProjectTaskUpdateInput {
+  projectId: string; coordinatorSessionId: string; taskId: string; expectedRevision: number;
+  subject?: string; description?: string; status?: 'pending';
+}
+/** Human control-plane operation. The Host persists its own user_action receipt. */
+export interface ProjectTaskReviewInput {
+  projectId: string; taskId: string; sessionId: string; requestId: string;
+  expectedRevision: number; status: 'accepted' | 'rejected'; note: string;
 }
 
 export interface ProjectContinuitySource { readonly type: string; readonly id: string; }
@@ -66,7 +90,7 @@ export interface ProjectActivity {
   readonly sessionId: string | null; readonly runId: string | null;
   readonly source: ProjectContinuitySource; readonly payload: Record<string, unknown>; readonly createdAt: number;
 }
-export interface ProjectTaskSnapshot { readonly task: Task | null; readonly link: HostProjectTaskLink; }
+export interface ProjectTaskSnapshot { readonly task: Task | null; readonly link: HostProjectTaskLink; readonly attempts?: readonly ProjectTaskAttempt[]; }
 export interface ProjectContinuitySnapshot {
   readonly project: HostProjectRecord;
   readonly state: ProjectContinuityState | null;
@@ -85,7 +109,7 @@ export interface ProjectContinuitySnapshot {
  * executes it.
  *
  * The task CONTENT lives in the task store; this is a projection of it plus
- * the binding. A client never writes task content through the project API, so
+ * the binding. Project task operations delegate to the canonical TaskStore;
  * there is no second task state machine behind this shape.
  */
 export interface HostProjectTaskState {
@@ -143,6 +167,11 @@ export interface HostProjectState {
 }
 
 /** Versioned asynchronous API for durable project metadata. */
+export interface ProjectCoordinatorSessionResult {
+  readonly sessionId: string;
+  readonly created: boolean;
+}
+
 export interface HostProjectApiV1 {
   listProjects(): Promise<readonly HostProjectRecord[]>;
   getProject(projectId: string): Promise<HostProjectRecord | null>;
@@ -150,6 +179,7 @@ export interface HostProjectApiV1 {
   updateProject(projectId: string, patch: HostProjectPatch): Promise<HostProjectRecord | null>;
   deleteProject(projectId: string): Promise<boolean>;
   bindCoordinatorSession(projectId: string, sessionId: string): Promise<HostProjectRecord | null>;
+  ensureCoordinatorSession(projectId: string): Promise<ProjectCoordinatorSessionResult>;
   listProjectTasks(projectId: string): Promise<readonly HostProjectTaskLink[]>;
   bindProjectTask(projectId: string, taskId: string, coordinatorSessionId: string): Promise<HostProjectTaskLink>;
   bindWorkSession(projectId: string, taskId: string, workSessionId: string): Promise<HostProjectTaskLink | null>;
@@ -158,7 +188,9 @@ export interface HostProjectApiV1 {
   updateProjectState(input: { projectId: string; expectedRevision: number; currentState: string; nextStep: string; source: ProjectContinuitySource }): Promise<ProjectContinuityState | null>;
   updateProjectDecision(input: { projectId: string; key: string; content: string; status: ProjectDecision['status']; expectedRevision: number; source: ProjectContinuitySource }): Promise<ProjectDecision | null>;
   updateProjectMemory(input: { projectId: string; key: string; content: string; status: ProjectMemory['status']; expectedRevision: number; source: ProjectContinuitySource }): Promise<ProjectMemory | null>;
-  updateProjectTaskAcceptance(input: { projectId: string; taskId: string; status: 'accepted' | 'rejected'; source: ProjectContinuitySource }): Promise<HostProjectTaskLink | null>;
+  createProjectTask(input: ProjectTaskCreateInput): Promise<ProjectTaskSnapshot>;
+  updateProjectTask(input: ProjectTaskUpdateInput): Promise<ProjectTaskSnapshot>;
+  updateProjectTaskAcceptance(input: ProjectTaskReviewInput): Promise<HostProjectTaskLink | null>;
   listProjectMemoryHistory(projectId: string, key: string, limit?: number): Promise<readonly ProjectMemory[]>;
   listProjectDecisionHistory(projectId: string, key: string, limit?: number): Promise<readonly ProjectDecision[]>;
   /**
