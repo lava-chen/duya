@@ -13,10 +13,11 @@ import { BaseTool } from '../BaseTool.js';
 import type {
   RenderedToolMessage,
   ToolInterruptBehavior,
+  ToolUseContext,
 } from '../contracts/tool.js';
 import { expandPath, looksLikePosixDrivePath, posixPathToWindowsPath } from '../utils/path.js';
 import { sanitizeWorkingDirectory } from '../GrepTool/sanitize.js';
-import { isPathWithinRoots } from '@duya/sandbox';
+import { checkAllowedRoots, describeAllowedRootsDenial } from '../utils/allowed-roots.js';
 
 // ============================================================
 // Tool Definition
@@ -60,7 +61,7 @@ export class GlobTool extends BaseTool {
     return true;
   }
 
-  async execute(input: Record<string, unknown>, workingDirectory?: string): Promise<ToolResult> {
+  async execute(input: Record<string, unknown>, workingDirectory?: string, context?: ToolUseContext): Promise<ToolResult> {
     const validation = validateGlobInput(input);
     if (!validation.valid) {
       return {
@@ -114,20 +115,34 @@ export class GlobTool extends BaseTool {
       }
     }
 
-    if (this.allowedRoots && this.allowedRoots.length > 0) {
-      if (!isPathWithinRoots(safeCwd, [...this.allowedRoots])) {
-        return {
-          id: crypto.randomUUID(),
-          name: this.name,
-          error: true,
-          result: JSON.stringify({
-            success: false,
-            error: `Search path '${safeCwd}' is outside the allowed roots for this tool.`,
-          }),
-        };
-      }
+    // Two paths can leave the trusted roots: the search directory and the
+    // pattern's own literal prefix. A pattern may walk up with `..` (up to
+    // three levels), so the prefix is resolved and judged on its own.
+    const searchRoot = checkAllowedRoots(() => safeCwd, this.allowedRoots, context);
+    if (!searchRoot.allowed) {
+      return {
+        id: crypto.randomUUID(),
+        name: this.name,
+        error: true,
+        result: JSON.stringify({
+          success: false,
+          error: describeAllowedRootsDenial(searchRoot.denial!, `Search path '${safeCwd}'`),
+        }),
+      };
     }
-
+    const patternBase = globPatternBase(effectivePattern, safeCwd);
+    const patternRoot = checkAllowedRoots(() => patternBase, this.allowedRoots, context);
+    if (!patternRoot.allowed) {
+      return {
+        id: crypto.randomUUID(),
+        name: this.name,
+        error: true,
+        result: JSON.stringify({
+          success: false,
+          error: describeAllowedRootsDenial(patternRoot.denial!, `Pattern path '${patternBase}'`),
+        }),
+      };
+    }
     return executeGlob(effectivePattern, safeCwd, { maxResults });
   }
 
@@ -306,6 +321,24 @@ export function splitAbsoluteGlob(absPattern: string): { root: string; rel: stri
     root,
     rel: segments.slice(idx).join('/'),
   };
+}
+
+/**
+ * The directory a pattern starts from: its literal prefix, resolved against
+ * the search directory. Wildcards end the prefix, so `src/**\/*.ts` resolves
+ * to `<cwd>/src` and `../*.ts` to the parent of the search directory — the
+ * case a root check has to catch before the walk starts.
+ */
+export function globPatternBase(pattern: string, cwd: string): string {
+  if (path.isAbsolute(pattern)) {
+    return path.resolve(splitAbsoluteGlob(pattern).root);
+  }
+  const literal: string[] = [];
+  for (const segment of pattern.split(/[/\\]/)) {
+    if (/[*?[\]{}]/.test(segment)) break;
+    literal.push(segment);
+  }
+  return path.resolve(cwd, ...literal);
 }
 
 /**

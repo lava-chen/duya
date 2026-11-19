@@ -17,8 +17,8 @@ function actionEnum(schema: Record<string, unknown>): string[] {
 describe('PRESET_AGENT_PROFILES', () => {
   it('project-coordinator runs on the dedicated project prompt system', () => {
     const coordinator = PRESET_AGENT_PROFILES.find((p) => p.id === PROJECT_COORDINATOR_PROFILE_ID)!;
-    expect(coordinator.allowedTools).toEqual(['session', 'project']);
-    expect(PROJECT_COORDINATOR_ALLOWED_TOOLS).toEqual(['session', 'project']);
+    expect(coordinator.allowedTools).toEqual(['session', 'project', 'read', 'glob', 'grep']);
+    expect(PROJECT_COORDINATOR_ALLOWED_TOOLS).toEqual(['session', 'project', 'read', 'glob', 'grep']);
     expect(PROJECT_COORDINATOR_ALLOWED_TOOLS).not.toContain('todo');
     expect(coordinator.disallowedTools).toEqual([...PROJECT_COORDINATOR_DISALLOWED_TOOLS]);
     expect(coordinator.disallowedTools).toEqual(expect.arrayContaining([
@@ -31,14 +31,16 @@ describe('PRESET_AGENT_PROFILES', () => {
     const result = resolveAllowedTools(
       coordinator,
       [
-        'session', 'session_spawn', 'project', 'todo', 'read', 'write', 'bash', 'task', 'memory',
+        'session', 'session_spawn', 'project', 'todo', 'read', 'glob', 'grep', 'write', 'edit',
+        'apply_patch', 'bash', 'powershell', 'task', 'memory',
         'tool_catalog', 'tool_invoke', 'session_fork', 'session_rename', 'set_session_title',
       ],
     );
-    expect(result.allowed.sort()).toEqual(['project', 'session']);
+    expect(result.allowed.sort()).toEqual(['glob', 'grep', 'project', 'read', 'session']);
     expect(result.denied).toEqual(expect.arrayContaining([
       'session_spawn', 'todo', 'tool_catalog', 'tool_invoke',
       'session_fork', 'session_rename', 'set_session_title',
+      'write', 'edit', 'apply_patch', 'bash', 'powershell',
     ]));
     expect(result.isValid).toBe(true);
   });

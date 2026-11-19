@@ -66,12 +66,15 @@ describe('project prompt system', () => {
     const byName = new Map(partition.stable.map((section) => [section.name, section.content]));
     const identity = byName.get('projectIdentity') ?? '';
     expect(identity).toContain('Project Coordinator');
-    expect(identity).toContain('read project records and manage work Sessions');
-    expect(coordinator?.allowedTools).toEqual(['session', 'project']);
+    expect(identity).toContain('read project records, read the workspace of the project you are');
+    expect(identity).toContain('bound to, and manage work Sessions.');
+    expect(coordinator?.allowedTools).toEqual(['session', 'project', 'read', 'glob', 'grep']);
 
     const operation = byName.get('projectOperation') ?? '';
     expect(operation).toContain('project');
     expect(operation).toContain('project get');
+    expect(operation).toContain("Read the bound project's workspace");
+    expect(operation).toContain('a read outside that workspace is refused rather than retried.');
 
     const delegation = byName.get('projectDelegation') ?? '';
     expect(delegation.trim()).not.toBe('');

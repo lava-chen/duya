@@ -65,6 +65,17 @@ export interface ToolUseContext {
     workingDirectory?: string;
     mainLoopModel?: string;
     sessionId?: string;
+    /**
+     * Roots the caller trusts for THIS call. A tool that supports
+     * `allowedRoots` enforces this set in addition to the roots it was
+     * constructed with.
+     *
+     * `undefined` means the caller imposed no restriction. An empty array
+     * means the caller trusts no root at all, so every access is refused —
+     * the difference between "unrestricted" and "nothing is trusted" has to
+     * stay observable, or a failed lookup would silently widen access.
+     */
+    allowedRoots?: readonly string[];
   };
   abortController?: Pick<AbortController, 'signal'>;
   getAppState?: () => AppState | undefined;

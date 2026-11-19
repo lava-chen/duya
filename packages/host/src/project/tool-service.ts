@@ -48,6 +48,12 @@ export interface ProjectToolService {
   /** Read-only worker assembly input; identity comes from the transport. */
   getSessionContext(callerSessionId: string): Promise<ProjectSessionPromptContext | null>;
   /**
+   * The trusted project root bound to the caller's Coordinator session.
+   * Null when the caller holds no Coordinator binding. The root comes from
+   * the durable binding, never from a worker-supplied path.
+   */
+  resolveCoordinatorRoot(callerSessionId: string): Promise<string | null>;
+  /**
    * Serve one project tool call. `callerSessionId` comes from the trusted
    * transport, never from the tool payload.
    */
@@ -70,6 +76,11 @@ export function createProjectToolService(options: ProjectToolServiceOptions): Pr
       const context = await projectApi.getProjectContext(projectId, link?.task_id, DEFAULT_CONTEXT_CHARACTERS);
       if (!context) throw new Error('Bound project context unavailable');
       return { ...context, projectId, role: coordinator ? 'coordinator' : 'work', taskId: link?.task_id ?? null };
+    },
+    async resolveCoordinatorRoot(callerSessionId) {
+      const project = stores.projects.getByCoordinatorSession(callerSessionId);
+      const root = project?.canonical_root;
+      return typeof root === 'string' && root.length > 0 ? root : null;
     },
     async dispatch({ action, payload, callerSessionId }) {
       if (!PROJECT_TOOL_ACTIONS.has(action)) {
