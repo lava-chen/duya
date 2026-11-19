@@ -65,13 +65,16 @@
 | 2a37f8fe6 + 本次改动（dirty，未提交） | 同上 | `git diff --check` | 0 | 无空白错误 |
 | 46d257655 / 236c6f183 | 同上 | CI `architecture`（首跑） | 1 | `bundle:verify` 判 STALE：12 个 bundle 输入在 bundle 提交后变更，需重建并提交 worker bundle |
 | f67a5ec08 | 同上 | `npm run bundle:worker` + `npm run bundle:verify` | 0 | bundle 重建后 `FRESH 0/1121 bundle inputs changed` |
+| 9c1349b11 | 同上 | CI `architecture`（复跑） | 0 | bundle 修复后架构门禁通过 |
 
 ## 接续 / 结果
 
 已实现：P0 工具面收窄（`project` 只剩 `get`，canonical `session` 去掉 `rename`，Coordinator 显式禁用 todo/fork/rename/catalog/invoke，提示词去掉已删 action 引用）。
-已验证：类型门禁、架构门禁、capabilities + host 全部测试通过。
-已交付：提交 `46d257655`，分支 `codex/project-coordinator-p0-tool-surface` 已推送，Draft PR [#644](https://github.com/lava-chen/duya/pull/644)（base `master`，CI 待跑）。
+已验证：类型门禁、架构门禁、capabilities + host 全部测试通过；CI 的 `architecture` / `test` / `test scope` 在 PR head `9c1349b11` 上通过。
+已交付：提交 `46d257655`（feat）、`236c6f183`（docs）、`f67a5ec08`（bundle）、`9c1349b11`（docs），分支 `codex/project-coordinator-p0-tool-surface` 已推送，Draft PR [#644](https://github.com/lava-chen/duya/pull/644)（base `master`；CI 剩 typecheck / build 在跑）。
 未提交路径：无。
 副作用：P0 到 P2 之间 Coordinator 没有知识写入面；`duya_app` 的 `session_rename` 保留给 bot。
 回收：未回收（worktree 与分支保留用于本次任务）。
-下一步：等 PR #644 的 review 与 CI；合并需用户授权，合并后同步、重验并按 `scripts/remove-worktree.sh` 回收。
+下一步：等 PR #644 的必需 CI 与 review；合并需用户授权，合并后同步、重验并按 `scripts/remove-worktree.sh` 回收。
+
+下一阶段按设计 §14.4 进入 P1（接入 `read/glob/grep`，只读项目工作区，暂不给写）。P1 在独立 worktree 与独立分支推进，base 取本分支 head `9c1349b11`，PR 叠在 #644 之上（P0 是 P1 的前置）。P1 的读根取 Coordinator 绑定项目的 `canonical_root`，不额外放宽（§14.7 第 3 项的残余问题：多路径项目与根外的 `docs-local/` 一律不放开，等用户另行裁定）。
