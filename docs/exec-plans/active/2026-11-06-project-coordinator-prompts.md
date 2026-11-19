@@ -1,6 +1,6 @@
 # Project Coordinator 提示词系统设计
 
-状态：active · 负责人：Codex / chat 01a1b0b5-d6ad-7803-ac4e-c8285d15903e · 更新：2026-11-19（第三轮工具合同对账，见文末）
+状态：active · 负责人：Codex / chat 01a1b0b5-d6ad-7803-ac4e-c8285d15903e · 更新：2026-11-19（第三轮工具合同对账、第四轮工具骨架拍板，见文末）
 分支：`codex/project-coordinator-prompt-design` · worktree：`D:/codex/worktrees/project-prompt-design/duya` · base：`54dde175170178f030caebeffde2c1f543c40f40`（从初始 `7eaad892` 接到 #621 最新 head）
 
 ## 目标与边界
@@ -152,3 +152,36 @@ Owner：当前会话（子 agent）。独立 linked worktree：`/home/lavachen/.
 ### 下一步
 
 等待用户评审 §13 与七项待裁定。分支进入 master 后，按 D1–D4 依次修改 `operation`/`delegation`/`identity`/`reporting`/`context-policy` 与工具 schema，并在最新 PR head 上重跑对应验收。未经授权不合并、不回收检出。
+
+## 第四轮接续：用户拍板的工具骨架（2026-11-19）
+
+同一 worktree、分支与 Draft PR #643；本轮仍只改文档。用户已拍板新骨架，D0–D4 排期被 §14.4 的 P0–P5 取代。
+
+### 已定的落地内容
+
+- 设计新增 §14：§14.1 七类能力组与当前实现状态，§14.2 Task 保留但模型不可见，§14.3 协调产物文件布局与维护规则，§14.4 P0–P5 排期，§14.5 提示词重心与改写段落，§14.6 T 表增删，§14.7 已定/待裁定。
+- §13.4 的 D0–D4 标记为已被 §14.4 取代；§13.5 的 T10/T11/T14/T17 作废，T5/T6/T9 由新条目替代；当前有效验收为 T18–T26。
+- 已定删除 `project context/update_state/record_decision/record_memory`、分支 `create_task/update_task/list_channels`、`session rename/fork/set_session_title`、`todo`；`tool_catalog`/`tool_invoke` 继续禁用。
+
+### 与真实能力的冲突（已记录，不阻塞设计）
+
+1. 用户口述“7 个”但枚举了 10 个工具名。按 7 类能力组解释，工具名以枚举为准；差异不再作为待裁定。
+2. `session read/send` 在 canonical `session` 中不存在：master 只有 `list/get/reply/cancel/rename`；`duya_app` 的 `session_read/session_send` 已有 Host 端口。列为 §14.7 第 5 项。
+3. `write/edit` 的项目根约束未接线：`allowedRoots` 在工具层已支持，`packages/host/src/worker-tools/builtin.ts` 的共享实例未传；`checkPathWritePermission` 只是权限策略。列为 §14.7 第 1/2 项。
+4. 分支 `send_message` 仍依赖 `list_channels` 与 `channelBindingId`，与“发送时解析频道”冲突。列为 §14.7 第 6 项。
+5. `project get` 收窄会改变工具输出，但 UI 仍读 HTTP continuity；两者不能互相替代。列为 §14.7 第 4 项。
+
+### 验证记录
+
+| SHA / 范围 | 环境 | 命令或操作 | 退出码 / 结果 |
+| --- | --- | --- | --- |
+| base `2a37f8fe6` + 三份文档 | Linux / Node v26.13.0 | `npm run check:encoding` | 0；`no new violations (11 known)` |
+| 同上 | 同上 | Python 相对链接与 UTF-8 扫描 | 0 新增断链；文件 UTF-8 可读 |
+| 同上 | 同上 | `git diff --check` | 0 |
+| 同上 | 同上 | `npm run architecture:check` | 未完成：`ERR_MODULE_NOT_FOUND: Cannot find package 'yaml'` |
+
+- 仍在无 `node_modules` 的检出中，全量 `typecheck:all` 无法执行；本轮无源码改动，未安装依赖、未放宽门禁。
+
+### 下一步
+
+先评审 §14.7 的 8 项待裁定，其中第 1/2/4/5/6 项决定 P2/P4/P5 的合同形状；P0 可立即开始。`bash` 只有在 P2 观察期拿到业务代码未被改动的证据后才进入。未经授权不合并、不回收检出。

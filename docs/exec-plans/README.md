@@ -6,7 +6,7 @@
 
 三个任务共用已核验的 [Claude 调研/工具映射](../references/claude-projects-coordinator.md)与[首版实施合同](../design-docs/project-coordinator-contract.md)，不再各自探索工具和状态模型。
 
-Coordinator 的完整提示词设计见 [2026-11-06 提示词系统](active/2026-11-06-project-coordinator-prompts.md)：基于 624 装配层，五段正文、Session 绑定上下文、请求前刷新与工具准入已通过 PR #622（`8d8666e1e`）并入 master；2026-11-19 的工具合同对账与下一轮设计见该计划第三轮接续。
+Coordinator 的完整提示词设计见 [2026-11-06 提示词系统](active/2026-11-06-project-coordinator-prompts.md)：基于 624 装配层，五段正文、Session 绑定上下文、请求前刷新与工具准入已通过 PR #622（`8d8666e1e`）并入 master；2026-11-19 的工具合同对账见该计划第三轮接续；用户拍板的 7 类能力组工具骨架与 P0–P5 排期见第四轮接续（设计 §14）。
 
 ## Active Plans
 

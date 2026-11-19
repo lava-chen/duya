@@ -8,6 +8,8 @@
 
 第三轮补充（2026-11-19）：提示词与上下文已在 PR #622（`8d8666e1e`）并入 master；本轮以 master `2a37f8fe6` 和未合入分支 `codex/project-coordinator-tool-picker`（`8ec6ea86b`）只读对账，重写 §12.1/§12.2 的当前状态并给出下一轮合同设计，见 §13。§12 保留为 2026-11-06 的历史结论，不回填新事实。
 
+第四轮补充（2026-11-19，用户拍板）：顶层工具骨架改为 7 类能力组，§13.4 的 D0–D4 排期由 §14.4 取代；已定与待裁定分列于 §14.7。§13 作为当天的对账记录保留。
+
 ## 1. 已理解的实现与真实边界
 
 ```mermaid
@@ -600,22 +602,9 @@ todo 风险已用本检出的已构建 capability 做**内存复现**：向假 T
 
 原则不变：**提示词只描述已经合入并可调用的能力**。因此 master 侧现在不应新增 `create_task`、`list_channels`、`send_message`、`projectTask.taskId` 或 worktree 默认隔离的表述；这些必须先由分支合入。
 
-**依赖顺序**
+**依赖顺序（已被 §14.4 取代）**
 
-| 阶段 | 前置 | 要改的内容 | 验收 |
-| --- | --- | --- | --- |
-| D0 合入 | `codex/project-operator-tui` 及其上的 PR #642（head `codex/project-coordinator-tool-picker`）按栈序合入 `master` | 只合代码与工具合同，不同时改 master 提示词 | T10–T13 |
-| D1 派工正文 | D0 的 Task 生命周期与 Host checkout | `operation.hbs` 把“spawn 顺带创建 Task”改为“先 `create_task`，再用 `projectTask.taskId/expectedRevision` 派工”；`delegation.hbs` 采用分支现有版本，删除与 operation 重复的创建说明 | T12、T13、T16 |
-| D2 频道正文 | D0 的 channel 合同 | `identity.hbs` 说明外部频道是项目的公开声音；`reporting.hbs` 说明频道文本对成员可见、不得含凭据；`context-policy.hbs` 说明入站 id 与投递状态；工具 description 对齐 `queued ≠ sent` | T14 |
-| D3 验收措辞 | D0 的 TUI 控制面 | `reporting.hbs` 明确“请用户在控制面接受/拒绝”，不要暗示模型能代验收 | T15 |
-| D4 收窄 schema | D1 后 | `project` 的 `status` enum 不再同时列出所有状态的并集；按 action 拆 schema 或移除 `accepted/active`，让 Host 拒绝成为唯一来源 | T17 |
-
-**具体增删**
-
-- 常驻段：D1 改 `operation`/`delegation`；D2 改 `identity`/`reporting`/`context-policy`。不改 `projectIdentity` 的职责边界，不把频道说明塞进 system 通用段。
-- 工具 description：`project` 的 create/update/list_channels 说明已由分支提供，合入后直接采用；`session` 的 spawn 说明必须与 Host checkout 行为一致（默认隔离、失败不回退共享）；`send_message` 用窄 schema，不把 Bot 的 widget/attachment/secret 语义投影给 Coordinator。
-- 收窄/移除：`project` schema 的 `status` 并集（见 D4）；`session spawn` 的 `subject/description` 创建即派发简写（合入 create_task 后保留一个迁移窗口，随后收窄，避免两套创建路径）。
-- 不新增：唤醒、steer、transcript 全文读取、用户配置写、模型验收 action。它们仍是缺口，不能用提示词补。
+本节原 D0–D4 排期基于“保留 `project create_task/update_task/list_channels`、Coordinator 窄 `send_message` 依赖 `channelBindingId`”的假设。2026-11-19 用户拍板改为文件化知识与新工具骨架，那些 action 不再进入设计；当前有效排期见 §14.4，本节不再作为实施依据。
 
 ### 13.5 T1–T9 状态与新增验收
 
@@ -642,6 +631,8 @@ todo 风险已用本检出的已构建 capability 做**内存复现**：向假 T
 | T16 | Coordinator 替换/并发 ensure | 同一项目只得到一个绑定；旧绑定失效时替换；旧 Coordinator 不能继续管理 |
 | T17 | `project` schema 收窄 | 模型看不到不可写的 `accepted/active`；Host 仍对旧客户端拒绝 |
 
+第四轮已作废 T5、T6、T9、T10、T11、T14、T17，新增 T18–T26；当前有效验收表以 §14.6 为准。
+
 ### 13.6 待裁定项（必须改代码才能闭环）
 
 1. **`project` 的 `status` 并集**：当前 schema 同时列出 `accepted/active`，靠 Host 拒绝。建议按 action 拆 schema 或移除不可写值；这是 schema 合同变更，不是文档能定的。
@@ -651,3 +642,125 @@ todo 风险已用本检出的已构建 capability 做**内存复现**：向假 T
 5. **standalone 唤醒**：`completionNotification` 仍是 `query`。若要承诺自动继续，需要 Host drain 持久义务并验收；否则提示词必须继续承认限制。
 6. **`unknown` attempt 的重试入口**：当前只能重新读状态再决定。是否暴露“重试同一 Task”的显式 action，需要先定义幂等与迟到启动处理。
 7. **频道入站到 Coordinator 的身份与回复范围**：入站消息进入当前 Coordinator 时，reply scope 绑定 Run/epoch；需要确认提示词只能引用 Host 给的 inbound id，不能自造平台目标。
+
+## 14. 已定工具骨架与分阶段落地（2026-11-19 用户拍板）
+
+### 14.1 已定：七类能力组
+
+用户表述为“7 个”，枚举为 10 个工具名。本设计按**能力组**计数：读取、写入、执行、工作会话、外部消息、用户问询、项目状态，共 7 组；工具名以枚举为准。这个计数差异不改变任何工具语义，也不再作为待裁定。
+
+| 能力组 | 工具/action | 已定语义 | 当前实现状态 |
+| --- | --- | --- | --- |
+| 读取 | `read` / `glob` / `grep` | 读项目工作区，供协调判断 | 工具已注册；Coordinator 白名单不含；`allowedRoots` 已由工具支持但 Host 组合未传 |
+| 写入 | `write` / `edit` | **只写协调产物**，限定项目工作区；不碰业务代码 | 同上；Host 侧边界见 §14.7 |
+| 执行 | `bash` | 暂缓到 P3 观察后再定 | 工具已注册；本轮不启用 |
+| 工作会话 | `session` 的 `list/get/read/spawn/send/cancel` | `read` 按 cursor 读 transcript；`send` 在活 Run 上 steer、空闲时开新一轮 | master canonical `session` 只有 `list/get/reply/cancel/rename`，无 `read/send`；`duya_app` 已有 `session_read`/`session_send` 可复用 Host 端口 |
+| 外部消息 | `send_message` | 发送时解析频道，不再有 `list_channels` 前置 | 仅分支；分支当前要求 `channelBindingId`，需按本决定调整 |
+| 用户问询 | `AskUserQuestion` | 需要用户选择或确认时提问 | 工具已注册；Coordinator 白名单不含 |
+| 项目状态 | `project` 的 `get` | 只读 Activity + Task 投影；不再承载决策/记忆/状态写 | master 有 5 个 action；需收窄 |
+
+已定删除：`project context/update_state/record_decision/record_memory`、分支上的 `create_task/update_task/list_channels`、`session rename`、`session_fork`、`set_session_title`、`todo`。`tool_catalog` / `tool_invoke` 继续保持禁用。
+
+### 14.2 已定：Task 保留，但模型不可见
+
+Task 不设模型工具，由 `session spawn` 的 `projectTask` 隐式创建；状态由 Run 与 UI 验收推进。保留 Task 对象的理由：
+
+- Task 是 UI 里的工作话题与用户可见的执行单位。
+- `project_task_sessions` 把 Task 绑定到 work Session/Run，Host 才能可靠回答“这次派工属于哪个任务”。
+- 终态唤醒需要稳定的去重键；文件里的自然语言标题不能充当幂等键。
+- 用户验收需要一个 Host 权威的落点；文件写一句“已验收”不构成用户动作。
+
+如果改成纯文件，Host 需要另造解析器、冲突合并和身份校验，等于把现在的 TaskStore 重新实现一遍，且仍然无法证明用户验收。因此保留 Task 对象，只把它的**内容与知识**外移到文件。
+
+### 14.3 已定：知识文件化与布局草案
+
+决策、计划、brief、记忆改为项目工作区里的普通 Markdown 文件，不设专用工具。宿主只提供读写能力，位置与维护方式由常驻提示词约定。
+
+**草案布局**（根目录待 §14.7 裁定，以下用 `<project-root>/docs/project/` 表示）：
+
+```text
+<project-root>/docs/project/
+  README.md                 # 目标、当前状态、下一步、索引
+  decisions/NNNN-<slug>.md  # 决定；status + 日期 + 来源
+  briefs/<task-slug>.md     # 派工 brief；与 session spawn 的 projectTask 对应
+  memory/<topic>.md         # 稳定事实与项目约定
+  plans/YYYY-MM-DD-<slug>.md
+```
+
+**维护规则**（与仓库 [文档维护约定](../AGENTS.md) 同一套写法）：
+
+- 开头直接写结论或用途；规则写约束，计划写进度，设计写理由。
+- 同一事实只维护一处；其他文件用相对链接引用，不复制正文。
+- 文件名 `kebab-case`；计划用 `YYYY-MM-DD-topic.md`；决定用四位序号或日期前缀。
+- 决定文件必须写 `proposed / accepted / superseded`、日期与来源；只有用户动作能把决定变为 accepted。
+- brief 沿用 §9 的 `Outcome / Scope / Constraints / Deliverables / Verification / References / Return when`，并链接相关决定，不重复其正文。
+- `README.md` 只放当前目标、当前状态、下一步和索引；长内容放对应文件。
+- 有意义进展、派工前、交接前才更新；不要每轮改一次。
+- 不写凭据、原始日志、完整 transcript 或未经证实的推断。
+- 若项目自带 `AGENTS.md`，先读并遵循；协调文件不能覆盖产品与 Host 规则。
+
+**真相分工**：执行状态（Task status、Run、验收、Activity）以 Host 的 `project get` / `session get` 为准；知识（决定、计划、brief、记忆）以文件为准。文件不能证明验收，Host 终态也不能替代文件里的决定说明。
+
+### 14.4 已定：分阶段落地（取代 §13.4 的 D0–D4）
+
+| 阶段 | 内容 | 前置 | 验收 |
+| --- | --- | --- | --- |
+| P0 收敛 | 白名单只保留 7 类能力组所需工具；删除 project 的四个 action、`rename/fork/set_session_title/todo`；`project get` 只回 Activity + Task；catalog/invoke 继续禁用 | 无 | T18、T19 |
+| P1 只读工作区 | 接入 `read/glob/grep`，允许根为项目工作区；暂不给写 | P0 | T20 |
+| P2 协调写面 | 接入 `write/edit`，允许根为协调产物目录；首次协调时建立 §14.3 布局；Host 侧越界拒绝 | P1、§14.7 第 1/2 项裁定 | T21 |
+| P3 观察与 bash 决定 | 在真实项目上观察 P2 是否出现业务代码改动；只有证据支持才进入 `bash` | P2 | T22 |
+| P4 session 扩展 | canonical `session` 增加 `read/send`、删除 `rename`；`send` 区分活 Run steer 与空闲新 Run | P0 | T23、T24 |
+| P5 频道发送 | `send_message` 发送时解析 binding；去掉 `list_channels` 依赖；区分回复与主动发送 | P0、频道后端 | T25 |
+
+P4/P5 可与 P1/P2 并行。`bash` 的理由单独保留：它同时给出写文件、跑测试和网络访问，越界不能只靠提示词约束；在这层边界只能由工具守，所以必须等读/写边界经真实项目验证后再决定。
+
+### 14.5 已定：提示词重心与需改写段落
+
+重心从“何时调用 `project`”转为“决策写在哪、怎么写、何时更新、何时派工”。
+
+| 常驻段 | 改写方向 |
+| --- | --- |
+| `identity.hbs` | 说明只读项目工作区、只写协调产物、不碰业务代码；没有 `bash`；Task 不是可调工具 |
+| `operation.hbs` | 先读协调文件，再用 `project get` 看执行状态；决定/计划/brief 写入文件；删除 `update_state` 叙述 |
+| `delegation.hbs` | 派工前写 brief 文件，再用 `session spawn` 的 `projectTask` 派工；删除 `create_task/update_task` 与 `subject/description` 简写的说明 |
+| `reporting.hbs` | 何时更新 `README.md` 与决定文件；验收只在 UI；频道文本对成员可见 |
+| `context-policy.hbs` | 文件是知识、Host 是执行真相；文件过期与冲突的处理；重启/压缩后的恢复顺序 |
+
+正文里不得再出现 `project context/update_state/record_decision/record_memory`、`create_task/update_task/list_channels`、`todo`、`rename`。新规则要覆盖：
+
+- 每个决定、计划、brief 写到哪里，文件叫什么。
+- 什么时候从 `proposed` 改为 `accepted`（只能由用户动作触发）。
+- 什么算“有意义进展”，何时更新 `README.md`。
+- 派工前先写 brief，`projectTask` 的 subject/description 与 brief 一致。
+- 文件与 Host 状态冲突时，以 Host 的执行事实为准，并修正文件。
+
+### 14.6 验收表更新
+
+**删除/作废**（对应工具已不在骨架中）：T5（`project context` 截断）、T6（`project_instructions` 写面）、T9（配置/记忆/验收写面）、T10（`create_task`）、T11（`update_task`）、T14（`list_channels` + 绑定前置）、T17（`project status` enum 收窄）。
+
+| 编号 | 条件 | 必须证明 |
+| --- | --- | --- |
+| T18 | Coordinator 工具表 | 恰好 7 类能力组；没有 `todo/rename/fork/set_session_title/catalog/invoke` 与 project 写 action |
+| T19 | `project get` | 只返回 Activity + Task 投影；不再返回 decisions/memories/state；activity cursor 可用 |
+| T20 | `read/glob/grep` | 只能读项目工作区；绝对路径越界、`..`、符号链接逃逸被拒；此时没有写能力 |
+| T21 | `write/edit` | 只能写协调产物目录；业务代码路径被拒；符号链接与不存在的父目录不能绕过 |
+| T22 | `bash` | P3 前不可调用；没有 shell/网络/测试执行通道 |
+| T23 | `session read` | 按 cursor 分页、单页有界；只能读授权的 work Session/lineage；transcript 内容按不可信数据处理 |
+| T24 | `session send` | 活 Run 时是 steer，空闲时开新一轮；返回 receipt；用户持有控制租约时拒绝；`requestId` 幂等 |
+| T25 | `send_message` | 发送时解析绑定；回复需真实入站 id，主动发送需授权；多绑定歧义时拒绝而不是猜；`queued ≠ sent` |
+| T26 | 文件即真相的恢复 | 重启/压缩/换 Coordinator 后，读协调文件 + `project get` 能重建现状；文件里的“完成”不被当作验收 |
+
+### 14.7 已定 / 待裁定
+
+**已定**：7 类能力组；`session` 六个 action 及 `send` 的双语义；`project` 只保留 `get`；知识文件化；Task 保留但模型不可见；删除 `rename/fork/set_session_title/todo`；`bash` 分阶段。
+
+**待裁定（不得写成已具备）**：
+
+1. **`write/edit` 的 Host 边界机制**：工具构造函数支持 `allowedRoots`，`isPathWithinRoots` 同时做词法与 realpath 符号链接检查；但 `packages/host/src/worker-tools/builtin.ts` 用共享实例注册，未传 roots，且项目根随 Coordinator 绑定变化。需要按调用注入受信项目根，或为 Coordinator 构建按 Session 的工具实例。现有 `checkPathWritePermission` 只是权限策略，不是项目根约束。
+2. **边界范围**：允许整棵 `canonical_root`，还是只允许 `docs/project/` 子目录。推荐后者；需在 Host 侧落成可配置根。
+3. **读根范围**：`read/glob/grep` 是否也只允许 `canonical_root`，以及是否允许 `docs-local/`。
+4. **`project get` 输出形状**：删除 decisions/memories/state 后，工具输出与 HTTP continuity 投影是否分叉；UI 仍读 HTTP，不能因工具收窄而丢数据。
+5. **`session read/send` 合同**：canonical `session` 新增 action，还是适配 `duya_app` 的 `session_read/session_send`；`send` 如何判定活 Run、如何与 `session_inputs`/控制租约和用户接管对拍；`read` 的 cursor 与 budget 上限。
+6. **`send_message` 寻址**：没有 `list_channels` 后，Host 如何从项目绑定解析唯一频道；多绑定、同频道多项目、回复范围与主动发送授权冲突时如何拒绝。
+7. **文件位置与 Git**：`docs/project/` 是否纳入项目仓库、是否建议忽略；与项目自带 `AGENTS.md`/文档规范的冲突处理；写权限策略是否要求用户确认。
+8. **`bash` 进入条件**：P2 观察期需要哪些证据（业务代码 diff、越界拒绝记录、真实项目数量）才允许启用；启用后是否仍限制工作目录与网络。
