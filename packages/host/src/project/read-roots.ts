@@ -24,11 +24,18 @@ import { isProjectCoordinatorProfile } from './identity.js';
 import { projectDb } from '../worker-db-client.js';
 import type { ToolUseContext } from '../worker-run-contracts.js';
 
-/** The tools that can read the workspace. */
-const READ_TOOLS: ReadonlySet<string> = new Set(['read', 'glob', 'grep']);
+/**
+ * The tools that can read the workspace.
+ *
+ * This is a compile-time fixed allow-list, not session state: it holds no
+ * request data, no counters and nothing that varies per session, so it must
+ * not be moved into a session scope. It is frozen instead, so the list can
+ * never grow at runtime.
+ */
+const READ_TOOLS: readonly string[] = Object.freeze(['read', 'glob', 'grep']);
 
 export function isWorkspaceReadTool(toolName: string): boolean {
-  return READ_TOOLS.has(toolName.toLowerCase());
+  return READ_TOOLS.includes(toolName.toLowerCase());
 }
 
 /**
