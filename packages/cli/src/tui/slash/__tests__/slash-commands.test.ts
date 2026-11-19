@@ -101,11 +101,13 @@ function makeContext(
   hostOverrides: Partial<TuiSlashHost> = {},
   session: HostSessionRecord = SESSION,
   actions?: TuiSlashActions,
+  projectId?: string,
 ): TuiSlashContext & { notices: string[]; errors: string[] } {
   const { host, notices, errors } = makeHost();
   return {
     client: overrides as unknown as HostSessionHttpClient,
     session,
+    ...(projectId === undefined ? {} : { projectId }),
     tui: { ...host, ...hostOverrides },
     busy: false,
     ...(actions === undefined ? {} : { actions }),
@@ -291,6 +293,7 @@ describe('slash registry', () => {
       'doctor',
       'effort',
       'export',
+      'focus',
       'fork',
       'hotkeys',
       'init',
@@ -301,6 +304,8 @@ describe('slash registry', () => {
       'pr',
       'presets',
       'project',
+      'project-status',
+      'project-task',
       'provider',
       'rename',
       'search',
@@ -1011,6 +1016,86 @@ describe('/export', () => {
     });
     await command('export').run(ctx, '');
     expect(ctx.errors.join('\n')).toContain('disk full');
+  });
+});
+
+describe('/project-status', () => {
+  it('renders authoritative tasks, work sessions, activity and acceptance state', async () => {
+    const panels: Array<{ title: string; lines: readonly string[] }> = [];
+    const ctx = makeContext({
+      getProjectState: vi.fn(async () => ({
+        project: { project_id: 'p1', name: 'Demo' },
+        coordinatorSessionId: 'coordinator-1',
+        tasks: [{ taskId: 't1', subject: 'Ship feature', status: 'completed' }],
+        workSessions: [{ sessionId: 'work-1', title: 'Implement feature', status: 'idle', origin: 'bound', taskId: 't1' }],
+      })) as never,
+      getProjectContinuity: vi.fn(async () => ({
+        tasks: [{ link: { taskId: 't1', acceptanceStatus: 'pending' } }],
+        activity: [{
+          createdAt: 1_700_000_000_000,
+          type: 'run.terminal',
+          taskId: 't1',
+          sessionId: 'work-1',
+          runId: 'run-1',
+        }],
+      })) as never,
+    }, {
+      showPanel: (title, lines) => { panels.push({ title, lines }); },
+    }, SESSION, undefined, 'p1');
+
+    await command('project-status').run(ctx, '');
+
+    expect(panels).toHaveLength(1);
+    expect(panels[0]?.title).toContain('Demo');
+    expect(panels[0]?.lines.join('\n')).toContain('completed · r? · acceptance pending · Ship feature');
+    expect(panels[0]?.lines.join('\n')).toContain('Implement feature');
+    expect(panels[0]?.lines.join('\n')).toContain('run.terminal');
+  });
+
+  it('requires Project mode instead of guessing a project from the session', async () => {
+    const ctx = makeContext({});
+    await command('project-status').run(ctx, '');
+    expect(ctx.errors.join('\n')).toContain('duya project');
+  });
+});
+
+describe('/project-task', () => {
+  function reviewContext(choice = 'confirm') {
+    const review = vi.fn(async () => ({ taskId: 't1', acceptanceStatus: 'accepted' }));
+    const choose = vi.fn(async () => choice);
+    const ctx = makeContext({
+      getProjectContinuity: vi.fn(async () => ({ project: { coordinator_session_id: SESSION.id },
+        tasks: [{ task: { subject: 'Ship feature' }, link: { taskId: 't1', revision: 3, acceptanceStatus: 'pending' } }] })) as never,
+      updateProjectTaskAcceptance: review as never,
+    }, { choose }, SESSION, undefined, 'p1');
+    return { ctx, review, choose };
+  }
+  it('records only the confirmed explicit command with the revision observed by the user', async () => {
+    const { ctx, review, choose } = reviewContext();
+    await command('project-task').run(ctx, 't1 accept Verified tests and behavior');
+    expect(choose).toHaveBeenCalledWith('Accept Ship feature (r3)?', expect.any(Array));
+    expect(review).toHaveBeenCalledWith({ projectId: 'p1', taskId: 't1', sessionId: SESSION.id,
+      requestId: expect.any(String), expectedRevision: 3, status: 'accepted', note: 'Verified tests and behavior' });
+    expect(review.mock.calls[0]?.[0]).not.toHaveProperty('source');
+    expect(ctx.notices.join('\n')).toContain('accepted');
+  });
+  it('does not mutate on cancelled confirmation or missing review note', async () => {
+    const { ctx, review } = reviewContext('cancel');
+    await command('project-task').run(ctx, 't1 reject Missing tests');
+    expect(review).not.toHaveBeenCalled();
+    await command('project-task').run(ctx, 't1 accept');
+    expect(review).not.toHaveBeenCalled();
+    expect(ctx.errors.join('\n')).toContain('Usage:');
+  });
+  it('requires Project mode and surfaces a revision conflict rather than retrying a stale acceptance', async () => {
+    const ordinary = makeContext({});
+    await command('project-task').run(ordinary, 't1 accept Good');
+    expect(ordinary.errors.join('\n')).toContain('duya project');
+    const { ctx, review } = reviewContext();
+    review.mockRejectedValue(new Error('revision_conflict'));
+    await command('project-task').run(ctx, 't1 accept Verified');
+    expect(review).toHaveBeenCalledTimes(1);
+    expect(ctx.errors.join('\n')).toContain('revision_conflict');
   });
 });
 

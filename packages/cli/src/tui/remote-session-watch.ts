@@ -11,18 +11,10 @@
  * second, and — once a new run is seen — the same `watchAgentRunEvents` stream
  * this CLI already uses for its OWN runs.
  *
- * The split of what is visible is a property of the protocol, not of this file:
- * text blocks, tool calls, turn boundaries and the terminal are all durable, so
- * they replay across processes; deltas, status lines and previews are
- * ephemeral and only exist in the executing process. The view therefore updates
- * at block granularity, not character granularity.
+ * The Host delivers live deltas when it owns execution and falls back to
+ * durable blocks where only the ledger is available. A viewer can load its
+ * history and replay active runs without mixing their content twice.
  *
- * ## What this deliberately does NOT do
- *
- *   - It does not re-follow runs that already existed when watching began. A
- *     seed pass marks the ledger as seen so opening a session does not replay
- *     its history; a run already in flight is read from the transcript when it
- *     settles.
  *   - It does not prompt for the other run's permission requests. The approval
  *     overlay belongs to the run this surface owns; a remote ask is surfaced as
  *     a notice.
@@ -49,6 +41,8 @@ export interface RemoteSessionWatchOptions {
   readonly onNotice: (text: string) => void;
   /** Called when a remote run has settled; the caller reconciles the transcript. */
   readonly onRunSettled: () => void | Promise<void>;
+  /** Load history before replay, excluding output from these active runs. */
+  readonly loadHistory?: (activeRuns: ReadonlySet<RunId>) => Promise<void>;
   /** How many ledger rows a poll reads. Runs are ordered newest first. */
   readonly limit?: number;
 }
@@ -110,17 +104,21 @@ export class RemoteSessionWatch {
         this.options.limit ?? DEFAULT_LIMIT,
       );
       if (this.stopped || sessionId !== this.sessionId) return;
-      if (!this.seeded) {
-        for (const run of runs) this.known.add(run.runId);
-        this.seeded = true;
-        return;
+      if (this.options.isPaused()) return;
+      const initial = !this.seeded;
+      const pending = runs.filter((run) => !this.known.has(run.runId) && !this.options.isLocalRun(run.runId));
+      const live = pending.filter((run) => run.status === 'running');
+      if (this.options.loadHistory !== undefined && (initial || live.length > 0)) {
+        if (this.followed.size > 0) return;
+        await this.options.loadHistory(new Set(live.map((run) => run.runId)));
+        if (this.stopped || sessionId !== this.sessionId || this.options.isPaused()) return;
       }
-      for (const run of runs) {
-        if (this.known.has(run.runId)) continue;
-        this.known.add(run.runId);
-        if (this.options.isLocalRun(run.runId)) continue;
-        if (run.status === 'running') this.follow(run);
-        else await this.reconcile(run);
+      this.seeded = true;
+      for (const run of runs) this.known.add(run.runId);
+      for (const run of pending) {
+        if (this.stopped || sessionId !== this.sessionId) return;
+        if (run.status === 'running' && (!initial || this.options.loadHistory !== undefined)) this.follow(run);
+        else if (!initial && run.status !== 'running' && live.length === 0) await this.reconcile(run);
       }
     } catch {
       // Keep watching. The next poll retries; the transcript is untouched.
@@ -142,6 +140,7 @@ export class RemoteSessionWatch {
     let failure: string | null = null;
     try {
       for await (const event of this.options.client.watchAgentRunEvents(run.runId, { signal })) {
+        if (this.stopped || signal.aborted) return;
         const frame = stream.push(event);
         if (frame === null) continue;
         if (frame.type === 'permission') {
@@ -151,7 +150,7 @@ export class RemoteSessionWatch {
         // Terminal frames belong to the run this surface owns: `done`/`error`
         // are handled by the loop that started a turn. Here the settle notice
         // plus the transcript reload are the equivalent, so these are dropped.
-        if (frame.type === 'done' || frame.type === 'error') continue;
+        if ((frame.type === 'done' || frame.type === 'error') && this.options.loadHistory === undefined) continue;
         this.options.onFrame(frame);
       }
     } catch (error) {
@@ -159,7 +158,7 @@ export class RemoteSessionWatch {
         failure = error instanceof Error ? error.message : String(error);
       }
     } finally {
-      this.followed.delete(run.runId);
+      if (this.followed.get(run.runId)?.signal === signal) this.followed.delete(run.runId);
     }
     if (signal.aborted || this.stopped) return;
     if (failure !== null) {

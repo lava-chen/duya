@@ -799,12 +799,14 @@ export async function dispatchDbAction(
     // immediately with the child session id; the child's completion/failure
     // wakes the parent through a background_notification mailbox row.
     case 'session:spawn': {
-      let workingDirectory = p.workingDirectory as string | undefined;
+      const requestedDirectory = p.workingDirectory;
       const prompt = p.prompt as string | undefined;
       const parentSessionId = p.parentSessionId as string | undefined;
-      if (!workingDirectory || !prompt || !parentSessionId) {
-        return { ok: false, reason: 'missing_required_fields' };
+      if (!prompt || !parentSessionId) return { ok: false, reason: 'missing_required_fields' };
+      if (requestedDirectory !== undefined && (typeof requestedDirectory !== 'string' || !requestedDirectory.trim())) {
+        return { ok: false, reason: 'invalid_working_directory' };
       }
+      if (!trustedAttempt || trustedAttempt.sessionId !== parentSessionId) return { ok: false, reason: 'caller_attempt_not_current' };
 
       const checkoutService = getDesktopCheckoutService();
       if (p.use_worktree !== undefined && typeof p.use_worktree !== 'boolean') return { ok: false, reason: 'invalid_use_worktree' };
@@ -812,9 +814,10 @@ export async function dispatchDbAction(
       const parentCursor = checkoutService.read(parentSessionId);
       const isolated = p.use_worktree === true || (p.use_worktree === undefined && Boolean(parentCursor.checkout));
       if (!isolated && (p.source_branch !== undefined || p.branch_name !== undefined)) return { ok: false, reason: 'independent_branch_requires_worktree' };
-      if (!trustedAttempt || trustedAttempt.sessionId !== parentSessionId) return { ok: false, reason: 'caller_attempt_not_current' };
-      if (path.resolve(workingDirectory) !== path.resolve(parentCursor.cwd)) return { ok: false, reason: 'working_directory_must_match_parent' };
-      workingDirectory = parentCursor.cwd;
+      if (requestedDirectory !== undefined && path.resolve(requestedDirectory) !== path.resolve(parentCursor.cwd)) {
+        return { ok: false, reason: 'working_directory_must_match_parent' };
+      }
+      let workingDirectory = parentCursor.cwd;
 
       // Resolve the active provider + model for the child run.
       const activeLlm = getProviderStore().getDefaultLlmProvider();
@@ -1859,7 +1862,9 @@ export async function dispatchDbAction(
       return getDesktopProjectToolService().dispatch({
         action: p.action,
         payload: (toolPayload ?? {}) as Record<string, unknown>,
-        callerSessionId,
+        caller: trustedAttempt
+          ? { sessionId: callerSessionId, runId: trustedAttempt.runId, epoch: trustedAttempt.epoch }
+          : { sessionId: callerSessionId },
       });
     }
     case 'project:continuity-context': {

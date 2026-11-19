@@ -77,9 +77,12 @@ entry points. Its shared architecture separates these layers:
   it records session lineage, parent run identity and the tracked child run.
   Private worker requests carry their captured session/run/attempt identity;
   Host rejects expired attempts and messages from replaced workers. Children
-  inherit provider, permission profile and turn limits, and currently share the
-  parent's canonical workspace directory. `get` reads the tracked run's durable
-  output; `reply` launches another run and `cancel` targets its captured run ID.
+  inherit provider, permission profile and turn limits. The Host resolves the
+  source directory from the parent's workspace. Project Tasks get an isolated
+  Git worktree and branch by default. Ordinary children share the parent
+  directory by default when the parent has no managed checkout. `get` reads
+  the tracked run's durable output; `reply` launches another run and `cancel`
+  targets its captured run ID.
   This composition returns an explicit query-based completion policy. Automatic
   parent wake delivery/restart reconciliation remain separate work (610 T21/T22).
   Desktop Project Coordinators use this same service through the DB bridge,
@@ -87,6 +90,21 @@ entry points. Its shared architecture separates these layers:
   Desktop adapter validates the caller against the durable run/epoch and starts
   work through its existing Agent Server execution API. Ordinary Desktop
   session delegation still uses the legacy notification path.
+- **Project Task loop**: `project/task-lifecycle.ts` owns revision-checked task
+  operations over the canonical `TaskStore`. `ProjectStore` retains Task bindings,
+  launch attempts and immutable human review receipts, not duplicate task content.
+  Launch admission reserves a unique open attempt before asynchronous Session
+  creation; retries preserve Task identity and earlier attempts. Unknown launches
+  block duplicate dispatch until reconciled against the durable Run ledger at boot.
+  Successful Run settlement marks execution completed, never acceptance. The
+  Coordinator tool exposes create/update but no acceptance action; the authenticated
+  client control plane persists explicit `user_action` review receipts. TUI
+  `/project-task` confirms the human action and submits the observed revision;
+  forged `user_message` references are not accepted as review provenance.
+  Canonical Tasks have no legacy `chat_sessions` cascade: migration 68 rebuilds
+  existing tables transactionally while preserving incoming Project FKs, indexes
+  and triggers. This lets Host-only Coordinators create Tasks and keeps Project
+  work reachable after an old conversation is deleted.
 - **AI Layer**: `@duya/ai` multi-protocol adapter
 - **Managed checkout execution**: Host checks ownership for local Write/Edit/
   ApplyPatch and shell dispatch, including deferred calls and shell workers,
@@ -134,6 +152,11 @@ multipart ACKs and signed failure retries preserve the provider recovery window.
 Their per-binding inbox replaces the old global message-ID cache for dedup.
 This path is opt-in through S3c scheduler ownership; legacy channel retirement
 remains S7.
+
+Project Discord channels use the separate Project channel service. A persistent
+`duya serve` with a worker composes Gateway's Discord transport through its
+public subpath. The Host owns the connection lifecycle and message ledgers.
+The client-scoped TUI Host and ledger-only Host do not start Project sockets.
 
 | Layer | Technology |
 |-------|------------|
@@ -1239,6 +1262,19 @@ The plan 587/610 cutover moved execution out of `@duya/agent`. Current ownership
   and restore the selected session's persisted transcript. `/new`, `/clear`,
   and `/exit` are handled in the same entry. Non-interactive terminals retain
   the readline fallback.
+- A selected work session or subagent uses the same transcript viewport as the
+  parent. `session-transcript-observer.ts` owns Host history and run subscriptions
+  for inspected sessions, and `subagent-transcript.ts` projects scoped child
+  progress into the same block model. The terminal retains the parent's draft and
+  scroll position. `agent-switcher.ts` renders selection independently of Host
+  calls, and `focus-transcript.ts` projects the last turn without mutating it.
+- The TUI already uses the Host plugin inventory and exposes plugin mentions.
+  Future TUI extensions can build on these boundaries with typed contributions
+  for tool-row presentation and bounded regions near the composer or in the sidebar.
+  Components would receive presentation data and return markup and named actions
+  for the TUI to measure and route. Terminal input, conversation subscriptions,
+  and permission decisions are owned by the TUI shell and Host. The current
+  modules are internal and do not constitute a public mod API.
 - A chat surface creates a Host session when it opens, because a run has to
   belong to one. A surface that is opened and closed without a message would
   leave that session behind, so the resume picker offers only sessions with a

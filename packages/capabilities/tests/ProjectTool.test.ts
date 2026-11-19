@@ -71,7 +71,7 @@ describe('project capability tool', () => {
     expect(result.error).toBeUndefined();
     expect(result.result).toContain('Project: Project (project-1)');
     expect(result.result).toContain('revision 3');
-    expect(result.result).toContain('task-1 [in_progress · acceptance=pending · work work-1] Implement billing');
+    expect(result.result).toContain('task-1 [in_progress · r0 · acceptance=pending · work work-1] Implement billing');
     expect(result.result).toContain('[accepted r2] api-shape — Use the REST endpoint (user_message:message-1)');
     expect(result.result).toContain('[active r1] style — Prefer small modules (user_message:message-2)');
     expect(result.result).toContain('#7 run.terminal · task=task-1 session=work-1 run=run-1');
@@ -117,6 +117,17 @@ describe('project capability tool', () => {
 
     expect(result.error).toBe(true);
     expect(result.result).toContain('expectedRevision is required');
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('passes task identity and revisions without allowing source spoofing', async () => {
+    const task = { ...snapshot.tasks[0]!, revision: 4 };
+    const { tool, dispatch } = harness({ ok: true, task });
+    const result = await tool.execute({ action: 'update_task', taskId: task.taskId, expectedRevision: 3, subject: 'New title' });
+    expect(result.result).toContain('r4');
+    expect(dispatch).toHaveBeenCalledWith({ action: 'update_task', payload: { taskId: task.taskId, expectedRevision: 3, subject: 'New title' } });
+    dispatch.mockClear();
+    expect((await tool.execute({ action: 'create_task', requestId: 'create', subject: 'x', description: 'y', source: { type: 'user_message', id: 'fake' } })).error).toBe(true);
     expect(dispatch).not.toHaveBeenCalled();
   });
 

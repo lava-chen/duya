@@ -327,3 +327,64 @@ PR #619（`fix/coordinator-session-allowlist`）：architecture / typecheck / bu
 两项都已在 master 上复现，与本次改动无因果关系，两条独立证据：其一，两个 PR 的 diff 都没碰过 `packages/ai` 与 `packages/cli`（`git diff --stat origin/master...HEAD -- packages/ai packages/cli` 为空）；其二，在 base 为原样 `origin/master` 的分支上跑同样两个测试，失败签名逐字相同；把 bundle 换回 master 提交的版本后仍然同样失败，故也不是 bundle 重建引入的。master 的 CI 用 `vitest --changed` 收窄范围，合并提交没把这两个文件拉进 scope，才一直没暴露。
 
 PR #613（`chore/remove-plan-tool`）的 `architecture` job 一度红在 `reference ratchet: FAIL — 775 current / 772 baseline / 3 new`：`agent-retirement-gate` 把「新增对 `packages/agent` 的字面量引用」视为新增退役依赖，而 census 的退休台账**必须**写出被退休的路径，两者对同一批记录要求相反。已按门禁自带的 `RETIREMENT_GATE_FIXTURE_CONTEXT_START/END` 有界豁免（`isBoundedFixtureContext` 把标记区排除出计数，同文件已有先例）修复，验证 `reference ratchet: PASS — 772 current / 772 baseline / 0 new`、退出码 0、census 30/30 通过。
+
+### Coordinator 专用 CLI TUI（2026-11-17）
+
+Owner：当前会话；worktree：`.claude/worktrees/lucid-mestorf-72bac0`；分支：`claude/lucid-mestorf-72bac0`；base：`master` `6d6ea333`；当前 HEAD：`2a37f8fe`。本切片提供无 Desktop 的 Coordinator 使用/检查入口；Task acceptance 仍只读，不伪造 `user_message` 来源。
+
+已实现：裸 `duya` 进入通用 Session TUI，保留 `duya tui`；新增 `duya project [--project <id>]`，通过 Host 选择 Project、共享 Host Project API ensure Coordinator Session，再进入现有聊天 TUI。Coordinator ensure 同时供 CLI 与 Desktop IPC 使用；Host HTTP/协议新增 ensure 接口，按 Project 并发去重并持久绑定。新增 `/project-status` 展示 Host 的 Tasks、Work Sessions、Activity 与 acceptance 状态。
+
+验证环境：Linux、Node `v26.13.0`、npm `11.20.0`；当前提交 SHA 未变，源代码/测试与生成的 Host worker bundle 均未提交。
+
+- 改动前基线：相关测试 9 个文件、95 项通过；依赖构建后重跑。
+- `npm run build:packages`：退出 0，22 个包通过；`npm run build:cli-dev`：退出 0。
+- `npx vitest run packages/cli/src/__tests__/cli-options.test.ts packages/cli/src/tui/slash/__tests__/slash-commands.test.ts packages/host/tests/project-api-http.test.ts apps/desktop/src/main/ipc/__tests__/project-workspace-handlers.test.ts`：退出 0，4 个文件 / 111 项通过。
+- `npx vitest run packages/cli/test/tui-pty.test.ts`：退出 0，2 项通过（受控 Worker 的真实 80 列 PTY）。`node packages/cli/bundle/cli.cjs --help && node packages/cli/bundle/cli.cjs project --help`：退出 0。
+- `npm run typecheck:all && npm run architecture:check`：退出 0；架构门禁无新增违规。
+- `npm run build:packages -- --target @duya/host`：退出 0；更新 `packages/host/bundle/worker-entry.js` 与 `worker-metafile.json`。
+- `git diff --check` 排除生成 bundle 后退出 0；全量 diff check 会报告生成 `worker-entry.js` 中的模板行尾空白，未手改生成文件。`npm run bundle:verify` 退出 1：它按设计要求先提交再核验，报告 5 个未提交 Host 输入使 bundle 为 STALE；提交前不能得到 FRESH 证据。
+
+未验证：未用真实 provider 执行完整 Coordinator 对话；PTY 用受控 Worker 验证通用 TUI，Project ensure / 状态投影由 Host HTTP 与 slash 测试覆盖。Desktop 本轮跑 IPC 定向测试，未跑 Electron 构建。无提交、推送、PR 或合并；本地测试 Host 使用临时目录并已清理。
+
+下一步：获授权后提交本切片、创建 Draft PR，再在提交 SHA 上重跑 `npm run bundle:verify` 与相关门禁；随后由用户用 `duya project` 做真实 Coordinator 产品验收。
+
+### Task 闭环补齐（2026-11-17，已实现）
+
+Owner、worktree、分支及 HEAD 沿用上一切片（`claude/lucid-mestorf-72bac0`，`2a37f8fe63c33e76e943c38d7b1310aa92b231e3`）。保留原有 CLI TUI 未提交改动；无可用 Workspace activity/context 工具，以 Git 与本计划对账。当前检出无 `.codegraph/`，未使用其他检出的索引代替源码。
+
+范围：Coordinator 独立创建/更新 canonical Task；派发已有 Task、记录每次尝试、失败恢复与安全重试；Run 完成与用户验收分离；TUI 显式验收/拒绝，Host 持久化真实用户操作凭证。排除 Channel、Coordinator 间通信及移除 progress_update 的分支集成。
+
+实施顺序：扩展 Project 关联/派工记录的持久化；Host 统一任务操作与派工领域端口；工具和 TUI 接入；定向回归、构建及类型/架构门禁。Task 内容/状态仍只写 TaskStore，派工事实与验收留 Project 关联及 Activity，拒绝模型自报用户身份。
+
+改动前基线：Linux、Node v26.13.0；`npx vitest run packages/host/tests/project-dispatch.test.ts packages/host/tests/session-service.test.ts packages/host/tests/project-tool-service.test.ts packages/host/tests/project-reconciliation.test.ts packages/host/tests/project-api-http.test.ts packages/host/tests/project-state-http.test.ts packages/capabilities/tests/ProjectTool.test.ts` 退出 0，7 文件 / 58 项通过。Test Inventory 未标记这些文件的已知高风险；新增测试使用真实 SQLite/HTTP 覆盖事务、越权、幂等和恢复，不只检查 mock 调用。
+
+已实现：
+
+- `project.create_task/update_task` 操作 canonical TaskStore；稳定 requestId 防重复创建，revision 防止过期更新。Project 由当前 Coordinator 绑定推导，拒绝自报 project/actor/source；通用 Task API 拒绝绕过 Project 生命周期的 update/delete/claim/block/unassign。
+- 派工前原子登记 attempt，并对 starting/running/unknown 建唯一约束；已有 Task 重试保留同一 ID 和完整尝试历史。Session 创建、checkout、Run admission、caller 失效及 Coordinator 替换均持久化失败；不确定启动阻止复制。回执绑定原 attempt，迟到启动响应不结算后续尝试。
+- 复用 Work Session 时保存派工前已有的 Run ID；live/boot 对账排除旧 Run，即使创建时间落在同一毫秒也不误判。多候选 Run 保留 unknown，需恢复对账而非盲目重试。启动前、启动返回后与身份持久化后复核授权；旧 parent 不再绕过当前 Coordinator 的 Project 管理权限。
+- terminal Run 成功只使 Task.completed，acceptance 仍 pending。TUI `/project-task <task-id> accept|reject <review note>` 读取 revision 并要求确认，Host 保存不可变 `user_action` receipt。模型工具不提供验收动作，也不能用虚构 `user_message` 获得验收权限；拒绝后可在同一 Task 上重做。
+- migration 67 增 Task revision、attempts/reviews；真实 Worker 暴露统一库遗留 `tasks.session_id → chat_sessions` 外键问题，migration 68 事务重建 Task 表，去掉旧会话级 cascade、保留 Task 数据/索引/触发器和入向 Project FK。新建统一库不再创建该旧外键；迁移失败恢复 FK enforcement 并回滚 schema_version。
+- 架构说明同步至 [ARCHITECTURE.md](../../architecture/ARCHITECTURE.md)。本切片替代上一切片“验收只读”的范围限制，不改变其历史验证结论。
+
+验证环境及范围：同一检出、Linux、Node v26.13.0、npm 11.20.0；HEAD 仍为 `2a37f8fe63c33e76e943c38d7b1310aa92b231e3`，与本地主分支 merge-base 为 `6d6ea333fbbb3567e55dec5ca80ec010a77ba6ef`。以下均对 dirty 源码执行，不是已提交 SHA 的发布证据。
+
+- `npx vitest run packages/data/tests packages/host/tests/project*.test.ts packages/host/tests/session-service.test.ts packages/capabilities/tests/ProjectTool.test.ts packages/capabilities/tests/unit/worker-session-tools.test.ts packages/host/tests/worker-prompts/project-prompt.test.ts packages/host/tests/worker-product-runtime/project-prompt-context.test.ts packages/cli/src/__tests__/cli-options.test.ts packages/cli/src/tui/slash/__tests__/slash-commands.test.ts apps/desktop/src/main/ipc/__tests__/project-workspace-handlers.test.ts`：退出 0，42 文件 / 360 项通过。包括数据全包、真实事务迁移/回滚、HTTP、故障注入及真实 Coordinator/Worker + Project TUI 验收。
+- 新增 `project-task-worker.test.ts`：本地脚本 provider + 当前检出生产 worker bundle + 真实 Host HTTP/SQLite + CLI bundle 的 100 列 PTY。验证 create → update → session spawn → code-expert terminal → pending acceptance → 键入 `/project-task` → 确认 Accept → 唯一 user_action 记录。没有调用外部付费模型；provider 探测/安全观察请求由本地 fixture 应答。
+- 最终构建后运行 `npx vitest run packages/host/tests/project-task-worker.test.ts packages/cli/test/tui-pty.test.ts`：退出 0，2 文件 / 3 项通过（11:50:23 开始，16.57 秒）；100 列 Project TUI 真实 Worker 验收和 80 列普通 TUI Allow/Deny 均通过。
+- 最后补入原 attempt 回执绑定后，顺序重跑 `npm run build:cli-dev`、`npm run electron:build`、`npm run typecheck:all`、`npm run architecture:check`，全部退出 0。架构检查无新增违规，未修改 baseline；Electron 构建保留 chunk size / esbuild require.resolve 警告。
+- `git diff --check -- . ':!packages/host/bundle'`：退出 0。`node packages/cli/bundle/cli.cjs project --help`：退出 0。
+- `npm run bundle:verify`：退出 1，`STALE 18/1123 bundle inputs`，全部为未提交输入；该门禁比较 Git 提交，不以“本地已重建”代替 committed freshness。无提交授权，未为了变绿提交或修改门禁。
+
+已修复的失败（按文件/用例/签名比较）：
+
+- `project-dispatch.test.ts` 的 `creates and binds exactly one pending Task on a valid plan` / `reports a Task create failure instead of spawning untracked work`，以及 `project-work-session-continuity.test.ts` 的 `lets the currently bound Coordinator find and continue a prior Coordinator work Session`：旧 fake 缺真实 transaction / getTaskLinkByWorkSession；替换为真实 SQLite，不吞失败、不放宽业务断言。
+- `ProjectTool.test.ts` 的 `renders the durable snapshot with task acceptance and provenance`、`project-session-context.test.ts` 的 `keeps missing Task bindings visible and distinguishes execution from acceptance`：旧文本期望未包含 revision。更新完整期望，仍断言 completed 不等于 accepted。
+- `slash-commands.test.ts` 的 `registers every command under its canonical name exactly once`：固定命令表缺 project-task；补入唯一命令名。
+- `project-task-worker.test.ts` 的真实派工用例：`FOREIGN KEY constraint failed` 是生产存储兼容缺陷，已用 migration 68 修复，并新增旧数据/关联保留与失败回滚测试。其余夹具错误为 `invalid_session`（Session profile 应为 auto，而非 Run permission 的 bypassPermissions）、SSE 缺 text_delta，以及 TUI 等待固定标题被自动标题替换；修正协议夹具/就绪信号后同一用例通过，未跳过真实链路断言。
+
+未提交范围：保留上一切片 CLI bootstrap/ensure/IPC 变更；本切片修改 `packages/{agent-protocol,capabilities,command-catalog,data,host}` 的协议、工具、存储、Host 及测试，`packages/cli/src/tui/slash/` 的命令和测试，`apps/desktop/src/main/{cli,projects}` 的装配，Host 生成 bundle，以及本计划/架构说明。新增 `packages/host/src/project/task-lifecycle.ts`、`packages/host/tests/project-task-fixture.ts`、`packages/host/tests/project-task-{http,lifecycle,worker}.test.ts`、`packages/data/tests/task-lifecycle-migration.test.ts`；上一切片新增的 `coordinator-session.ts` 和 `project-workspace.ts` 也仍未提交。
+
+外部副作用（提交前）：无 commit/push/PR/merge；所有验收 Host/provider/PTY 使用临时数据根并已关闭/清理，未改用户真实项目数据或凭据。已实现并完成上述本地验证，尚未合并；未验证真实付费 provider 和打包桌面应用 UI。本轮不实现 Channel、send_message、外部事件订阅或 Coordinator 间通信；unknown 启动尝试仍经 Host 启动恢复对账，不提供强制重派动作。
+
+提交接续（2026-11-17）：用户已授权将当前工作区变更提交为一个逻辑变更，包括上一切片 CLI TUI 及本切片 Task 闭环；本条记录随代码提交，提交 SHA 以本分支 Git 历史为准。提交后核对工作区及 bundle freshness；未获推送、创建 PR 或合并授权，保留本 worktree 与分支，后续 PR 交付等待单独授权。

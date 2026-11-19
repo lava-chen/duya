@@ -78,6 +78,8 @@ export interface InlineFrame {
    * pre-windowed: windowing it here would make "what scrolled off" unknowable.
    */
   readonly scroll: readonly SceneLine[];
+  /** Preview another conversation without committing its rows to shell scrollback. */
+  readonly previewTop?: number | 'tail';
   /**
    * Composer, popup and status, bottom-anchored and never scrolled. Kept
    * separate from `scroll` for two reasons: it must not be committed, and the
@@ -118,6 +120,10 @@ export class InlineSurface {
     return this.#liveStart;
   }
 
+  resetDocument(): void {
+    this.#liveStart = 0;
+  }
+
   /** Repaint the live viewport after another surface borrowed the terminal. */
   invalidate(): void {
     this.#previousLive = [];
@@ -153,13 +159,13 @@ export class InlineSurface {
     // document, so the live area restarts at row 0. Keeping the old offset would
     // leave the new conversation invisible behind rows that no longer exist,
     // which is what a `/clear` followed by an empty-looking screen looks like.
-    if (scroll.length < this.#liveStart) {
+    if (frame.previewTop === undefined && scroll.length < this.#liveStart) {
       this.#liveStart = 0;
       this.#previousLive = [];
     }
 
     let committed = 0;
-    if (liveRows > 0) {
+    if (liveRows > 0 && frame.previewTop === undefined) {
       // The live area is exactly the last `liveRows` rows. Anything above it is
       // already in the terminal's scrollback, which is the only place this mode
       // scrolls — see the module note on why there is no hold buffer.
@@ -184,7 +190,10 @@ export class InlineSurface {
 
     // The live area starts exactly at the committed boundary. Anything above it
     // is already printed, and redrawing it would duplicate the conversation.
-    const start = this.#liveStart;
+    const maxTop = Math.max(0, scroll.length - liveRows);
+    const start = frame.previewTop === undefined ? this.#liveStart
+      : frame.previewTop === 'tail' ? maxTop
+      : Math.max(0, Math.min(maxTop, frame.previewTop));
 
     const window = liveRows > 0 ? scroll.slice(start, start + liveRows) : [];
     // The slack goes ABOVE the chrome. Padding the composed document to capacity

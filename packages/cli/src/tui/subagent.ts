@@ -59,6 +59,7 @@ export interface SubagentSpec {
   readonly effort: string;
   /** One line saying what the child was asked to do. */
   readonly brief: string;
+  readonly runInBackground?: boolean;
 }
 
 /** A non-empty trimmed string, or `''`. */
@@ -102,6 +103,7 @@ export function readSubagentSpec(toolName: string, input: unknown): SubagentSpec
     model: text(record['model']),
     effort: text(record['effort']),
     brief: description !== '' ? description : firstLine(prompt),
+    runInBackground: record['run_in_background'] !== false,
   };
 }
 

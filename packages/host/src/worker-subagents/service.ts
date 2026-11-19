@@ -40,7 +40,7 @@ import {
 } from './task-verification.js';
 import { sessionDb, messageDb } from '../worker-db-client.js';
 import { sendEvent } from '../worker-transport.js';
-import { buildChatAgentProgressPayload, type AgentProgressPayloadMeta } from './progress-bridge.js';
+import { applyProgressEvent, buildChatAgentProgressPayload, type AgentProgressPayloadMeta } from './progress-bridge.js';
 import { backgroundAgentLifecycle } from './background-lifecycle.js';
 import { logger } from '../worker-logger.js';
 import { SUBAGENT_TOOL_NAME } from '@duya/capabilities/SubagentTool/constants';
@@ -706,43 +706,25 @@ export class WorkerSubagentService<
         }
       }
 
-      const onProgress = effectiveRunInBackground
-        ? emitLiveProgress
-        : context.reportAgentProgress
-          ? (event: AgentProgressEvent) => {
-              // Plan 571: the 5s keepalive carries no model output, so it must
-              // not enter the model-facing progress callback (whose event
-              // union is the shared `@duya/ai` contract and has no liveness
-              // member) — and must not be typed as `thinking` to squeeze it
-              // in. It goes straight to the same `chat:agent_progress` wire
-              // event the background path uses, so the renderer can render a
-              // liveness indicator without the text reaching the transcript
-              // projection.
-              if (event.type === 'heartbeat') {
-                emitLiveProgress(event)
-                return
-              }
-              // Terminal events are lifecycle-only (background runs); a
-              // foreground run's stream never emits them, and the wire union
-              // below has no member for them either.
-              if (event.type === 'completed' || event.type === 'failed') return
-              // `type` is destructured into its own binding on purpose: an
-              // object spread of a narrowed discriminated union widens `type`
-              // back to the full union, which would re-admit 'heartbeat'.
-              const { type: eventType, ...eventRest } = event
-              context.reportAgentProgress!({
-                ...eventRest,
-                type: eventType,
-                agentType: agentDefinition.agentType,
-                ...(agentInput.name === undefined ? {} : { agentName: agentInput.name }),
-                ...((agentInput.description || agentInput.name) === undefined
-                  ? {}
-                  : { agentDescription: agentInput.description || agentInput.name }),
-                ...(subAgentSessionId === undefined ? {} : { sessionId: subAgentSessionId }),
-              })
-            }
-          : undefined;
+      const reportParentProgress = context.reportAgentProgress;
+      const childIdentity = {
+        agentType: payloadMeta.agentType,
+        ...(payloadMeta.agentName === undefined ? {} : { agentName: payloadMeta.agentName }),
+        ...(payloadMeta.agentDescription === undefined ? {} : { agentDescription: payloadMeta.agentDescription }),
+        ...(subAgentSessionId === undefined ? {} : { sessionId: subAgentSessionId }),
+      };
+      const onProgress = reportParentProgress === undefined ? undefined : (event: AgentProgressEvent) => {
+        // Heartbeats belong to the live transport; lifecycle completion owns the other terminal frames.
+        if (event.type === 'heartbeat') {
+          emitLiveProgress(event);
+          return;
+        }
+        if (event.type === 'completed' || event.type === 'failed') return;
+        const { type, ...details } = event;
+        reportParentProgress({ ...details, ...childIdentity, type });
+      };
 
+      reportParentProgress?.({ type: 'started', agentId: taskId, ...childIdentity });
       if (effectiveRunInBackground) {
         // The lifecycle's controller is the child's cancel handle: it is what
         // `kill_task` and the sub-agent panel's stop button (via the
@@ -857,7 +839,10 @@ export class WorkerSubagentService<
             ? { description: agentInput.description || agentInput.name }
             : {}),
           agentId: taskId,
-          ...(onProgress ? { onProgress } : {}),
+          onProgress: (event) => {
+            emitLiveProgress(event);
+            if (event.type !== 'heartbeat') return applyProgressEvent({ record }, event);
+          },
           ...(subAgentSessionId ? { sessionId: subAgentSessionId } : {}),
           ...(effort ? { effort } : {}),
           ...(permissionMode ? { permissionMode } : {}),

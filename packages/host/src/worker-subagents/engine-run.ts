@@ -250,9 +250,10 @@ export function subagentLegacyEvent(frame: AgentStreamEvent): SSEEvent {
   const data = frame.data as Record<string, unknown> | undefined;
   switch (frame.type) {
     case 'text':
-      return { type: 'text', data: readContentString(frame.data) };
+    case 'text_delta':
     case 'thinking':
-      return { type: 'thinking', data: readContentString(frame.data) };
+    case 'thinking_delta':
+      return { type: frame.type, data: readContentString(frame.data) };
     case 'error':
       return {
         type: 'error',

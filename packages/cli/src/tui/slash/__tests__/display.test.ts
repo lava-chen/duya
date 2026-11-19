@@ -71,6 +71,7 @@ async function run(options: {
   readonly withoutList?: boolean;
   readonly choice?: string | null;
   readonly live?: LiveVector;
+  readonly focusView?: boolean;
 }): Promise<Harness> {
   const notices: string[] = [];
   const errors: string[] = [];
@@ -96,6 +97,9 @@ async function run(options: {
         for (const id of options.activations ?? []) lastRows = open.onActivate(id) ?? lastRows;
       },
     }),
+    ...(options.focusView === undefined ? {} : {
+      setFocusView: (enabled: boolean | undefined) => enabled ?? !options.focusView,
+    }),
     applyTuiPreferences: (patch) => { patches.push(patch as Record<string, unknown>); },
     liveTuiPreferences: () => live,
     refresh: () => {},
@@ -107,7 +111,7 @@ async function run(options: {
     busy: false,
   } as unknown as TuiSlashContext;
 
-  await COMMAND.run(ctx, options.args ?? '');
+  await (options.focusView === undefined ? COMMAND : DISPLAY_COMMANDS[1]!).run(ctx, options.args ?? '');
 
   return { notices, errors, saved, patches, rows: lastRows };
 }
@@ -211,4 +215,11 @@ describe('/display', () => {
     // The four switch rows must be the settings menu's own, in its order.
     expect(ids.slice(3)).toEqual(['show-thinking', 'expand-blocks', 'tool-results', 'tool-groups']);
   });
+});
+
+it('persists the full-screen focus view toggle', async () => {
+  const enabled = await run({ focusView: false });
+  expect(enabled.saved).toEqual([['cli.tui.focusView', 'true']]);
+  const disabled = await run({ focusView: true });
+  expect(disabled.saved).toEqual([['cli.tui.focusView', 'false']]);
 });

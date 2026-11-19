@@ -54,6 +54,7 @@ import type {
   ToolCallOutcome,
 } from '@duya/agent-protocol';
 import { isKnownCode } from '@duya/agent-protocol';
+import type { AgentProgressEvent } from '@duya/agent-protocol/transcript';
 import { readTextContent, type LegacySseFrame } from '../legacy-sse-contract.js';
 
 /** The raw shape coming off the worker. Untrusted by construction. */
@@ -483,15 +484,20 @@ function translatePermission(
   });
 }
 
-/**
- * `agent_progress` splits three ways.
- *
- * One bloated legacy union with eight `type` values becomes `subagent.started`,
- * `subagent.completed` or `hook.invoked` depending on the worker's own
- * `agentEventType`. The discriminator is the field, and it is preserved on the
- * `hook.invoked` payload so a consumer can tell a hook from a subagent
- * transition without re-deriving the split.
- */
+/** Project the engine drain's typed progress through the same rules as worker frames. */
+export function projectSubagentProgress(event: AgentProgressEvent, parentToolCallId: string): RunEvent | null {
+  const translated = translateAgentProgress({
+    ...event,
+    ...event.hookEvent,
+    agentEventType: event.type,
+    parentToolCallId,
+    agentSessionId: event.sessionId,
+    durationMs: event.duration ?? event.hookEvent?.durationMs,
+  });
+  return translated.ok ? translated.event : null;
+}
+
+// Nested subagent output is live; it does not belong in durable hook records.
 function translateAgentProgress(data: Readonly<Record<string, unknown>>): TranslateResult {
   const kind = str(data['agentEventType']) || str(data['type']);
   // The worker's raw frames key the child as `agentId`; the durable engine
@@ -506,6 +512,24 @@ function translateAgentProgress(data: Readonly<Record<string, unknown>>): Transl
       parentToolCallId: str(data['parentToolCallId'] ?? data['toolCallId']),
       agentType: str(data['agentType']),
       agentName: str(data['agentName']),
+      ...optionalString('sessionId', data['agentSessionId']),
+      ...optionalString('agentDescription', data['agentDescription']),
+    });
+  }
+  if (subagentId !== '' && (kind === 'text' || kind === 'thinking' || kind === 'tool_use'
+    || kind === 'tool_result' || kind === 'done' || kind === 'error')) {
+    return ok({
+      type: 'subagent.progress',
+      subagentId,
+      kind,
+      ...optionalString('sessionId', data['agentSessionId']),
+      ...optionalString('data', data['data']),
+      ...optionalString('toolName', data['toolName']),
+      ...(data['toolInput'] === undefined ? {} : { toolInput: obj(data['toolInput']) }),
+      ...optionalString('toolResult', data['toolResult']),
+      ...optionalString('toolCallId', data['toolCallId']),
+      ...(typeof data['partial'] === 'boolean' ? { partial: data['partial'] } : {}),
+      ...(typeof data['toolError'] === 'boolean' ? { toolError: data['toolError'] } : {}),
     });
   }
   if (kind.includes('completed') || kind.includes('failed')) {

@@ -1,3 +1,5 @@
+import { isProjectCoordinatorProfile } from './project/identity.js';
+import { SendMessageTool } from './worker-tool-bindings/send-message.js';
 import { buildProjectSessionContextBlock } from './worker-context/project-context.js';
 import { createGoalModeToolPorts, createResearchModeToolPorts } from './worker-modes/child-run-ports.js';
 import { definedProperties } from './worker-context/defined-properties.js';
@@ -1837,10 +1839,14 @@ export class WorkerSession implements AgentRuntime {
         };
         catalogTool.setView(catalogView);
         const tools: Tool[] = [];
-        for (const t of allTools) {
-            const exposure = snapshot.getExposure(t.name);
-            if (!isToolVisible(t.name, exposure, discoveredSeed, constraints))
+        for (const registered of allTools) {
+            const exposure = snapshot.getExposure(registered.name);
+            if (!isToolVisible(registered.name, exposure, discoveredSeed, constraints))
                 continue;
+            const executor = isProjectCoordinatorProfile(appliedProfile?.id) && registered.name === 'send_message'
+                ? registry.getExecutor(registered.name)
+                : undefined;
+            const t = executor instanceof SendMessageTool ? executor.toProjectChannelTool() : registered;
             const projection = projectForProvider(t.input_schema);
             // Plan tool-surface W2 (F08): a downgraded tool must stay
             // callable — the projected schema is explicitly permissive and

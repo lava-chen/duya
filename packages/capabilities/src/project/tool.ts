@@ -23,6 +23,7 @@ import type {
   ProjectToolSnapshot,
   ProjectToolState,
   ProjectToolTask,
+  ProjectToolChannel,
 } from './ports.js';
 
 export const PROJECT_TOOL_NAME = 'project';
@@ -37,11 +38,14 @@ const PROJECT_SCHEMA: Record<string, unknown> = {
   properties: {
     action: {
       type: 'string',
-      enum: ['get', 'context', 'update_state', 'record_decision', 'record_memory'],
+      enum: ['get', 'context', 'create_task', 'update_task', 'update_state', 'record_decision', 'record_memory', 'list_channels'],
       default: 'get',
       description:
-        'get: read state, tasks, decisions, memories and activity. context: build bounded prompt-ready context, optionally for one task. update_state: replace current state and next step with a revision check. record_decision: propose or supersede a durable decision. record_memory: record a memory candidate, or supersede/retire an existing memory.',
+        'get: read state, tasks, decisions, memories and activity. context: build bounded prompt-ready context, optionally for one task. create_task: create an idempotent Task without launching work. update_task: edit or reopen a non-accepted Task with a revision check. update_state: replace current state and next step with a revision check. record_decision: propose or supersede a durable decision. record_memory: record a memory candidate, or supersede/retire an existing memory. list_channels: read the external channel bindings this project may answer in. Use it before send_message when you do not know the channelBindingId.',
     },
+    requestId: { type: 'string', minLength: 1, maxLength: 160, description: 'For create_task: stable idempotency key. Reuse the same key after a lost response, not for a different task.' },
+    subject: { type: 'string', minLength: 1, maxLength: 160, description: 'For create_task/update_task: concise task title.' },
+    description: { type: 'string', minLength: 1, maxLength: 12000, description: 'For create_task/update_task: task brief and acceptance criteria.' },
     afterCursor: {
       type: 'integer',
       minimum: 0,
@@ -55,7 +59,7 @@ const PROJECT_SCHEMA: Record<string, unknown> = {
     },
     taskId: {
       type: 'string',
-      description: 'For context: scope the context to one Project Task.',
+      description: 'For context/update_task: identify one Project Task.',
     },
     maxCharacters: {
       type: 'integer',
@@ -67,7 +71,7 @@ const PROJECT_SCHEMA: Record<string, unknown> = {
       type: 'integer',
       minimum: 0,
       description:
-        'For update_state/record_decision/record_memory: the revision you last read. Use 0 for a new key; read with get and retry on a revision conflict.',
+        'For update_task/update_state/record_decision/record_memory: the corresponding record revision you last read. Use 0 for a new key; read with get and retry on a revision conflict.',
     },
     currentState: {
       type: 'string',
@@ -91,9 +95,9 @@ const PROJECT_SCHEMA: Record<string, unknown> = {
     },
     status: {
       type: 'string',
-      enum: ['proposed', 'accepted', 'superseded', 'candidate', 'active', 'retired'],
+      enum: ['pending', 'proposed', 'accepted', 'superseded', 'candidate', 'active', 'retired'],
       description:
-        'For record_decision: proposed or superseded. For record_memory: candidate, superseded or retired. accepted/active require an explicit user action and are refused here.',
+        'For update_task: pending only. For record_decision: proposed or superseded. For record_memory: candidate, superseded or retired. accepted/active require an explicit user action and are refused here.',
     },
   },
   required: [],
@@ -107,8 +111,12 @@ export class ProjectTool extends BaseTool {
 ## When to use
 - Read the project before planning: state, tasks and their acceptance, accepted decisions, active memories, and recent activity. Use action "get"; page activity with afterCursor.
 - Build bounded context for a task or for yourself with "context".
+- Create a Task before dispatch with "create_task" (requestId, subject, description). Dispatch it using session spawn projectTask={taskId, expectedRevision}; never create a replacement Task just to retry.
+- Edit or reopen a non-accepted Task with "update_task" (taskId, expectedRevision, subject/description or status="pending"). Editing invalidates prior completion evidence. Active/unknown launches cannot be edited or duplicated.
+- A terminal successful work Run marks the Task completed but leaves acceptance pending. Only the user control-plane action can accept/reject it.
 - Keep the durable "current state" and "next step" current after meaningful progress with "update_state". Read the current revision first; a stale revision is refused.
 - Record a decision the user made, or a memory candidate you observed, with "record_decision"/"record_memory". Proposals and candidates carry this session as their source and keep their revision history.
+- Read the project's external channel bindings with "list_channels" before answering on one. The list carries the binding id and whether proactive sends are allowed; it never carries a raw platform target.
 
 ## Rules
 - Only the user can accept a decision, activate a memory candidate, or accept a Task. This tool refuses those statuses; record them as proposed/candidate and ask the user.
@@ -147,6 +155,16 @@ export class ProjectTool extends BaseTool {
 
     try {
       switch (action) {
+        case 'create_task':
+        case 'update_task': {
+          const allowed = action === 'create_task' ? ['action', 'requestId', 'subject', 'description'] : ['action', 'taskId', 'expectedRevision', 'subject', 'description', 'status'];
+          if (Object.keys(input).some((key) => !allowed.includes(key))) return err('Unexpected task fields.');
+          const { action: _action, ...payload } = input;
+          const result = await this.port.dispatch({ action, payload });
+          if (!result.ok) return err(describeRefusal(result.reason));
+          if (!result.task) return err('The Host returned no task.');
+          return { id: randomUUID(), name: this.name, result: formatTask(result.task) };
+        }
         case 'get': {
           const afterCursor = readNonNegativeInteger(input.afterCursor, 'afterCursor');
           if (afterCursor === 'invalid') return err('afterCursor must be an integer >= 0.');
@@ -267,6 +285,18 @@ export class ProjectTool extends BaseTool {
           };
         }
 
+        case 'list_channels': {
+          const allowed = ['action'];
+          if (Object.keys(input).some((key) => !allowed.includes(key))) return err('list_channels takes no other fields.');
+          const result = await this.port.dispatch({ action, payload: {} });
+          if (!result.ok) return err(describeRefusal(result.reason));
+          return {
+            id: randomUUID(),
+            name: this.name,
+            result: formatChannels(result.channels ?? []),
+          };
+        }
+
         default:
           return err(`action "${String(action)}" is not supported.`);
       }
@@ -337,7 +367,9 @@ function formatTask(task: ProjectToolTask): string {
   const work = task.workSessionId === null ? '' : ` · work ${task.workSessionId}`;
   const availability = task.recordAvailable ? '' : ' · Task record unavailable';
   const description = truncate(task.description.trim(), MAX_TASK_DESCRIPTION);
-  return `- ${task.taskId} [${task.status} · acceptance=${task.acceptanceStatus}${work}${availability}] ${task.subject}` +
+  const attempt = task.attempts?.[0];
+  const execution = attempt ? ` · launch=${attempt.status}${attempt.reason ? ` (${attempt.reason})` : ''}` : '';
+  return `- ${task.taskId} [${task.status} · r${task.revision ?? 0} · acceptance=${task.acceptanceStatus}${execution}${work}${availability}] ${task.subject}` +
     (description === '' ? '' : `\n  ${description}`);
 }
 
@@ -369,6 +401,26 @@ function formatContext(context: ProjectToolPayload['context']): string {
 
 function formatSource(source: { type: string; id: string }): string {
   return `${source.type}:${source.id}`;
+}
+
+/**
+ * Channel bindings are the only opaque ids the model gets to choose from, so
+ * the list states the two permissions instead of leaving the model to guess
+ * whether an unsolicited send will be refused.
+ */
+function formatChannels(channels: readonly ProjectToolChannel[]): string {
+  if (channels.length === 0) {
+    return 'This project has no external channel bindings. Ask the user to bind one before sending.';
+  }
+  const lines = [`Channel bindings (${channels.length}):`];
+  for (const channel of channels) {
+    const permission = channel.canProactive ? 'reply + proactive' : 'reply only';
+    lines.push(`- ${channel.bindingId} — ${channel.label || '(unnamed)'} · ${permission}`);
+  }
+  lines.push('');
+  lines.push('Send with send_message using channelBindingId. Reply to a channel message with its replyToInboundId; '
+    + 'an unsolicited send needs a binding that allows proactive sends.');
+  return lines.join('\n');
 }
 
 function formatTime(value: number): string {
@@ -407,4 +459,4 @@ function readBoundedInteger(
     : 'invalid';
 }
 
-export type { ProjectToolAction, ProjectToolOperation, ProjectToolPort, ProjectToolPayload };
+export type { ProjectToolAction, ProjectToolChannel, ProjectToolOperation, ProjectToolPort, ProjectToolPayload };

@@ -1,9 +1,9 @@
 import type { SceneCanvas, UIComponent, Viewport } from '../core/component.js';
 import { truncateToWidth } from '../width.js';
 import { escapeTags, type Styles } from '../transcript-view.js';
-import { DISPLAY_PROFILES, type DisplayProfileId } from '../display-profiles.js';
 import { formatTaskDuration, taskStatusGlyph, type BackgroundTaskView } from '../background-tasks.js';
 import { prStateLabel, prTone, type PrBadge } from '../pr-badge.js';
+import type { ProjectWorkbenchSummary } from '../project-workbench.js';
 import type { WorkbenchWorkspaceSummary } from '../workbench-workspace.js';
 
 export interface SidebarTarget {
@@ -20,11 +20,10 @@ export interface WorkbenchSidebarProps {
   readonly activityActive: boolean;
   readonly tasks: readonly BackgroundTaskView[];
   readonly workspace: WorkbenchWorkspaceSummary;
+  readonly project?: ProjectWorkbenchSummary | undefined;
   readonly pullRequest: PrBadge | null;
   readonly contextTokens: number | null;
   readonly contextBudget: number | null;
-  readonly profile: DisplayProfileId | 'custom';
-  readonly tools: { readonly total: number; readonly running: number; readonly errors: number };
 }
 
 /** A bounded projection of existing Host/session and display state. No IO. */
@@ -52,7 +51,7 @@ export class WorkbenchSidebar implements UIComponent<WorkbenchSidebarProps> {
       scene.writeTagged(viewport.row + row, viewport.column, styles.muted('│'));
     }
     if (viewport.height < 4 || width < 16) return;
-    scene.writeTagged(viewport.row, viewport.column + 2, styles.accent('WORKBENCH'));
+    scene.writeTagged(viewport.row, viewport.column + 2, styles.accent(this.props.project === undefined ? 'WORKBENCH' : 'PROJECT'));
     const lines: Array<{ text: string; command?: string; task?: BackgroundTaskView }> = [];
     const text = (value: string): void => { lines.push({ text: styles.muted(escapeTags(truncateToWidth(value.replace(/[\r\n\t]/gu, ' '), width))) }); };
     const action = (label: string, command: string, selected = false): void => {
@@ -67,55 +66,62 @@ export class WorkbenchSidebar implements UIComponent<WorkbenchSidebarProps> {
       lines.push({ text: tone(clipped), task });
     };
     const number = (value: number | null): string => value === null ? '—' : value.toLocaleString('en-US');
-    const workspace = this.props.workspace;
-    text(this.props.sessionTitle);
-    action('New session', '/new');
-    action('All sessions', '/sessions');
-    text('');
-    text('WORKTREE');
-    text(`${workspace.branch ?? 'detached'} · ${workspace.linkedWorktree ? 'linked worktree' : 'repository'}`);
-    text(workspace.root);
-    if (!workspace.observed) {
-      text('Git status unavailable');
-    } else if (workspace.changedFiles === 0) {
-      text('Working tree clean');
+    const project = this.props.project;
+    if (project !== undefined) {
+      text(project.name);
+      action('Overview', '/status');
+      if (project.status === 'loading') text('Loading project status…');
+      else if (project.status === 'unavailable') text('Status unavailable · last known');
+      if (project.taskCounts.length > 0) {
+        text('TASKS');
+        for (const { label, count } of project.taskCounts) text(`${count} ${label}`);
+      }
+      text('');
+      action('Work sessions', '/sessions');
+      if (project.status === 'current' && project.sessions.length === 0) text('No work sessions yet');
+      for (const session of project.sessions.slice(0, 8)) {
+        action(`${session.state} · ${session.title}`, `/sessions ${session.id}`);
+      }
+      if (project.sessions.length > 8) text(`+ ${project.sessions.length - 8} more in /sessions`);
     } else {
-      action(`${number(workspace.changedFiles)} changed files`, '/diff');
-      for (const change of workspace.changes) text(`${change.status} ${change.path}`);
-      const remaining = (workspace.changedFiles ?? 0) - workspace.changes.length;
-      if (remaining > 0) text(`+ ${remaining} more · /diff`);
+      const workspace = this.props.workspace;
+      text(this.props.sessionTitle);
+      action('New session', '/new');
+      action('All sessions', '/sessions');
+      text('');
+      text('WORKTREE');
+      text(`${workspace.branch ?? 'detached'} · ${workspace.linkedWorktree ? 'linked worktree' : 'repository'}`);
+      text(workspace.root);
+      if (!workspace.observed) {
+        text('Git status unavailable');
+      } else if (workspace.changedFiles === 0) {
+        text('Working tree clean');
+      } else {
+        action(`${number(workspace.changedFiles)} changed files`, '/diff');
+      }
+      if (this.props.pullRequest !== null) {
+        const badge = this.props.pullRequest;
+        const label = `${badge.label} · ${prStateLabel(badge.state)}`;
+        const clipped = escapeTags(truncateToWidth(`› ${label}`, width));
+        lines.push({ text: styles[prTone(badge.state)](clipped), command: '/pr' });
+      }
     }
-    if (this.props.pullRequest !== null) {
-      const badge = this.props.pullRequest;
-      const label = `${badge.label} · ${prStateLabel(badge.state)}`;
-      const clipped = escapeTags(truncateToWidth(`› ${label}`, width));
-      lines.push({ text: styles[prTone(badge.state)](clipped), command: '/pr' });
+    if (this.props.activityActive) {
+      text('');
+      const activity = escapeTags(truncateToWidth(this.props.activity.replace(/[\r\n\t]/gu, ' '), width));
+      lines.push({ text: styles.accent(activity) });
     }
-    text('');
-    text('ACTIVITY');
-    const activity = escapeTags(truncateToWidth(this.props.activity.replace(/[\r\n\t]/gu, ' '), width));
-    lines.push({ text: this.props.activityActive ? styles.accent(activity) : styles.muted(activity) });
     if (this.props.tasks.length > 0) {
-      text('BACKGROUND TASKS');
+      text('');
+      text('BACKGROUND');
       for (const task of this.props.tasks.slice(0, 6)) taskAction(task);
     }
-    text('');
-    text('CONTEXT');
     const used = this.props.contextTokens;
     const budget = this.props.contextBudget;
-    const percent = used !== null && budget !== null && budget > 0
-      ? Math.min(100, Math.round((used / budget) * 100))
-      : null;
-    text(`Context  ${number(used)} / ${number(budget)}${percent === null ? '' : ` · ${percent}%`}`);
-    text('');
-    text('DISPLAY');
-    for (const profile of DISPLAY_PROFILES) {
-      action(profile.label, `/display ${profile.id}`, profile.id === this.props.profile);
+    if (used !== null && budget !== null && budget > 0) {
+      text('');
+      action(`Context ${Math.min(100, Math.round((used / budget) * 100))}%`, '/context');
     }
-    if (this.props.profile === 'custom') text('Custom settings');
-    text('');
-    text(`Tools ${this.props.tools.total} · ${this.props.tools.running} running · ${this.props.tools.errors} errors`);
-    action('Context details', '/context');
     this.viewportRows = Math.max(0, viewport.height - 1);
     this.documentRows = lines.length;
     const first = Math.min(this.scrollTop, Math.max(0, lines.length - this.viewportRows));

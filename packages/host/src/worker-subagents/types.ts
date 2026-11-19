@@ -22,6 +22,9 @@ export interface AgentProgressEvent {
   toolName?: string;
   toolInput?: Record<string, unknown>;
   toolResult?: string;
+  partial?: boolean;
+  toolCallId?: string;
+  toolError?: boolean;
   duration?: number;
   agentId?: string;
   agentType?: string;
@@ -67,7 +70,7 @@ export interface WorkerSubagentRunRequest<
   availableTools: TTool[];
   description?: string;
   agentId: string;
-  onProgress?: (event: AgentProgressEvent) => void;
+  onProgress?: (event: AgentProgressEvent) => void | Promise<void>;
   sessionId?: string;
   effort?: string;
   permissionMode?: SubagentPermissionMode;

@@ -298,6 +298,7 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
     stores,
     legacyAttachments: new MainAttachmentStore(mainDatabase),
   });
+  const workspaceApi = createHostWorkspaceRegistrationApi(workspaceAccess);
   // Plan 621: the checkout / integration namespaces. The Desktop's embedded
   // Host answers the SAME routes the headless Host does, so the assembly is
   // the Host's own entry point — a copy here would answer differently from
@@ -612,6 +613,9 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
     projectApi: createHostProjectApi(stores.projects, stores.tasks, {
       sessions: stores.sessions,
       spawnEdges: stores.spawnEdges,
+    }, {
+      sessions: api,
+      workspaces: workspaceApi,
     }),
     // R1.2: the durable Session inputs and the per-session control lease.
     //
@@ -632,7 +636,7 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
     permissionRequestApi: createHostPermissionRequestApi(stores),
     toolApprovalApi: createHostToolApprovalApi(mainDatabase),
     lockApi: createHostLockApi(stores),
-    workspaceApi: createHostWorkspaceRegistrationApi(workspaceAccess),
+    workspaceApi,
     // Plan 621: the checkout observation / reclaim and the observed PR
     // projection. Without them the Desktop's Host answers these routes with
     // a named 404, which says "this Host cannot observe" — not the same

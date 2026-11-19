@@ -316,6 +316,7 @@ export class HostRunExecutionController {
       },
       {
         logger: adaptWorkerManagerLogger(options.logger),
+        appConnectionTransportUnavailable: true,
         resolveWorkerPath: options.worker.resolveWorkerPath,
         resolveBetterSqlite3Path: options.worker.resolveBetterSqlite3Path,
         ...(options.worker.lowPower === undefined ? {} : { lowPower: options.worker.lowPower }),

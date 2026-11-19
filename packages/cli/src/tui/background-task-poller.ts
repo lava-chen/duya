@@ -59,16 +59,16 @@ export class BackgroundTaskPoller {
    * One read, now. Used on `/tasks`, when the view opens, and by the timer.
    * Returns the snapshot it applied, or null when the read was skipped.
    */
-  async poll(): Promise<BackgroundTaskListV1 | null> {
+  async poll(force = false): Promise<BackgroundTaskListV1 | null> {
     if (!this.started || this.inFlight) return null;
-    if (!this.options.isActive()) return null;
+    if (!force && !this.options.isActive()) return null;
     const sessionId = this.options.sessionId();
     if (sessionId === null) return null;
 
     this.inFlight = true;
     try {
       const snapshot = await this.options.list(sessionId);
-      if (!this.started) return null;
+      if (!this.started || this.options.sessionId() !== sessionId) return null;
       this.errorReported = false;
       this.options.onChange(snapshot);
       return snapshot;

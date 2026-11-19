@@ -67,6 +67,9 @@ const TOOL_BATCH_MAP: Record<string, ToolBatch> = {
   // mailbox row for the target agent and fires the wake bus.
   send_to_agent: ToolBatch.SYSTEM,
 
+  // Both management tools can mutate Host state; serialize all actions.
+  project: ToolBatch.SYSTEM,
+  session: ToolBatch.SYSTEM,
 
 }
 

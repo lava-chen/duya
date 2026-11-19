@@ -86,6 +86,7 @@ import {
 import { DARK_THEME_TAGS, type ThemeTags, type ThemeToken } from './theme.js';
 import { fileDiffCounts, isStreamingFileTool, renderFileDiffRows, renderStreamingFileRows } from './file-diff-view.js';
 import { escapeTags } from './markdown/escape.js';
+import { focusTranscriptBlocks } from './focus-transcript.js';
 import { highlightBash, highlightBashLine, type BashRole, type BashToken } from './bash-highlight.js';
 import {
   rawTagPair,
@@ -117,6 +118,7 @@ export type ToolGroupMode = 'full' | 'names' | 'running' | 'focus' | 'hidden';
 
 /** How a transcript is currently being drawn. */
 export interface RenderOptions {
+  readonly focusView?: boolean;
   /** Show full thinking text rather than the collapsed one-line summary. */
   readonly expanded: boolean;
   /** Show tool results beneath their call line. */
@@ -2245,6 +2247,7 @@ function renderPlainBlock(block: Block, options: RenderOptions, styles: Styles):
       // error they will hit again next turn.
       return styles.error(`✗ ${block.message}`);
     case 'notice':
+      if (options.focusView && options.width !== undefined) return styles.muted(truncateToWidth(block.text, options.width));
       return options.width === undefined
         ? styles.muted(block.text)
         : wrapWithCursor(block.text, Math.max(1, options.width), 0).rows
@@ -2286,6 +2289,7 @@ export function renderBlock(block: Block, options: RenderOptions, styles: Styles
  * every later block's connector.
  */
 export function visibleBlocks(blocks: readonly Block[], options: RenderOptions): readonly Block[] {
+  if (options.focusView) return focusTranscriptBlocks(blocks);
   if (options.showThinking !== false && options.toolGroupMode !== 'hidden') return blocks;
   return blocks.filter((block) => (options.showThinking !== false || block.kind !== 'thinking')
     && (options.toolGroupMode !== 'hidden' || block.kind !== 'tool'));

@@ -134,6 +134,7 @@ const FIXTURES = {
     agentType: 'general',
     agentName: 'fixture',
   },
+  'subagent.progress': { subagentId: 'sub-1', kind: 'text', data: 'Working' },
   'subagent.completed': { subagentId: 'sub-1', status: 'completed', durationMs: 100 },
   'hook.invoked': {
     agentEventType: 'PreToolUse',

@@ -13,6 +13,7 @@
 import { randomUUID } from 'node:crypto';
 import { BaseTool } from './BaseTool.js';
 import type { ToolResult, ToolUseContext } from './contracts/tool.js';
+import type { ProjectTaskDispatchInput } from '@duya/agent-protocol/projects';
 
 export const SESSION_TOOL_NAME = 'session';
 
@@ -43,12 +44,12 @@ interface SessionCompletionReceipt {
   readonly completionNotification?: 'automatic' | 'query';
 }
 
-export type SessionSpawnOperation<T> = { ok: true } & T | { ok: false; reason: string };
+export type SessionSpawnOperation<T> = { ok: true } & T | { ok: false; reason: string; taskId?: string; sessionId?: string };
 
 /** Host worker-DB actions used by the session tool. */
 export interface SessionToolPort {
   getCallerSessionId(contextSessionId?: string): string;
-  spawn(input: { parentSessionId: string; workingDirectory: string; prompt: string; model?: string; use_worktree?: boolean; source_branch?: string; branch_name?: string; projectTask?: { subject: string; description: string } }): Promise<SessionSpawnOperation<{ sessionId: string; parentId: string; workingDirectory?: string; checkout?: unknown; branchName?: string; isolation?: string; taskId?: string } & SessionCompletionReceipt>>;
+  spawn(input: { parentSessionId: string; workingDirectory?: string; prompt: string; model?: string; use_worktree?: boolean; source_branch?: string; branch_name?: string; projectTask?: ProjectTaskDispatchInput }): Promise<SessionSpawnOperation<{ sessionId: string; parentId: string; workingDirectory?: string; checkout?: unknown; branchName?: string; isolation?: string; taskId?: string } & SessionCompletionReceipt>>;
   list(parentSessionId: string): Promise<SessionSpawnOperation<{ sessions: SessionSpawnSession[] }>>;
   get(sessionId: string, callerSessionId: string): Promise<SessionSpawnOperation<{ session: SessionSpawnDetails }>>;
   reply(input: { sessionId: string; callerSessionId: string; prompt: string; model?: string }): Promise<SessionSpawnOperation<{ sessionId: string } & SessionCompletionReceipt>>;
@@ -60,18 +61,20 @@ export interface SessionToolPort {
 const SESSION_SCHEMA: Record<string, unknown> = {
   type: 'object',
   properties: {
-    use_worktree: { type: 'boolean', description: 'Give the new session an isolated checkout and branch. Required true for an independent branch or PR. Omitted: isolate when the parent entered a managed checkout, otherwise share. false shares the current directory and may be read-only if another session owns it.' },
-    source_branch: { type: 'string', description: 'Local base ref for an isolated child; defaults to the parent execution HEAD. Requires use_worktree=true.' },
-    branch_name: { type: 'string', description: 'New branch for the isolated child; defaults to duya/session/<session-id>. Requires use_worktree=true.' },
+    use_worktree: { type: 'boolean', description: 'Omit for Project Tasks: the Host creates an isolated Git worktree and branch by default. Other sessions isolate by default when the parent has a managed checkout. Set true to require isolation, or false to explicitly share the parent directory (which may be read-only).' },
+    source_branch: { type: 'string', description: 'Local base ref for an isolated child; defaults to the parent execution HEAD. Requires an isolated worktree.' },
+    branch_name: { type: 'string', description: 'New branch for the isolated child; defaults to duya/session/<session-id>. Requires an isolated worktree.' },
     projectTask: {
       type: 'object',
       additionalProperties: false,
-      description: 'When dispatching from a Project Coordinator, the canonical Project Task to create before starting this work Session.',
+      description: 'Project Coordinator: dispatch an existing Task with taskId and expectedRevision. subject/description remains a create-and-dispatch shorthand.',
       properties: {
+        taskId: { type: 'string', minLength: 1 },
+        expectedRevision: { type: 'integer', minimum: 0 },
         subject: { type: 'string', minLength: 1, maxLength: 160 },
         description: { type: 'string', minLength: 1, maxLength: 12000 },
       },
-      required: ['subject', 'description'],
+      oneOf: [{ required: ['taskId', 'expectedRevision'] }, { required: ['subject', 'description'] }],
     },
     action: {
       type: 'string',
@@ -79,11 +82,6 @@ const SESSION_SCHEMA: Record<string, unknown> = {
       default: 'spawn',
       description:
         'The operation to perform. spawn: create a new child session in a project and run it async. list: list work sessions the Host authorizes you to manage. get: status + diff stats of a child. reply: send a follow-up prompt to a child (another async run). cancel: interrupt a child run. rename: rename a child.',
-    },
-    workingDirectory: {
-      type: 'string',
-      description:
-        'For spawn: the project directory the child session operates in (absolute path). The child runs with this as its workspace, so it can Read/Edit/build files there independently.',
     },
     prompt: {
       type: 'string',
@@ -107,6 +105,20 @@ const SESSION_SCHEMA: Record<string, unknown> = {
   },
   required: [],
 };
+
+function readProjectTask(value: unknown): ProjectTaskDispatchInput | undefined | 'invalid' {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return 'invalid';
+  const record = value as Record<string, unknown>;
+  if ('taskId' in record) {
+    return Object.keys(record).every((key) => ['taskId', 'expectedRevision'].includes(key)) &&
+      typeof record.taskId === 'string' && record.taskId.trim() && Number.isSafeInteger(record.expectedRevision) && (record.expectedRevision as number) >= 0
+      ? { taskId: record.taskId, expectedRevision: record.expectedRevision as number } : 'invalid';
+  }
+  return Object.keys(record).every((key) => ['subject', 'description'].includes(key)) &&
+    typeof record.subject === 'string' && typeof record.description === 'string'
+    ? { subject: record.subject, description: record.description } : 'invalid';
+}
 
 export class SessionTool extends BaseTool {
   readonly name = SESSION_TOOL_NAME;
@@ -134,10 +146,13 @@ export class SessionTool extends BaseTool {
   Coordinators. Use list/get/reply/cancel/rename across turns.
 
 ## Actions
-- spawn: workingDirectory (required) + prompt (required) + model (optional).
-  A Project Coordinator must also supply projectTask.subject and description;
-  the Host creates the canonical Task and binds it to the new work Session.
-  Set use_worktree=true for an independent branch or PR.
+- spawn: prompt (required) + model (optional). The Host inherits the parent
+  session's working directory.
+  A Project Coordinator should supply projectTask.taskId and expectedRevision
+  from project get/create_task. Retry the SAME Task after a recorded launch failure.
+  subject/description is a create-and-dispatch shorthand, not a retry mechanism.
+  Project Tasks default to an isolated Git worktree. Supply use_worktree=false
+  only when running in a shared directory is appropriate and authorized.
 - list: list work sessions the Host authorizes you to manage.
 - get: sessionId → status, tracked run result when available, working directory,
   and diff stats (+N/-M files).
@@ -186,35 +201,37 @@ export class SessionTool extends BaseTool {
     try {
       switch (action) {
         case 'spawn': {
-          const workingDirectory = input.workingDirectory as string | undefined;
-          const prompt = (input.prompt as string) || '';
+          const workingDirectory = input.workingDirectory;
+          const prompt = input.prompt;
           const model = input.model as string | undefined;
-          if (!workingDirectory || !prompt) {
-            return err('workingDirectory and prompt are required for spawn.');
+          if (typeof prompt !== 'string' || !prompt.trim()) return err('prompt is required for spawn.');
+          if (workingDirectory !== undefined && (typeof workingDirectory !== 'string' || !workingDirectory.trim())) {
+            return err('workingDirectory must be an absolute path, or omit it to inherit the parent session’s directory.');
           }
+          const projectTask = readProjectTask(input.projectTask);
+          if (projectTask === 'invalid') return err('Invalid projectTask: use taskId/expectedRevision OR subject/description.');
           const result = await this.port.spawn({
             ...(typeof input.use_worktree === 'boolean' ? { use_worktree: input.use_worktree } : {}),
             ...(typeof input.source_branch === 'string' ? { source_branch: input.source_branch } : {}),
             ...(typeof input.branch_name === 'string' ? { branch_name: input.branch_name } : {}),
-            ...(typeof input.projectTask === 'object' && input.projectTask !== null
-              && typeof (input.projectTask as Record<string, unknown>).subject === 'string'
-              && typeof (input.projectTask as Record<string, unknown>).description === 'string'
-              ? { projectTask: {
-                  subject: (input.projectTask as { subject: string }).subject,
-                  description: (input.projectTask as { description: string }).description,
-                } }
-              : {}),
+            ...(projectTask ? { projectTask } : {}),
             parentSessionId: callerSessionId,
-            workingDirectory,
+            ...(workingDirectory === undefined ? {} : { workingDirectory }),
             prompt,
             ...(model ? { model } : {}),
           });
-          if (!result.ok) return err(`Failed to spawn session: ${result.reason}`);
+          if (!result.ok) {
+            const recovery = result.reason === 'working_directory_must_match_parent' || result.reason === 'invalid_working_directory'
+              ? 'Omit workingDirectory to inherit the parent session’s directory.'
+              : 'Read project state before retrying; reconcile unknown launches before retrying.';
+            return err(`Failed to spawn session: ${result.reason}${result.taskId ? `; Task ${result.taskId}` : ''}${result.sessionId ? `; Session ${result.sessionId}` : ''}. ${recovery}`);
+          }
+          const childDirectory = result.workingDirectory ?? workingDirectory;
           return {
             id: randomUUID(),
             name: this.name,
             result:
-              `Spawned session ${result.sessionId}${result.taskId ? ` for Project Task ${result.taskId}` : ''} in ${result.workingDirectory ?? workingDirectory}. ` +
+              `Spawned session ${result.sessionId}${result.taskId ? ` for Project Task ${result.taskId}` : ''}${childDirectory ? ` in ${childDirectory}` : ''}. ` +
               (result.checkout ? `Isolated checkout: ${JSON.stringify(result.checkout)}. Branch: ${result.branchName ?? 'see checkout receipt'}. ` : '') +
               `It is running asynchronously ` +
               `in its own session (visible in the sidebar). ` +

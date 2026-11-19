@@ -290,10 +290,10 @@ export const sessionSpawnDb = {
     source_branch?: string;
     branch_name?: string;
     parentSessionId: string;
-    workingDirectory: string;
+    workingDirectory?: string;
     prompt: string;
     model?: string;
-    projectTask?: { subject: string; description: string };
+    projectTask?: import('@duya/agent-protocol/projects').ProjectTaskDispatchInput;
   }) => sendDbRequest('session:spawn', data),
 
   list: (parentSessionId: string) => sendDbRequest('session:spawnList', { parentSessionId }),

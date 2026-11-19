@@ -204,21 +204,39 @@ describe('the task list', () => {
     expect(out.text()).toContain('❯ ● npm run dev');
   });
 
-  it('watches a subagent in place on Enter instead of opening a modal', async () => {
+  it('switches the main transcript to a subagent with live text and tools', async () => {
     const { app, out, input, opened } = await withTwoTasks();
+    app.printNotice('parent transcript marker');
+    app.insertPrompt('parent draft');
     press(input, F6);
     await settleRendered();
+    out.reset();
     press(input, ENTER);
+    app.push({ type: 'agent_progress', data: { subagentId: 'sub-1', agentEventType: 'tool_use',
+      toolName: 'read', toolInput: { file_path: 'worker-fixture.txt' }, toolCallId: 'read-1' } });
+    app.push({ type: 'agent_progress', data: { subagentId: 'sub-1', agentEventType: 'tool_result',
+      toolCallId: 'read-1', toolResult: 'read result' } });
+    app.push({ type: 'agent_progress', data: { subagentId: 'sub-1', agentEventType: 'text',
+      data: 'child live output', partial: true } });
+    await settleRendered();
+    const shown = out.text();
+    expect(opened).toEqual([]);
+    expect(app.renderState.focus).toBe('transcript');
+    expect(shown).toContain('Scout · Read only');
+    expect(shown).toContain('worker-fixture.txt');
+    expect(shown).toContain('child live output');
+
+    out.reset();
+    press(input, 'x');
+    press(input, ENTER);
+    press(input, ESC);
+    await sleep(60);
     await settleRendered();
     app.stop();
-
-    // No modal: a subagent's subject is a live status, and freezing it at the
-    // moment of the keypress is the one thing an agent list must not do.
-    expect(opened).toEqual([]);
-    expect(app.renderState.focus).toBe('tasks');
-    // The row says which agent the panel below it is about.
-    expect(lastFrame(out.text())).toContain('(watching)');
-    expect(lastFrame(out.text())).toContain('Scout · running');
+    expect(app.renderState.focus).toBe('input');
+    expect(out.text()).toContain('parent transcript marker');
+    expect(out.text()).toContain('parent draft');
+    expect(out.text()).not.toContain('parent draftx');
   });
 
   it('opens a bash task on Enter without leaving the view', async () => {
@@ -282,7 +300,7 @@ describe('the task list', () => {
     expect(out.text()).toContain('/tasks to switch');
   });
 
-  it('keeps the list reachable after leaving the watched panel', async () => {
+  it('returns to the conversation and can reopen the task list', async () => {
     const { app, out, input } = await withTwoTasks();
     press(input, F6);
     await settleRendered();
@@ -290,16 +308,17 @@ describe('the task list', () => {
     await settleRendered();
 
     out.reset();
-    // Esc means one step back, not all the way out: panel → list. The list
-    // stays open so a different agent is one arrow away.
     press(input, ESC);
     await sleep(60);
+    await settleRendered();
+    expect(app.renderState.focus).toBe('input');
+    press(input, F6);
     await settleRendered();
     app.stop();
 
     expect(app.renderState.focus).toBe('tasks');
-    expect(lastFrame(out.text())).toContain('Tasks · ↑↓ select');
-    expect(lastFrame(out.text())).not.toContain('(watching)');
+    expect(out.text()).toContain('Tasks · ↑↓ select');
+    expect(out.text()).not.toContain('(watching)');
   });
 
   it('says so when the Host cannot answer, rather than claiming emptiness', async () => {

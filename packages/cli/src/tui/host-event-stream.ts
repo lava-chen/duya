@@ -141,8 +141,25 @@ export function projectHostEvent(event: RunEvent): LegacyFrame | null {
           subagentId: event.subagentId,
           agentName: event.agentName,
           agentType: event.agentType,
+          ...(event.sessionId === undefined ? {} : { agentSessionId: event.sessionId }),
           parentToolCallId: event.parentToolCallId,
           ...(event.agentDescription === undefined ? {} : { agentDescription: event.agentDescription }),
+        },
+      };
+    case 'subagent.progress':
+      return {
+        type: 'agent_progress',
+        data: {
+          agentEventType: event.kind,
+          subagentId: event.subagentId,
+          agentSessionId: event.sessionId,
+          data: event.data,
+          toolName: event.toolName,
+          toolInput: event.toolInput,
+          toolResult: event.toolResult,
+          partial: event.partial,
+          toolCallId: event.toolCallId,
+          toolError: event.toolError,
         },
       };
     case 'subagent.completed':

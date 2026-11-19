@@ -20,6 +20,7 @@ export function createDesktopSessionManagementService(options: {
     projectDispatch: createProjectDispatchPort({
       projects: stores.projects,
       tasks: stores.tasks,
+      runs: stores.runs,
     }),
     execution: options.execution ?? createDesktopRunExecutionApi({
       getSessionForRun: async (runId) => (await runs.getAgentRun(runId))?.sessionId ?? null,

@@ -93,7 +93,7 @@ export interface RunAgentParams {
    * Optional callback to report progress during agent execution.
    * Called whenever the sub-agent produces text, thinking, or tool_use events.
    */
-  onProgress?: (event: AgentProgressEvent) => void
+  onProgress?: (event: AgentProgressEvent) => void | Promise<void>
   /**
    * Sub-agent's DB session ID for persisting messages.
    * When set, the sub-agent's conversation messages will be saved to the database.
@@ -185,6 +185,9 @@ export interface AgentProgressEvent {
   toolName?: string
   toolInput?: Record<string, unknown>
   toolResult?: string
+  partial?: boolean
+  toolCallId?: string
+  toolError?: boolean
   duration?: number
   agentId?: string
   agentType?: string
@@ -313,7 +316,7 @@ export async function* runAgent({
       parentSessionId,
       subAgentSessionId: sessionId,
     }, 'SubAgent')
-    onProgress?.({ type: 'error', data: errorMsg, agentId })
+    await onProgress?.({ type: 'error', data: errorMsg, agentId })
     yield {
       id: crypto.randomUUID(),
       role: 'assistant',
@@ -340,7 +343,7 @@ export async function* runAgent({
       agentId,
       agentType: agentDefinition.agentType,
     }, 'SubAgent')
-    onProgress?.({ type: 'error', data: errorMsg, agentId })
+    await onProgress?.({ type: 'error', data: errorMsg, agentId })
     yield {
       id: crypto.randomUUID(),
       role: 'assistant',
@@ -542,7 +545,7 @@ export async function* runAgent({
       const elapsed = Date.now() - lastProgressTime
       if (elapsed > 5000) {
         // If no progress for 5 seconds, report a heartbeat
-        onProgress?.({ type: 'heartbeat', data: `Agent still running... (${Math.round(elapsed / 1000)}s)`, agentId })
+        void onProgress?.({ type: 'heartbeat', data: `Agent still running... (${Math.round(elapsed / 1000)}s)`, agentId })
       }
     }, 5000)
 
@@ -625,7 +628,7 @@ export async function* runAgent({
             subAgentSessionId: sessionId,
           }, 'SubAgent')
           textParts.push(`\n[Error during agent execution: ${stallMessage}]`)
-          onProgress?.({ type: 'error', data: stallMessage, agentId })
+          await onProgress?.({ type: 'error', data: stallMessage, agentId })
           terminalProgressEmitted = true
           // Attempt to interrupt/cleanup to avoid orphaned stream tasks.
           subAgent.interrupt()
@@ -670,42 +673,48 @@ export async function* runAgent({
           }, 'SubAgent')
           hasError = true
           errorMessage = 'Sub-agent cancelled after the parent task was aborted'
-          onProgress?.({ type: 'error', data: errorMessage, agentId })
+          await onProgress?.({ type: 'error', data: errorMessage, agentId })
           terminalProgressEmitted = true
           break
         }
 
-        if (event.type === 'text') {
+        if (event.type === 'text_delta' || event.type === 'thinking_delta') {
+          const delta = typeof event.data === 'string' ? event.data : ''
+          if (delta !== '') await onProgress?.({ type: event.type === 'text_delta' ? 'text' : 'thinking', data: delta, partial: true, agentId })
+        } else if (event.type === 'text') {
           const textData = typeof event.data === 'string' ? event.data : JSON.stringify(event.data)
           textParts.push(textData)
-          onProgress?.({ type: 'text', data: textData, agentId })
+          await onProgress?.({ type: 'text', data: textData, agentId })
         } else if (event.type === 'tool_use') {
           toolCalls++
           toolInFlight = true
-          const toolData = event.data as { name: string; input: Record<string, unknown> } | undefined
-          onProgress?.({
+          const toolData = event.data as { id?: string; name: string; input: Record<string, unknown> } | undefined
+          await onProgress?.({
             type: 'tool_use',
             toolName: toolData?.name || '',
+            ...(toolData?.id === undefined ? {} : { toolCallId: toolData.id }),
             ...(toolData?.input === undefined ? {} : { toolInput: toolData.input }),
             agentId,
           })
         } else if (event.type === 'tool_result') {
           toolInFlight = false
           const resultData = event.data as { id: string; name: string; result: string; error: boolean }
-          onProgress?.({
+          await onProgress?.({
             type: 'tool_result',
             toolName: resultData?.name || '',
             toolResult: resultData?.result || '',
+            ...(resultData?.id === undefined ? {} : { toolCallId: resultData.id }),
+            ...(resultData?.error === undefined ? {} : { toolError: resultData.error }),
             agentId,
           })
         } else if (event.type === 'thinking') {
           const thinkingData = typeof event.data === 'string' ? event.data : JSON.stringify(event.data)
           thinkingParts.push(thinkingData)
-          onProgress?.({ type: 'thinking', data: thinkingData, agentId })
+          await onProgress?.({ type: 'thinking', data: thinkingData, agentId })
         } else if (event.type === 'result') {
           tokenUsage = event.data
         } else if (event.type === 'done') {
-          onProgress?.({ type: 'done', duration: Date.now() - startTime, agentId })
+          await onProgress?.({ type: 'done', duration: Date.now() - startTime, agentId })
           terminalProgressEmitted = true
           break
         } else if (event.type === 'error') {
@@ -720,7 +729,7 @@ export async function* runAgent({
             subAgentSessionId: sessionId,
           }, 'SubAgent')
           textParts.push(`\n[Error: ${errorData}]`)
-          onProgress?.({ type: 'error', data: errorData, agentId })
+          await onProgress?.({ type: 'error', data: errorData, agentId })
           terminalProgressEmitted = true
         }
       }
@@ -742,15 +751,15 @@ export async function* runAgent({
       subAgentSessionId: sessionId,
     }, 'SubAgent')
     textParts.push(`\n[Error during agent execution: ${errMsg}]`)
-    onProgress?.({ type: 'error', data: errMsg, agentId })
+    await onProgress?.({ type: 'error', data: errMsg, agentId })
     terminalProgressEmitted = true
   }
 
   if (!terminalProgressEmitted) {
     if (hasError) {
-      onProgress?.({ type: 'error', data: errorMessage || 'Sub-agent failed', agentId })
+      await onProgress?.({ type: 'error', data: errorMessage || 'Sub-agent failed', agentId })
     } else {
-      onProgress?.({ type: 'done', duration: Date.now() - startTime, agentId })
+      await onProgress?.({ type: 'done', duration: Date.now() - startTime, agentId })
     }
   }
 

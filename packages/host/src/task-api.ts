@@ -48,8 +48,11 @@ function isUniqueConstraintError(error: unknown): boolean {
 /** Build the transport-neutral task service over the Host-owned task store. */
 export function createHostTaskApi(
   stores: Pick<CoreDataHostStores, 'tasks'>,
-  projects?: Pick<ProjectStore, 'getTaskLink' | 'appendActivity'>,
+  projects?: Pick<ProjectStore, 'getTaskLink'>,
 ): HostTaskApiV1 {
+  function requireOrdinaryTask(taskId: string): void {
+    if (projects?.getTaskLink(taskId)) throw new HostTaskApiError('task_conflict', 'Project Tasks require the revision-checked Project API');
+  }
   return {
     async getTask(taskId) {
       const task = stores.tasks.get(taskId);
@@ -89,17 +92,13 @@ export function createHostTaskApi(
     },
 
     async updateTask(taskId, updates: TaskUpdateInput) {
+      requireOrdinaryTask(taskId);
       const task = stores.tasks.update(taskId, updates);
-      if (task && updates.status !== undefined) {
-        const link = projects?.getTaskLink(task.id);
-        if (link) projects?.appendActivity({ project_id: link.project_id, event_type: 'task.status', task_id: task.id,
-          session_id: link.work_session_id, run_id: null, source_type: 'task', source_id: task.id,
-          payload: JSON.stringify({ status: task.status }) });
-      }
       return task ? toProtocolTask(task) : null;
     },
 
     async deleteTask(taskId) {
+      requireOrdinaryTask(taskId);
       return stores.tasks.delete(taskId);
     },
 
@@ -108,6 +107,7 @@ export function createHostTaskApi(
     },
 
     async claimTask(taskId, owner): Promise<TaskClaimResult> {
+      requireOrdinaryTask(taskId);
       const result = stores.tasks.claim(taskId, owner);
       return {
         success: result.success,
@@ -118,6 +118,8 @@ export function createHostTaskApi(
     },
 
     async blockTasks(fromTaskId, toTaskId) {
+      requireOrdinaryTask(fromTaskId);
+      requireOrdinaryTask(toTaskId);
       return stores.tasks.block(fromTaskId, toTaskId);
     },
 
@@ -141,6 +143,7 @@ export function createHostTaskApi(
       sessionId,
       owner,
     ): Promise<UnassignTeammateTasksResult> {
+      for (const task of stores.tasks.getByOwner(sessionId, owner)) requireOrdinaryTask(task.id);
       const result = stores.tasks.unassignTeammate(sessionId, owner);
       return {
         unassignedTasks: result.unassignedTasks.map((task) => ({

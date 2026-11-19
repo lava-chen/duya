@@ -643,6 +643,19 @@ export interface SubagentStartedPayload {
   readonly agentDescription?: string;
 }
 
+export interface SubagentProgressPayload {
+  readonly subagentId: SubagentId;
+  readonly sessionId?: SessionId;
+  readonly kind: 'text' | 'thinking' | 'tool_use' | 'tool_result' | 'done' | 'error';
+  readonly data?: string;
+  readonly toolName?: string;
+  readonly toolInput?: Readonly<Record<string, unknown>>;
+  readonly toolResult?: string;
+  readonly partial?: boolean;
+  readonly toolCallId?: ToolCallId;
+  readonly toolError?: boolean;
+}
+
 export interface SubagentCompletedPayload {
   readonly subagentId: SubagentId;
   readonly status: 'completed' | 'failed' | 'cancelled';
@@ -764,6 +777,7 @@ export interface RunEventPayloads {
   'compaction.over_threshold': CompactionOverThresholdPayload;
 
   'subagent.started': SubagentStartedPayload;
+  'subagent.progress': SubagentProgressPayload;
   'subagent.completed': SubagentCompletedPayload;
   'hook.invoked': HookInvokedPayload;
 

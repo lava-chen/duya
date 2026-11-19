@@ -29,6 +29,8 @@
 
 import type { SessionId } from '@duya/agent-protocol';
 import * as path from 'node:path';
+import { selectProject } from './commands/project-menu.js';
+import type { HostProjectRecord } from '@duya/agent-protocol/projects';
 import type { HostHandshakeV1 } from '@duya/host/http-client';
 import { HostSessionHttpClient } from '@duya/host/http-client';
 import { readLocalHostRuntime, startLocalHost } from '@duya/host/local-host';
@@ -52,6 +54,12 @@ export interface TuiCommandOptions {
   readonly model?: string;
   readonly providerId?: string;
   readonly apiFormat?: 'anthropic' | 'openai';
+  /** Enter the Coordinator workbench rather than a generic Session. */
+  readonly projectMode?: boolean;
+  readonly projectChannelsOnly?: boolean;
+  /** Direct project selection for `duya project --project <id>`. */
+  readonly projectId?: string;
+  readonly project?: { readonly projectId: string; readonly name: string };
 }
 
 /** The Host the TUI talks to, however it came to be running. */
@@ -180,6 +188,10 @@ function errorMessage(error: unknown): string {
 export async function runTuiCommand(options: TuiCommandOptions): Promise<number> {
   const explicit = attachedHostFromEnv(process.env);
   const discovered = explicit === null ? await attachedHostFromRuntime() : null;
+  if (options.projectChannelsOnly === true && explicit === null && discovered === null) {
+    write('Start duya serve in one terminal, then run duya project channel setup in another.');
+    return 2;
+  }
   if (discovered !== null) {
     const refusal = await discoveredHostRefusal(discovered);
     if (refusal !== null) {
@@ -199,7 +211,7 @@ export async function runTuiCommand(options: TuiCommandOptions): Promise<number>
   const client = new HostSessionHttpClient(host.origin, host.token ?? '');
   try {
     const health = await client.getHealth();
-    write(`${DIM}duya tui · Host ${host.origin} (api v${health.apiVersion})${RESET}`);
+    if (options.projectMode !== true) write(`${DIM}duya tui · Host ${host.origin} (api v${health.apiVersion})${RESET}`);
   } catch (error) {
     write(`${RED}Host failed to start: ${error instanceof Error ? error.message : String(error)}${RESET}`);
     return 1;
@@ -214,12 +226,38 @@ export async function runTuiCommand(options: TuiCommandOptions): Promise<number>
 
   let sessionId: SessionId;
   const owned = new OwnedSessions();
-  if (options.session !== undefined && options.session.trim().length > 0) {
+  if (options.projectMode === true) {
+    let project: HostProjectRecord | null;
+    try {
+      project = await selectProject(client, host, {
+        ...(options.projectId === undefined ? {} : { projectId: options.projectId }),
+        ...(options.projectChannelsOnly === true ? { channelsOnly: true } : {}),
+      });
+      if (project === null) {
+        lease.close();
+        await host.close();
+        return 0;
+      }
+      const coordinator = await client.ensureCoordinatorSession(project.project_id);
+      sessionId = coordinator.sessionId as SessionId;
+      options = {
+        ...options,
+        workingDirectory: project.canonical_root,
+        project: { projectId: project.project_id, name: project.name },
+      };
+    } catch (error) {
+      write(`${RED}Could not open Project Coordinator: ${errorMessage(error)}${RESET}`);
+      lease.close();
+      await host.close();
+      return 1;
+    }
+  } else if (options.session !== undefined && options.session.trim().length > 0) {
     sessionId = options.session.trim() as SessionId;
     const existing = await client.readLocalSession(sessionId, { includeAllSessions: true });
     if (existing === null) {
       write(`${RED}session ${sessionId} does not exist on this Host${RESET}`);
       lease.close();
+      await host.close();
       return 1;
     }
     const recordedDirectory = path.resolve(existing.workingDirectory);
@@ -227,6 +265,7 @@ export async function runTuiCommand(options: TuiCommandOptions): Promise<number>
       && path.resolve(options.workingDirectory) !== recordedDirectory) {
       write(`${RED}workspace does not match session ${sessionId}; use the session's recorded directory (${recordedDirectory})${RESET}`);
       lease.close();
+      await host.close();
       return 1;
     }
     options = { ...options, workingDirectory: recordedDirectory };

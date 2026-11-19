@@ -75,6 +75,10 @@
       "types": "./dist/project-store.d.ts",
       "import": "./dist/project-store.js"
     },
+    "./project-channel-store": {
+      "types": "./dist/project-channel-store.d.ts",
+      "import": "./dist/project-channel-store.js"
+    },
     "./projects-import": {
       "types": "./dist/projects-import.d.ts",
       "import": "./dist/projects-import.js"

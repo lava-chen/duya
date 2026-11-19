@@ -280,6 +280,40 @@ describe('formatToolResult', () => {
 });
 
 describe('rendered transcript', () => {
+  it('projects the latest prompt, tool activity and streamed reply in focus view', () => {
+    const model = new TranscriptModel();
+    model.addUser('Earlier prompt');
+    model.apply({ type: 'text', data: { content: 'Earlier reply' } });
+    model.addUser('Latest prompt');
+    model.apply({ type: 'text', data: { content: 'Working notes' } });
+    model.apply({ type: 'tool_use', data: { id: 'edit', name: 'edit', input: { file_path: 'index.ts' } } });
+    model.apply({
+      type: 'tool_result',
+      data: { id: 'edit', result: 'edited', metadata: { diff: [{ path: 'index.ts', added: 3, removed: 1, hunks: [] }] } },
+    });
+    model.apply({ type: 'tool_use', data: { id: 'task', name: 'task', input: { prompt: 'verify' } } });
+    model.apply({
+      type: 'agent_progress',
+      data: { agentEventType: 'subagent_started', parentToolCallId: 'task', subagentId: 'agent' },
+    });
+    model.apply({ type: 'tool_result', data: { id: 'task', result: 'started' } });
+    model.apply({
+      type: 'agent_progress',
+      data: { agentEventType: 'subagent_completed', subagentId: 'agent', status: 'completed' },
+    });
+    model.apply({ type: 'text_delta', data: { content: 'Final reply' } });
+
+    const focused = strip(renderTranscript(model, { ...DEFAULT_RENDER_OPTIONS, focusView: true }));
+    expect(focused).toContain('Latest prompt');
+    expect(focused).toContain('2 tool calls · 1 agent · 1 background task completed · +3 −1');
+    expect(focused).toContain('Final reply');
+    expect(focused).not.toMatch(/Earlier|Working notes|index\.ts/u);
+    const full = strip(renderTranscript(model, DEFAULT_RENDER_OPTIONS));
+    expect(full).toContain('Earlier reply');
+    expect(full).toContain('Working notes');
+    expect(full).toContain('index.ts');
+  });
+
   it('shows a grep result as prose, not JSON', () => {
     const model = new TranscriptModel();
     model.apply({ type: 'tool_use', data: { id: 'g1', name: 'grep', input: { pattern: 'useStreaming', path: 'src/' } } });

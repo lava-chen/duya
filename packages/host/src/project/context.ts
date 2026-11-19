@@ -56,8 +56,9 @@ export function buildProjectContext(input: BuildProjectContextInput): ProjectCon
   } else add('Current state: not recorded; use expectedRevision=0 for the first state write.');
   // Task identity and acceptance precede long descriptions and less relevant
   // memory. Missing records remain visible instead of disappearing as done.
-  for (const { task: item, link } of tasks) {
-    add(`Task ${link.taskId} [${item?.status ?? 'record unavailable'}; acceptance=${link.acceptanceStatus}] ${item?.subject ?? ''} (work session ${link.workSessionId ?? 'unbound'})`, { type: 'task', id: link.taskId });
+  for (const { task: item, link, attempts } of tasks) {
+    const latest = attempts?.[0];
+    add(`Task ${link.taskId} [${item?.status ?? 'record unavailable'}; revision=${link.revision ?? 0}; acceptance=${link.acceptanceStatus}${latest ? `; launch=${latest.status}; reason=${latest.reason ?? 'none'}` : ''}] ${item?.subject ?? ''} (work session ${link.workSessionId ?? 'unbound'})`, { type: 'task', id: link.taskId });
   }
   if (taskId && tasks.length === 0) add(`Task ${taskId}: record unavailable.`);
   for (const { task: item } of tasks) {

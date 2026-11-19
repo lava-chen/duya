@@ -139,6 +139,7 @@ function isDisposableEvent(event: Record<string, unknown>): boolean {
   return event.type === 'chat:text_delta' ||
     event.type === 'chat:thinking_delta' ||
     event.type === 'chat:tool_use_delta' ||
+    (event.type === 'chat:agent_progress' && event.partial === true) ||
     // A live shell tail belongs with the other three: it is ephemeral by
     // protocol (`tool.output_delta` is not retainable), the authoritative text is
     // the tool's RESULT frame, and a command that prints faster than stdout

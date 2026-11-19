@@ -159,9 +159,10 @@ describe('drift #9: the legacy mapping table is total and well-formed', () => {
     ]);
   });
 
-  it('agent_progress splits three ways, replacing one 8-valued union', () => {
+  it('maps agent_progress to child lifecycle, live output and hooks', () => {
     expect(SSE_EVENT_TO_PROTOCOL['agent_progress']).toEqual([
       'subagent.started',
+      'subagent.progress',
       'subagent.completed',
       'hook.invoked',
     ]);

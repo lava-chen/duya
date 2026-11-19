@@ -12,7 +12,12 @@ export type ProjectToolAction =
   | 'context'
   | 'update_state'
   | 'record_decision'
-  | 'record_memory';
+  | 'create_task'
+  | 'update_task'
+  | 'record_memory'
+  | 'list_channels'
+  /** Internal: reached through `send_message`, not offered as a project action. */
+  | 'send_channel_message';
 
 export interface ProjectToolSource {
   readonly type: string;
@@ -42,6 +47,9 @@ export interface ProjectToolTask {
   readonly workSessionId: string | null;
   readonly updatedAt: number;
   readonly recordAvailable: boolean;
+  readonly revision?: number;
+  readonly attempts?: readonly { readonly attemptId: string; readonly workSessionId: string | null;
+    readonly runId: string | null; readonly status: string; readonly reason: string | null }[];
 }
 
 export interface ProjectToolDecision {
@@ -88,12 +96,39 @@ export interface ProjectToolContext {
   readonly sourceRefs: readonly ProjectToolSource[];
 }
 
+/**
+ * One channel this Project may speak in. Deliberately carries the Host-minted
+ * binding id and the two permissions, never a guild/channel id, a token, or any
+ * other Project's rows: the model picks a binding, it never names a target.
+ */
+export interface ProjectToolChannel {
+  readonly bindingId: string;
+  readonly label: string;
+  /** The binding is enabled, so a reply to an inbound of it is allowed. */
+  readonly canReply: boolean;
+  /** Unsolicited sends are allowed for this binding. */
+  readonly canProactive: boolean;
+}
+
 export interface ProjectToolPayload {
+  readonly task?: ProjectToolTask;
   readonly snapshot?: ProjectToolSnapshot;
   readonly context?: ProjectToolContext;
   readonly state?: ProjectToolState;
   readonly decision?: ProjectToolDecision;
   readonly memory?: ProjectToolMemory;
+  readonly channels?: readonly ProjectToolChannel[];
+  /**
+   * Receipt of an external send. `status` is the ledger's, never optimistically
+   * `sent`: `queued` means accepted here, `unknown` means the platform may or
+   * may not have it.
+   */
+  readonly delivery?: ProjectToolDelivery;
+}
+
+export interface ProjectToolDelivery {
+  readonly deliveryId: string;
+  readonly status: string;
 }
 
 export type ProjectToolOperation<T> =

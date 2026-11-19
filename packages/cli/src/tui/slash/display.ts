@@ -26,7 +26,7 @@ import {
   commitSettings,
   type SettingId,
 } from './settings.js';
-import { parseTuiPreferences, type TuiPreferences } from '../preferences.js';
+import { parseTuiPreferences, TUI_FOCUS_VIEW_SETTING, type TuiPreferences } from '../preferences.js';
 import {
   DISPLAY_PROFILES,
   displayProfilePatch,
@@ -156,4 +156,24 @@ const DISPLAY_COMMAND: TuiSlashCommandDef = {
   },
 };
 
-export const DISPLAY_COMMANDS: readonly TuiSlashCommandDef[] = [DISPLAY_COMMAND];
+const FOCUS_COMMAND: TuiSlashCommandDef = {
+  name: 'focus',
+  description: 'Show the latest prompt, tool summary and reply',
+  group: 'Settings',
+  async run(ctx, args) {
+    const mode = args.trim().toLowerCase();
+    if (mode !== '' && mode !== 'on' && mode !== 'off') {
+      ctx.tui.printError('Use /focus, /focus on or /focus off.');
+      return { kind: 'handled' };
+    }
+    const enabled = ctx.tui.setFocusView?.(mode === '' ? undefined : mode === 'on');
+    if (enabled === undefined) {
+      ctx.tui.printNotice('Focus view needs full-screen rendering. Use /settings to switch.');
+      return { kind: 'handled' };
+    }
+    await ctx.client.setSetting(TUI_FOCUS_VIEW_SETTING, String(enabled));
+    return { kind: 'handled' };
+  },
+};
+
+export const DISPLAY_COMMANDS: readonly TuiSlashCommandDef[] = [DISPLAY_COMMAND, FOCUS_COMMAND];

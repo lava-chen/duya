@@ -358,6 +358,9 @@ export const AGENT_PROGRESS_EVENT_FIELDS: Classified<
   toolName: 'json-wire',
   toolInput: 'json-wire',
   toolResult: 'json-wire',
+  partial: 'json-wire',
+  toolCallId: 'json-wire',
+  toolError: 'json-wire',
   duration: 'json-wire',
   // Identify the emitting sub-agent to the renderer.
   agentId: 'json-wire',

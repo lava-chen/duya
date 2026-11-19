@@ -50,7 +50,6 @@ import { TranscriptPane } from './components/transcript-pane.js';
 import { WorkbenchSidebar } from './components/workbench-sidebar.js';
 import { HStack } from './core/containers.js';
 import type { StyledSpan } from './core/span.js';
-import { resolveDisplayProfile } from './display-profiles.js';
 import { StatusBar } from './components/status-bar.js';
 import { renderTree, type UIComponent } from './core/component.js';
 import { PointerDispatcher, type HitRegion } from './core/pointer.js';
@@ -85,6 +84,7 @@ import {
   thinkingExpanded,
   escapeTags,
   stylesOf,
+  visibleBlocks,
   type RenderOptions,
   type ToolGroupMode,
 } from './transcript-view.js';
@@ -138,6 +138,8 @@ import {
 import { capacityBar } from './capacity-bar.js';
 import { formatTokensPerSecond, readGitBranch } from './footer.js';
 import type { PrBadge } from './pr-badge.js';
+import type { ProjectWorkbenchSummary } from './project-workbench.js';
+import { agentSwitchKey, agentSwitchTargets, renderAgentSwitcher, type AgentSwitchTarget } from './components/agent-switcher.js';
 import type { WorkbenchWorkspaceSummary } from './workbench-workspace.js';
 import type { StatuslineProfile } from './preferences.js';
 import {
@@ -157,12 +159,8 @@ import {
 } from './working-tail.js';
 import { InlineSurface } from './terminal/surface.js';
 import { conversationRegionBottom, type TerminalSize } from './terminal/viewport.js';
+import { SubagentTranscript } from './subagent-transcript.js';
 import { BackgroundTaskModel, formatTaskDuration, taskStatusGlyph, type BackgroundTaskGroup, type BackgroundTaskRow, type BackgroundTaskView } from './background-tasks.js';
-import {
-  subagentIdentityText,
-  subagentOutcomeLabel,
-  type SubagentOutcome,
-} from './subagent.js';
 import type { BackgroundTaskListV1 } from '@duya/agent-protocol';
 import type { Message as TranscriptMessage, MessageContent } from '@duya/agent-protocol/transcript';
 import type { FileAttachment } from '@duya/agent-protocol';
@@ -519,6 +517,7 @@ export interface TUIAppOptions {
   readonly pullRequestBadge?: () => PrBadge | null;
   /** Cached local Git status for the directory this session executes in. */
   readonly workbenchWorkspace?: () => WorkbenchWorkspaceSummary;
+  readonly workbenchProject?: () => ProjectWorkbenchSummary | undefined;
   /**
    * Reasoning effort for the NEXT turn, as a string (`'low'`, `'high'`, …).
    *
@@ -542,6 +541,7 @@ export interface TUIAppOptions {
   /** Shared Desktop/TUI language preference; slash descriptions update live. */
   readonly onLocaleChange?: (locale: CommandLocale) => void;
   /** Thinking blocks in the transcript. `/settings` can flip this live. */
+  readonly focusView?: boolean;
   readonly showThinking?: boolean;
   /** Show tool result bodies without per-block expansion. */
   readonly showToolResults?: boolean;
@@ -574,6 +574,7 @@ export interface TUIAppOptions {
    */
   readonly onBackgroundTaskOpen?: (task: BackgroundTaskView) => void;
   /** Load the child session's canonical transcript after it settles. */
+  readonly onSubagentOutput?: (task: BackgroundTaskView) => Promise<import('@duya/agent-protocol').BackgroundTaskOutputV1 | null>;
   readonly onSubagentTranscriptLoad?: (task: BackgroundTaskView) => Promise<readonly TranscriptMessage[]>;
   /** Stop a running child by its parent-session task identity. */
   readonly onSubagentStop?: (task: BackgroundTaskView) => Promise<boolean>;
@@ -703,6 +704,7 @@ export class TUIApp {
   private inlinePopupLines: string[] = [];
   private inlineInputLines: string[] = [];
   private inlineStatusLines: string[] = [];
+  private agentSwitcherHits: ReturnType<typeof renderAgentSwitcher>['hits'] = [];
   /** Where the synchronized-output markers go, alongside the frames. */
   private readonly output: NodeJS.WritableStream;
 
@@ -768,7 +770,7 @@ export class TUIApp {
    * this one is a ceiling the user sets.
    */
   private maxInputRows: number;
-  private focus: 'input' | 'tasks' | 'sessions' = 'input';
+  private focus: 'input' | 'tasks' | 'sessions' | 'transcript' = 'input';
   private sessionDashboardEntries: readonly SessionDashboardEntry[] = [];
   private selectedSessionDashboardId: string | null = null;
   /** Selected row in the task view, over `backgroundTaskRows()`. */
@@ -782,20 +784,21 @@ export class TUIApp {
    * pressing Enter on a row that shifted a moment ago opens its neighbour.
    */
   private selectedTaskId: string | null = null;
-  /**
-   * The subagent whose live panel the task view is showing, by subagent id.
-   *
-   * "Watching" one child is the runtime switch this view exists for: the list
-   * keeps the others one arrow away, the panel under it follows the watched one,
-   * and Esc walks back out (panel → list → input). Null means not watching.
-   */
-  private watchedSubagentId: string | null = null;
-  private readonly subagentTranscripts = new Map<string, {
+  private focusView = false;
+  private viewedTranscript: {
+    readonly kind: 'session' | 'subagent';
+    readonly id: string;
+    readonly title: string;
     readonly model: TranscriptModel;
-    readonly toolIds: string[];
-    revision: number;
-    loadGeneration: number;
-  }>();
+    readonly onClose?: () => void;
+  } | null = null;
+  private mainViewport: { follow: boolean; scrollTop: number } | null = null;
+
+  private get watchedSubagentId(): string | null {
+    return this.viewedTranscript?.kind === 'subagent' ? this.viewedTranscript.id : null;
+  }
+
+  private readonly subagentTranscripts = new Map<string, SubagentTranscript>();
   /** Tail-following. Disengaged by scrolling up, restored by Ctrl+End. */
   private follow = true;
   /**
@@ -1019,6 +1022,7 @@ export class TUIApp {
 
   constructor(options: TUIAppOptions) {
     this.options = options;
+    this.focusView = options.focusView ?? false;
     this.renderer = selectScreenRenderer(options.renderer);
     // Capabilities first: the theme fallback below is a rendering decision, so
     // it must not be made before we know what the terminal can render.
@@ -1200,6 +1204,8 @@ export class TUIApp {
   stop(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.viewedTranscript?.onClose?.();
+    this.viewedTranscript = null;
     this.running = false;
     this.pointer.clear();
     this.settleInteractivePrompt(null);
@@ -1295,14 +1301,17 @@ export class TUIApp {
     this.scheduler.requestImmediate();
   }
 
-  /**
-   * Adopt a fresh Host snapshot of background bash tasks.
-   *
-   * The task view is fed by two sources (see `background-tasks.ts`); this is
-   * the polled half. Subagents arrive through `push()` as run frames.
-   */
+  /** Apply the polled task snapshot, including children that outlive a parent run. */
   setBackgroundTasks(snapshot: BackgroundTaskListV1): void {
     if (!this.backgroundTasks.applyBashSnapshot(snapshot)) return;
+    const completed = new Set(snapshot.tasks.filter((task) => task.kind === 'subagent'
+      && task.status === 'completed').map((task) => task.id));
+    for (const { card } of this.model.subagentCards()) {
+      if (card.subagentId === undefined || card.outcome !== undefined || !completed.has(card.subagentId)) continue;
+      const update = this.model.apply({ type: 'agent_progress',
+        data: { agentEventType: 'subagent_completed', subagentId: card.subagentId, status: 'completed' } });
+      if (update.kind !== 'none') this.noteTranscriptMutation();
+    }
     this.clampTaskSelection();
     this.scheduler.requestImmediate();
   }
@@ -1378,8 +1387,8 @@ export class TUIApp {
 
   closeSessionsDashboard(): void {
     if (this.focus !== 'sessions') return;
-    this.focus = 'input';
-    if (this.inlineSurface !== null) this.setMouseReporting(false);
+    this.focus = this.viewedTranscript === null ? 'input' : 'transcript';
+    if (this.inlineSurface !== null) this.setMouseReporting(this.viewedTranscript !== null && this.mouseMode !== 'off');
     this.pointer.clear();
     this.scheduler.requestImmediate();
   }
@@ -1415,9 +1424,6 @@ export class TUIApp {
     if (rows.length === 0) {
       this.selectedTaskRow = -1;
       this.selectedTaskId = null;
-      // Nothing left to watch: a panel about a task that no longer exists is a
-      // panel about nothing.
-      this.watchedSubagentId = null;
       return;
     }
     if (this.selectedTaskId !== null) {
@@ -1904,7 +1910,7 @@ export class TUIApp {
     // that sits above the composer. Its column is the editor's own column plus
     // the prompt marker's width, because that is what is actually printed.
     const caret =
-      (this.focus === 'input' || this.focus === 'sessions') && !this.dockPanelActive()
+      this.viewedTranscript === null && (this.focus === 'input' || this.focus === 'sessions') && !this.dockPanelActive()
         ? {
             row:
               tail.length +
@@ -1916,28 +1922,32 @@ export class TUIApp {
           }
         : null;
     this.inlineSurface?.render({
+      ...(this.viewedTranscript === null ? {} : { previewTop: this.follow ? 'tail' : this.scrollTop }),
       scroll: this.inlineTranscriptLines,
       chrome,
       caret,
     });
-    if (this.focus === 'sessions' && this.mouseReporting && this.mouseMode === 'all') {
-      const hits: HitRegion[] = [];
-      const firstDashboardRow = this.terminalSize().rows - chrome.length + tail.length;
-      for (const entry of this.sessionDashboardRows().entries) {
-        hits.push({
-          id: `session-dashboard:${entry.id}`,
-          row: firstDashboardRow + entry.row,
-          column: 0,
-          width: this.terminalSize().columns,
-          height: 1,
-          activate: () => {
-            this.selectedSessionDashboardId = entry.id;
-            void this.options.onSessionDashboardOpen?.(entry.id);
-          },
-        });
+    const hits: HitRegion[] = [];
+    if (this.mouseReporting && this.mouseMode === 'all') {
+      if (this.focus === 'sessions') {
+        const firstDashboardRow = this.terminalSize().rows - chrome.length + tail.length;
+        for (const entry of this.sessionDashboardRows().entries) {
+          hits.push({
+            id: `session-dashboard:${entry.id}`,
+            row: firstDashboardRow + entry.row,
+            column: 0,
+            width: this.terminalSize().columns,
+            height: 1,
+            activate: () => {
+              this.selectedSessionDashboardId = entry.id;
+              void this.options.onSessionDashboardOpen?.(entry.id);
+            },
+          });
+        }
       }
-      this.pointer.commit(hits);
-    } else if (this.focus !== 'sessions') this.pointer.clear();
+      this.addAgentSwitchHits(hits, this.terminalSize().rows - 1);
+    }
+    this.pointer.commit(hits);
   }
 
   /** True when something needs the full-screen takeover. */
@@ -1967,7 +1977,7 @@ export class TUIApp {
     // Keyed on the inline surface, not on the absence of the status bar: the
     // status bar being null IS inline mode today, but a full-screen mode that
     // grows its own tail later must not be switched off by this line.
-    if (this.inlineSurface === null) return [];
+    if (this.inlineSurface === null || this.viewedTranscript !== null) return [];
     const busy = this.options.isBusy?.() ?? this.busy;
     const counts = this.backgroundSummaryCounts();
     const active = busy || this.waitingForPermission;
@@ -2021,7 +2031,7 @@ export class TUIApp {
    */
   private taskViewLines(): string[] {
     if (this.focus === 'sessions') return [...this.sessionDashboardLines()];
-    if (this.focus !== 'tasks' || this.inlineSurface === null) return [];
+    if (this.focus !== 'tasks') return [];
     const width = Math.max(1, this.terminalSize().columns - 1);
     const rows = this.backgroundTaskRows();
     const lines: string[] = [];
@@ -2039,11 +2049,7 @@ export class TUIApp {
       )));
       return lines;
     }
-    // The watched agent's panel takes rows from the LIST, not from a modal:
-    // the point of watching one child is that the others stay visible and one
-    // arrow key away.
-    const watchRows = this.watchPanelLines(width);
-    const budget = Math.max(3, Math.min(8, this.terminalSize().rows - 10 - watchRows.length));
+    const budget = Math.max(1, Math.min(8, this.terminalSize().rows - 10));
     const selected = this.selectedTaskRow < 0 ? 0 : this.selectedTaskRow;
     const first = Math.max(0, Math.min(selected - (budget - 1), Math.max(0, rows.length - budget)));
     for (let index = first; index < Math.min(rows.length, first + budget); index += 1) {
@@ -2052,7 +2058,6 @@ export class TUIApp {
         ? this.taskGroupLine(row.group, index === selected, width)
         : this.taskRowLine(row.task, index === selected, width));
     }
-    lines.push(...watchRows);
     return lines;
   }
 
@@ -2091,57 +2096,6 @@ export class TUIApp {
 
   private sessionDashboardLines(): readonly string[] {
     return this.sessionDashboardRows().lines;
-  }
-
-  /**
-   * Rows for the subagent being watched, or none.
-   *
-   * The panel is a STATUS CARD, not a transcript: what the child is, what it
-   * was asked, how long it has been running and how it ended. It stops there
-   * because that is what this process can prove — a child's own messages live in
-   * the worker that runs it, and inventing a "transcript" here would be an empty
-   * promise dressed as a page.
-   */
-  private watchPanelLines(width: number): string[] {
-    const id = this.watchedSubagentId;
-    if (id === null) return [];
-    const view = this.backgroundTaskRows()
-      .find((row) => row.kind === 'task' && row.task.id === id);
-    const task = view === undefined || view.kind !== 'task' ? null : view.task;
-    const card = this.model.subagentCards().find((entry) => entry.card.subagentId === id)?.card ?? null;
-    if (task === null && card === null) return [];
-
-    const identity = card === null
-      ? (task?.title ?? 'agent')
-      : subagentIdentityText(card.spec, id);
-
-    const outcome: SubagentOutcome = card?.outcome
-      ?? (task === null ? 'unknown' : task.status === 'running' ? 'running' : 'unknown');
-    const startedAtMs = card?.startedAtMs ?? task?.startedAtMs ?? Date.now();
-    const endedAtMs = card?.durationMs === undefined
-      ? (task?.endedAtMs ?? Date.now())
-      : startedAtMs + card.durationMs;
-    const elapsed = formatTaskDuration(Math.max(0, endedAtMs - startedAtMs));
-
-    const unicode = this.terminalEnv.unicodeBox;
-    const glyph = outcome === 'running'
-      ? (unicode ? '●' : '*')
-      : outcome === 'completed'
-        ? (unicode ? '✔' : '+')
-        : outcome === 'failed'
-          ? (unicode ? '✖' : 'x')
-          : outcome === 'cancelled'
-            ? (unicode ? '■' : '-')
-            : '?';
-    const head = `  ${glyph} ${identity} · ${subagentOutcomeLabel(outcome)} · ${elapsed}`;
-    const lines = [`{cyan-fg}${compactActivity(head, width)}{/cyan-fg}`];
-    const brief = card?.spec.brief ?? task?.detail ?? '';
-    if (brief !== '') lines.push(`{gray-fg}${compactActivity(`    ${brief}`, width)}{/gray-fg}`);
-    if (card?.summary !== undefined && card.summary !== '') {
-      lines.push(`{gray-fg}${compactActivity(`    ${card.summary}`, width)}{/gray-fg}`);
-    }
-    lines.push(`{gray-fg}${compactActivity('    Live transcript · Ctrl+K stop · Ctrl+End follow · Esc back', width)}{/gray-fg}`);
-    return lines;
   }
 
   private taskGroupLine(group: BackgroundTaskGroup, selected: boolean, width: number): string {
@@ -2205,8 +2159,18 @@ export class TUIApp {
     }
   }
 
+  setFocusView(enabled = !this.focusView): boolean | undefined {
+    if (this.inlineSurface !== null) return undefined;
+    this.focusView = enabled;
+    this.follow = true;
+    this.scrollTop = 0;
+    this.resetTranscriptNavigation();
+    return enabled;
+  }
+
   private renderOptions(): RenderOptions {
     return {
+      focusView: this.inlineSurface === null && this.focusView,
       expanded: this.expanded,
       // Either switch opens a result body: `expanded` is the transcript-wide
       // toggle, this one is the standing preference from `/settings`.
@@ -2250,7 +2214,7 @@ export class TUIApp {
     const chrome =
       this.inputRows +
       this.inputChromeRows() +
-      STATUS_ROWS +
+      this.footerRows() +
       this.popupRows() +
       // The working tail, the task list and the queue preview.
       4;
@@ -2264,9 +2228,9 @@ export class TUIApp {
 
   private workbenchColumns(total: number): number {
     if (this.inlineSurface !== null || !this.sidebarVisible || !this.options.onWorkbenchCommand
-      || process.env['DUYA_TUI_SIDEBAR'] === '0' || this.terminalSize().columns < 120
+      || process.env['DUYA_TUI_SIDEBAR'] === '0' || this.terminalSize().columns < (this.options.workbenchProject === undefined ? 120 : 92)
       || this.visibleTranscriptRows() < 6) return 0;
-    const preferred = this.preferredSidebarWidth ?? Math.round(total * 0.22);
+    const preferred = this.preferredSidebarWidth ?? Math.round(total * (this.options.workbenchProject === undefined ? 0.22 : 0.29));
     return Math.max(18, Math.min(72, Math.floor(preferred), total - 60));
   }
 
@@ -2302,7 +2266,7 @@ export class TUIApp {
       scrollTop: this.scrollTop,
       following: this.follow,
       ...(this.hoveredToolBlockId === undefined ? {} : { hoveredBlockId: this.hoveredToolBlockId }),
-      revision: this.transcriptRevision + (activeModel === this.model ? 0 : this.activeSubagentTranscript()?.revision ?? 0),
+      revision: this.transcriptRevision,
       ...(this.search.active && this.inlineSurface === null
         ? { search: { query: this.search.query, cursor: this.search.cursor } }
         : {}),
@@ -2350,18 +2314,15 @@ export class TUIApp {
     // match's line number — depends on it.
     this.lastPaneWidth = width - (thumb !== null ? 1 : 0);
     if (sidebarWidth > 0) {
-      const tools = activeModel.blocks.filter((block) => block.kind === 'tool');
       const busy = this.options.isBusy?.() ?? this.busy;
       const working = busy || this.waitingForPermission;
       const props = {
         styles: stylesOf({ theme: this.theme.tags, renderer: 'own' }),
         sessionTitle: this.options.sessionTitle?.() ?? 'Current session',
-        activity: this.watchedSubagentId === null
+        activity: this.viewedTranscript === null
           ? `${working ? `${spinnerGlyph(this.spinnerFrame, this.terminalEnv.unicodeBox)} ` : ''}${this.activityLabel(busy)}`
-          : `Subagent · ${this.backgroundTasks.tasks().find((task) => task.id === this.watchedSubagentId)?.status ?? 'live'} · Ctrl+K stop`,
-        activityActive: this.watchedSubagentId === null
-          ? working
-          : this.backgroundTasks.tasks().some((task) => task.id === this.watchedSubagentId && task.status === 'running'),
+          : this.viewedTranscript.title,
+        activityActive: this.viewedTranscript === null && working,
         tasks: this.backgroundTasks.tasks(),
         workspace: this.options.workbenchWorkspace?.() ?? {
           root: this.options.workspaceDirectory?.() ?? process.cwd(),
@@ -2371,11 +2332,10 @@ export class TUIApp {
           changedFiles: null,
           changes: [],
         },
+        project: this.options.workbenchProject?.(),
         pullRequest: this.options.pullRequestBadge?.() ?? null,
-        contextTokens: this.watchedSubagentId === null ? this.contextTokens() : null,
-        contextBudget: this.watchedSubagentId === null ? this.options.contextBudgetTokens?.() ?? null : null,
-        profile: resolveDisplayProfile({ showThinking: this.showThinking, expandBlocks: this.expanded, showToolResults: this.showToolResults, toolGroupMode: this.toolGroupMode }),
-        tools: { total: tools.length, running: tools.filter((tool) => tool.status === 'running').length, errors: tools.filter((tool) => tool.status === 'error').length },
+        contextTokens: this.viewedTranscript === null ? this.contextTokens() : null,
+        contextBudget: this.viewedTranscript === null ? this.options.contextBudgetTokens?.() ?? null : null,
       };
       if (this.sidebar === null) this.sidebar = new WorkbenchSidebar(props);
       else this.sidebar.props = props;
@@ -2423,6 +2383,10 @@ export class TUIApp {
    * real window instead of a one-line one.
    */
   private visibleTranscriptRows(): number {
+    if (this.inlineSurface !== null && this.viewedTranscript !== null) {
+      return Math.max(1, this.terminalSize().rows - this.aboveComposerRows()
+        - this.inlineInputLines.length - this.inlinePopupLines.length - this.inlineStatusLines.length);
+    }
     const screenRows = asNumber((this.output as { rows?: unknown }).rows, 24);
     // input box (rows + its two border rows), status bar, the popup while it is
     // open, and the transcript's own top and bottom border.
@@ -2431,7 +2395,7 @@ export class TUIApp {
       screenRows -
         this.inputRows -
         this.inputChromeRows() -
-        STATUS_ROWS -
+        this.footerRows() -
         2 -
         this.popupRows(),
     );
@@ -2468,7 +2432,50 @@ export class TUIApp {
 
   /** Rows the status/footer area owns, which differs by presentation. */
   private footerRows(): number {
-    return this.inlineSurface === null ? STATUS_ROWS : INLINE_FOOTER_ROWS;
+    const base = this.inlineSurface === null ? STATUS_ROWS
+      : this.viewedTranscript === null ? INLINE_FOOTER_ROWS : 1;
+    return base + Number(this.terminalSize().columns > 16 && this.agentTargets().length > 1);
+  }
+
+  private agentTargets(): readonly AgentSwitchTarget[] {
+    const project = this.options.workbenchProject?.();
+    return agentSwitchTargets(project === undefined ? 'Main' : 'Coordinator',
+      this.backgroundTasks.tasks(), project?.sessions ?? []);
+  }
+
+  private selectedAgentKey(): string {
+    const view = this.viewedTranscript;
+    return view === null ? 'main' : `${view.kind}:${view.id}`;
+  }
+
+  private agentSwitcherLines(width: number): readonly string[] {
+    const switcher = renderAgentSwitcher(this.agentTargets(), this.selectedAgentKey(), width, this.theme.tags);
+    this.agentSwitcherHits = switcher.hits;
+    return switcher.text === '' ? [] : [switcher.text];
+  }
+
+  private openAgentTarget(target: AgentSwitchTarget): void {
+    if (agentSwitchKey(target) === this.selectedAgentKey()) {
+      if (target.kind === 'main') this.closeSessionsDashboard();
+      return;
+    }
+    if (target.kind === 'main') {
+      this.closeViewedTranscript();
+    } else if (target.kind === 'subagent') {
+      this.openTaskDetail(target.task);
+    } else {
+      void Promise.resolve(this.options.onWorkbenchCommand?.(`/sessions ${target.id}`)).catch((error: unknown) =>
+        this.printError(error instanceof Error ? error.message : String(error)));
+    }
+  }
+
+  private addAgentSwitchHits(hits: HitRegion[], row: number): void {
+    for (const hit of this.agentSwitcherHits) {
+      hits.push({
+        id: `agent-switch:${agentSwitchKey(hit.target)}`, row, column: hit.column,
+        width: hit.width, height: 1, activate: () => this.openAgentTarget(hit.target),
+      });
+    }
   }
 
   /**
@@ -2523,9 +2530,18 @@ export class TUIApp {
     // prompt) takes the composer's slot rather than a centred box: same rows,
     // same rules, full width. That is pi's `showSelector`, and it is what keeps
     // the conversation above the panel readable while the list is open.
-    const panel = this.dockPanelLines(Math.max(1, availableRows - 2), this.dockWidth(inline, size));
+    const searchRow = this.transcriptSearchRow(this.composerWidth());
+    const panel = this.dockPanelLines(Math.max(1, availableRows - 2), this.dockWidth(inline, size))
+      ?? (!inline && this.focus === 'tasks' ? this.taskViewLines() : null)
+      ?? (this.viewedTranscript === null ? null : searchRow === null
+        ? [escapeTags(compactActivity(`${this.viewedTranscript.title} · Read only · Esc back`, this.dockWidth(inline, size)))]
+        : [searchRow.line]);
     if (panel !== null) {
+      this.composerPointerRows = [];
       this.paintDockPanel(panel, inline, size);
+      if (searchRow !== null && this.viewedTranscript !== null && !this.dockPanelActive()) {
+        this.inputCursor = { ...this.inputCursor, cursorCol: searchRow.cursorCol };
+      }
       return;
     }
 
@@ -2548,7 +2564,6 @@ export class TUIApp {
     // region, and the transcript's bottom already derives from the input
     // height. Inline returns null unconditionally — committed rows cannot be
     // repainted, so there is nothing for the bar to drive.
-    const searchRow = this.transcriptSearchRow(this.composerWidth());
     const searchRowOffset = searchRow === null || inline ? 0 : 1;
     if (!inline) {
       const body = borderRows > 0 ? layout.lines.slice(1, -1) : layout.lines;
@@ -2736,6 +2751,7 @@ export class TUIApp {
    * sent — the opposite of what had just happened.
    */
   private queuePreviewLines(): string[] {
+    if (this.viewedTranscript !== null) return [];
     const waiting = this.options.queuedDrafts?.() ?? [];
     if (waiting.length === 0 || this.terminalSize().rows < 7) return [];
     const width = Math.max(1, this.terminalSize().columns - 1);
@@ -2752,7 +2768,7 @@ export class TUIApp {
   private placeCursor(): void {
     // The sessions dashboard keeps the composer: its own text starts a new
     // background session, so the caret has to stay where the user types.
-    if ((this.focus !== 'input' && this.focus !== 'sessions') || this.dockPanelActive()) {
+    if ((this.focus !== 'input' && this.focus !== 'sessions' && !this.search.active) || this.dockPanelActive()) {
       this.fullScreen.setCaret(null);
       return;
     }
@@ -2848,7 +2864,7 @@ export class TUIApp {
       // composer and the status row, so its bottom is the status row's top.
       // paintInput ran first and computed the boxes for this frame; the
       // popup's painted height equals what `popupRows()` reserved there.
-      bottom: this.terminalSize().rows - (this.frameBoxes?.status.top ?? this.terminalSize().rows - STATUS_ROWS) - (rows.length + 2),
+      bottom: this.terminalSize().rows - (this.frameBoxes?.status.top ?? this.terminalSize().rows - this.footerRows()) - (rows.length + 2),
       lines: rows,
       hidden: false,
     });
@@ -2881,31 +2897,26 @@ export class TUIApp {
   }
 
   private paintStatus(): void {
+    const inspecting = this.viewedTranscript !== null;
     const model = this.options.modelLabel?.();
-    const text = model === undefined || model === null
+    const text = inspecting ? '' : this.options.workbenchProject !== undefined || model === undefined || model === null
       ? this.options.statusText?.() ?? ''
       : [model.provider, model.model].filter((part) => part !== undefined && part !== '').join(' · ');
     const busy = this.options.isBusy?.() ?? this.busy;
     const tail = this.follow ? '' : ' [paused]';
-    const taskRows = this.backgroundTaskRows();
-    const taskSelection = this.selectedTaskRow < 0 ? 0 : this.selectedTaskRow + 1;
-    const context = this.interactivePrompt?.kind === 'select'
-      ? 'Enter select / Esc cancel'
-      : this.interactivePrompt?.kind === 'text'
-        ? 'Enter confirm / Esc cancel'
+    const context = this.viewedTranscript !== null
+      ? 'PgUp/PgDn scroll'
+      : this.interactivePrompt !== null
+        ? 'Enter confirm · Esc cancel'
         : this.completion.isOpen
-      ? this.completion.snapshot.argumentCommand !== undefined
-        ? 'Enter run / Tab fill / arrows choose'
-        : 'Tab accept / arrows choose'
-      : busy
-        ? 'Enter steer · Tab queue · Esc stop'
-      : this.focus === 'tasks'
-        ? `tasks ${taskSelection}/${taskRows.length} / arrows select / Enter open/watch / Esc back`
-        : this.focus === 'sessions'
-          ? 'Sessions / ↑↓ select · Enter open · type to start a new session · Esc close'
-        : this.editor.isEmpty && this.hasTurnSuggestion()
-        ? 'Enter adopt / Tab history / F6 tasks'
-        : `${this.editor.isEmpty ? 'Tab history' : 'Tab indent'} / F6 tasks / arrows prompts`;
+          ? 'Tab complete'
+          : this.focus === 'tasks' || this.focus === 'sessions'
+            ? '↑↓ select · Enter open'
+            : busy
+              ? 'Enter steer · Tab queue · Esc stop'
+              : this.editor.isEmpty && this.hasTurnSuggestion()
+                ? 'Enter adopt'
+                : this.inlineSurface === null && this.focusView ? '/focus to expand' : '';
     // The status line is chrome, so in inline mode it is a row inside the live
     // area — and a row that wraps moves every row below it, which is how an
     // inline TUI's geometry goes wrong on a narrow terminal. `?7l` is disabled
@@ -2917,21 +2928,21 @@ export class TUIApp {
     // column is left spare because a line that exactly fills the width is the
     // case that wraps.
     const width = Math.max(1, this.terminalSize().columns - 1);
-    const usage = this.usageSegment();
+    const usage = inspecting ? '' : this.usageSegment();
     // Queued-prompt count: the visible half of the busy-time queue, so a
     // user can see their follow-up prompts exist without digging for the
     // "queued (N)" transcript line that acknowledged each one.
-    const queued = this.options.queuedCount?.() ?? 0;
+    const queued = inspecting ? 0 : this.options.queuedCount?.() ?? 0;
     const queueSegment = queued > 0 ? ` · ⧗ ${queued}` : '';
     if (this.inlineSurface !== null) {
-      const hint = this.options.queuePaused?.() && queued > 0
-        ? '/queue resume · Esc recall'
-        : this.completion.isOpen ? context
-        : busy ? 'Enter steer · Tab queue · Esc stop'
-        : this.editor.isEmpty && this.hasTurnSuggestion()
-        ? 'Enter adopt · / commands · F1 help'
-        : '/ commands · F1 help';
-      this.inlineStatusLines = this.footerLines(width, hint + queueSegment);
+      const hint = this.options.queuePaused?.() && queued > 0 ? '/queue resume' : context;
+      const status = inspecting ? [escapeTags(compactActivity(context + tail, width))]
+        : this.footerLines(width, hint + queueSegment);
+      this.inlineStatusLines = [...status, ...this.agentSwitcherLines(width)];
+      if (this.focus !== 'sessions' && !this.overlay.isActive) {
+        this.setMouseReporting(this.mouseMode !== 'off' &&
+          this.viewedTranscript !== null);
+      }
       return;
     }
     const fixed = [text, tail.trim(), usage.trim().replace(/^·\s*/u, ''), queueSegment.trim().replace(/^·\s*/u, ''), context]
@@ -2946,7 +2957,7 @@ export class TUIApp {
     // A badge wider than the row is left out rather than clipped: the status
     // row is one line of a fixed region, and a line that overflows it wraps
     // and pushes the composer off the screen.
-    const badge = this.permissionBadge();
+    const badge = inspecting ? null : this.permissionBadge();
     const badgePlain = badge === null ? '' : `${badge.plain}${badge.hint}`;
     const badgeWidth = badgePlain === '' ? 0 : visibleWidth(badgePlain) + 1;
     const showBadge = badge !== null && badgeWidth < width;
@@ -2961,10 +2972,11 @@ export class TUIApp {
     const branch = this.gitBranch(cwd);
     const location = branch ? `${cwd} · ${branch}` : cwd;
     this.fullScreen.update('status', {
-      height: STATUS_ROWS,
+      height: this.footerRows(),
       lines: [
         `{gray-fg}${escapeTags(truncateToWidth(location, width))}{/gray-fg}`,
         activity + badgeTagged,
+        ...this.agentSwitcherLines(width),
       ],
     });
   }
@@ -3223,8 +3235,7 @@ export class TUIApp {
   /** Feed one frame from the run. The only entry point for run output. */
   push(frame: LegacyFrame): void {
     const activityChanged = this.updateActivity(frame);
-    // Subagent rows are run-scoped, so they arrive as frames rather than in
-    // the Host snapshot (which knows only about bash tasks).
+    // Live rows appear immediately; Host snapshots also cover detached children.
     if (this.backgroundTasks.applyFrame(frame)) {
       this.clampTaskSelection();
       this.scheduleRender();
@@ -3307,18 +3318,8 @@ export class TUIApp {
     this.syncDeltaDrainTimer();
   }
 
-  private activeSubagentTranscript(): {
-    readonly model: TranscriptModel;
-    readonly toolIds: string[];
-    revision: number;
-    loadGeneration: number;
-  } | null {
-    const id = this.watchedSubagentId;
-    return id === null ? null : this.subagentTranscripts.get(id) ?? null;
-  }
-
   private activeTranscriptModel(): TranscriptModel {
-    return this.activeSubagentTranscript()?.model ?? this.model;
+    return this.viewedTranscript?.model ?? this.model;
   }
 
   /** Project the child-specific progress lane into the same block model as chat. */
@@ -3328,67 +3329,44 @@ export class TUIApp {
     const id = frameString(data, 'subagentId') || frameString(data, 'agentId');
     const eventType = frameString(data, 'agentEventType');
     if (id === '' || eventType === '') return;
-    let child = this.subagentTranscripts.get(id);
-    if (child === undefined) {
-      child = { model: new TranscriptModel(), toolIds: [], revision: 0, loadGeneration: 0 };
-      this.subagentTranscripts.set(id, child);
+    const child = this.subagentTranscript(id);
+    if (!child.replaying && child.apply(data) && this.watchedSubagentId === id) {
+      this.noteTranscriptMutation();
+      this.scheduleRender();
     }
-    const model = child.model;
-    const payload = data['data'];
-    if (eventType === 'subagent_started' || eventType === 'started') {
-      const brief = frameString(data, 'agentDescription') || frameString(data, 'agentType');
-      if (brief !== '' && model.blocks.length === 0) model.addUser(brief);
-    } else if (eventType === 'text') {
-      const text = typeof payload === 'string' ? payload : frameString(frameRecord(payload), 'text');
-      if (text !== '') model.apply({ type: 'text', data: { content: text } });
-    } else if (eventType === 'thinking') {
-      const thinking = typeof payload === 'string' ? payload : frameString(frameRecord(payload), 'thinking');
-      if (thinking !== '') model.apply({ type: 'thinking', data: { content: thinking } });
-    } else if (eventType === 'tool_use') {
-      const toolId = `subagent:${id}:${child.toolIds.length}`;
-      child.toolIds.push(toolId);
-      model.apply({ type: 'tool_use', data: {
-        id: toolId,
-        name: frameString(data, 'toolName') || 'tool',
-        input: data['toolInput'] ?? {},
-      } });
-    } else if (eventType === 'tool_result') {
-      const toolId = child.toolIds.pop();
-      if (toolId !== undefined) model.apply({ type: 'tool_result', data: {
-        id: toolId,
-        result: frameString(data, 'toolResult'),
-        error: frameRecord(data['toolResult'])['error'] === true,
-      } });
-    } else if (eventType === 'failed' || eventType === 'error') {
-      const error = frameString(data, 'summary') || (typeof payload === 'string' ? payload : 'Subagent failed');
-      model.addNotice(error);
-    }
-    child.revision += 1;
-    this.transcriptPane.revision += 1;
-    if (eventType === 'completed' || eventType === 'done' || eventType === 'failed' || eventType === 'error') {
+    if (eventType === 'completed' || eventType === 'subagent_completed' || eventType === 'done'
+      || eventType === 'failed' || eventType === 'error') {
       const task = this.backgroundTasks.tasks().find((entry) => entry.id === id && entry.kind === 'subagent');
       if (task !== undefined) void this.loadSubagentTranscript(task, child);
     }
-    if (this.watchedSubagentId === id) this.scheduleRender();
+  }
+
+  private subagentTranscript(id: string): SubagentTranscript {
+    const existing = this.subagentTranscripts.get(id);
+    if (existing !== undefined) return existing;
+    const child = new SubagentTranscript(id);
+    this.subagentTranscripts.set(id, child);
+    return child;
   }
 
   private async loadSubagentTranscript(
     task: BackgroundTaskView,
-    child: NonNullable<ReturnType<TUIApp['activeSubagentTranscript']>>,
+    child: SubagentTranscript,
   ): Promise<void> {
     if (task.subagentSessionId === undefined || this.options.onSubagentTranscriptLoad === undefined) return;
     const generation = ++child.loadGeneration;
     try {
       const messages = await this.options.onSubagentTranscriptLoad(task);
-      if (generation !== child.loadGeneration || this.disposed) return;
+      if (generation !== child.loadGeneration || this.disposed || this.subagentTranscripts.get(task.id) !== child) return;
+      if (messages.length === 0) return;
+      child.hasHistory = true;
       this.replaceTranscript(messages, child.model);
-      if (this.watchedSubagentId === task.id) {
-        this.follow = true;
-        this.scrollTop = 0;
+    } catch (error) {
+      if (this.watchedSubagentId === task.id && generation === child.loadGeneration && !this.disposed) {
+        child.model.addError(`Could not load subagent transcript: ${error instanceof Error ? error.message : String(error)}`);
+        this.noteTranscriptMutation();
         this.scheduleRender();
       }
-    } catch (error) {
-      this.printError(`Could not load subagent transcript: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -3652,6 +3630,9 @@ export class TUIApp {
   /** Clear history; sidebar session creation keeps the unsent composer intact. */
   clearTranscript(preserveDraft = false): void {
     const hadTranscript = this.model.blocks.length > 0;
+    this.closeViewedTranscript();
+    this.subagentTranscripts.clear();
+    this.inlineSurface?.resetDocument();
     this.model.clear();
     this.selectedBlockId = undefined;
     this.expandedBlockIds.clear();
@@ -3670,14 +3651,90 @@ export class TUIApp {
     this.scheduler.requestImmediate();
   }
 
+  /** Change the editable session, including the inline scrollback boundary. */
+  switchSessionTranscript(messages: readonly TranscriptMessage[]): void {
+    this.closeViewedTranscript();
+    this.closeSessionsDashboard();
+    this.subagentTranscripts.clear();
+    this.backgroundTasks.clear();
+    this.selectedTaskRow = -1;
+    this.inlineSurface?.resetDocument();
+    this.replaceTranscript(messages);
+  }
+
+  showSessionTranscript(id: string, title: string, onClose: () => void): {
+    replace: (messages: readonly TranscriptMessage[]) => void;
+    push: (frame: LegacyFrame) => void;
+  } {
+    const model = new TranscriptModel();
+    const view = { kind: 'session' as const, id, title, model, onClose };
+    model.addNotice('Loading conversation…');
+    this.viewTranscript(view);
+    return {
+      replace: (messages) => {
+        if (this.viewedTranscript !== view || this.disposed) return;
+        this.replaceTranscript(messages, model);
+      },
+      push: (frame) => {
+        if (this.viewedTranscript !== view || this.disposed) return;
+        if (model.apply(frame).kind === 'none' && frame.type !== 'done') return;
+        if (frame.type === 'done') model.finishRun();
+        this.noteTranscriptMutation();
+        this.scheduleRender();
+      },
+    };
+  }
+
+  private viewTranscript(view: NonNullable<TUIApp['viewedTranscript']>): void {
+    this.viewedTranscript?.onClose?.();
+    this.mainViewport ??= { follow: this.follow, scrollTop: this.scrollTop };
+    this.viewedTranscript = view;
+    this.focus = 'transcript';
+    this.completion.close();
+    this.follow = true;
+    this.scrollTop = 0;
+    if (this.inlineSurface !== null) this.setMouseReporting(this.mouseMode !== 'off');
+    this.resetTranscriptNavigation();
+  }
+
+  private closeViewedTranscript(): void {
+    if (this.viewedTranscript === null) return;
+    const view = this.viewedTranscript;
+    this.viewedTranscript = null;
+    view.onClose?.();
+    this.focus = 'input';
+    if (this.mainViewport !== null) {
+      this.follow = this.mainViewport.follow;
+      this.scrollTop = this.mainViewport.scrollTop;
+      this.mainViewport = null;
+    }
+    if (this.inlineSurface !== null) this.setMouseReporting(false);
+    this.refreshCompletion();
+    this.resetTranscriptNavigation();
+  }
+
+  private resetTranscriptNavigation(): void {
+    this.pointer.clear();
+    this.clearTranscriptSelection();
+    this.hoveredToolBlockId = undefined;
+    this.selectedBlockId = undefined;
+    this.expandedBlockIds.clear();
+    this.collapsedBlockIds.clear();
+    this.search = { active: false, query: '', cursor: 0 };
+    this.noteTranscriptMutation();
+    this.scheduler.requestImmediate();
+  }
+
   /** Replace the visible transcript with a persisted session history. */
   replaceTranscript(messages: readonly TranscriptMessage[], targetModel: TranscriptModel = this.model): void {
     const model = targetModel;
     model.clear();
     if (model === this.model) {
-      this.selectedBlockId = undefined;
-      this.expandedBlockIds.clear();
-      this.collapsedBlockIds.clear();
+      if (this.viewedTranscript === null) {
+        this.selectedBlockId = undefined;
+        this.expandedBlockIds.clear();
+        this.collapsedBlockIds.clear();
+      }
       this.textBuffer.reset();
       this.thinkingBuffer.reset();
       this.lastUsage = null;
@@ -3743,6 +3800,7 @@ export class TUIApp {
             result: transcriptText(resultBlock?.content ?? message.content),
             error: message.status === 'error' || resultBlock?.is_error === true,
             durationMs: message.duration_ms,
+            metadata: message.metadata,
           },
         });
         continue;
@@ -3753,23 +3811,15 @@ export class TUIApp {
       }
     }
     if (model === this.model) {
-      this.follow = true;
-      this.scrollTop = 0;
-      this.focus = 'input';
-      this.selectedTaskRow = -1;
-      this.backgroundTasks.clear();
+      if (this.viewedTranscript === null) {
+        this.follow = true;
+        this.scrollTop = 0;
+        this.focus = 'input';
+      }
       this.activity.phase = 'ready';
       this.clearActiveActivity();
-      this.noteTranscriptMutation();
     }
-    else {
-      for (const child of this.subagentTranscripts.values()) {
-        if (child.model === model) {
-          child.revision += 1;
-          break;
-        }
-      }
-    }
+    if (model === this.activeTranscriptModel()) this.noteTranscriptMutation();
     this.scheduler.requestImmediate();
   }
 
@@ -4154,7 +4204,7 @@ exportHistory(): string[] {
   get renderState(): {
     expanded: boolean;
     follow: boolean;
-    focus: 'input' | 'tasks' | 'sessions';
+    focus: 'input' | 'tasks' | 'sessions' | 'transcript';
     selectedTaskRow: number;
   } {
     return {
@@ -4223,6 +4273,7 @@ exportHistory(): string[] {
     // mode deliberately has no Screen.
     this.bindKey(['C-c'], () => {
       if (this.interactivePrompt !== null) this.settleInteractivePrompt(null);
+      else if (this.viewedTranscript !== null) this.closeViewedTranscript();
       else this.onCtrlC();
     });
     // Ctrl+D exits — but ONLY on an empty input, and never from under a modal.
@@ -4235,8 +4286,8 @@ exportHistory(): string[] {
       this.stop();
     });
     const selectBlock = (direction: -1 | 1): void => {
-      if (this.interactivePrompt !== null || this.swallowForWindow() || this.focus !== 'input') return;
-      const blocks = this.activeTranscriptModel().blocks;
+      if (this.interactivePrompt !== null || this.swallowForWindow() || (this.focus !== 'input' && this.focus !== 'transcript')) return;
+      const blocks = visibleBlocks(this.activeTranscriptModel().blocks, this.renderOptions());
       if (blocks.length === 0) return;
       const current = blocks.findIndex((block) => block.id === this.selectedBlockId);
       const next = current < 0
@@ -4333,7 +4384,7 @@ exportHistory(): string[] {
     // session's overrides applied. The editor and completion keys stay on
     // their fixed bindings: their routing is priority-ordered, not flat.
     this.bindAction('clear', () => {
-      if (this.interactivePrompt === null) this.clearTranscript();
+      if (this.interactivePrompt === null && this.viewedTranscript === null) this.clearTranscript();
     });
     this.bindAction('expand-all', () => {
       if (this.interactivePrompt !== null) return;
@@ -4342,6 +4393,12 @@ exportHistory(): string[] {
     });
     this.bindAction('follow-tail', () => { if (this.interactivePrompt === null) this.followTail(); });
     this.bindAction('focus', () => { if (this.interactivePrompt === null) this.toggleFocus(); });
+    this.bindKey(['f7'], () => {
+      if (this.interactivePrompt !== null || this.overlay.isActive || this.windowMgr.isActive) return;
+      const targets = this.agentTargets();
+      const current = targets.findIndex((target) => agentSwitchKey(target) === this.selectedAgentKey());
+      if (targets.length > 1) this.openAgentTarget(targets[(current + 1 + targets.length) % targets.length]!);
+    });
     this.bindAction('help', () => { this.toggleWindow('help'); });
     this.bindAction('history', () => { this.toggleWindow('history'); });
     this.bindAction('usage', () => { this.toggleWindow('usage'); });
@@ -4541,7 +4598,7 @@ exportHistory(): string[] {
         this.scheduler.requestImmediate();
         return;
       }
-      this.cyclePermissionMode();
+      if (this.viewedTranscript === null) this.cyclePermissionMode();
     });
 
     // PgUp/PgDn page the transcript in full-screen mode only. Inline mode has
@@ -4557,7 +4614,7 @@ exportHistory(): string[] {
         this.scheduler.requestImmediate();
         return;
       }
-      if (this.interactivePrompt === null && this.inlineSurface === null) this.scrollBy(-1);
+      if (this.interactivePrompt === null && (this.inlineSurface === null || this.viewedTranscript !== null)) this.scrollBy(-1);
     });
     this.bindKey(['pagedown'], () => {
       if (this.interactivePrompt === null && this.windowMgr.isActive) {
@@ -4565,7 +4622,7 @@ exportHistory(): string[] {
         this.scheduler.requestImmediate();
         return;
       }
-      if (this.interactivePrompt === null && this.inlineSurface === null) this.scrollBy(1);
+      if (this.interactivePrompt === null && (this.inlineSurface === null || this.viewedTranscript !== null)) this.scrollBy(1);
     });
 
     // Everything else is text. Notably this is where CJK arrives: measured on
@@ -4646,6 +4703,7 @@ exportHistory(): string[] {
         this.searchInsert(ch);
         return;
       }
+      if (this.viewedTranscript !== null) return;
       // Typing means leaving the view entirely — including the watched
       // agent's panel: the keys are the editor's again, and a panel about a
       // task nobody is looking at is just rows taken from the conversation.
@@ -4707,11 +4765,13 @@ exportHistory(): string[] {
     const fallbacks: Record<CompletionKey, () => void> = {
       up: () => {
         if (this.focus === 'tasks') this.moveTaskSelection(-1);
+        else if (this.focus === 'transcript') this.scrollByLines(-1);
         else if (this.focus === 'sessions' && this.editor.isEmpty) this.moveSessionDashboardSelection(-1);
         else this.editor.historyPrevious();
       },
       down: () => {
         if (this.focus === 'tasks') this.moveTaskSelection(1);
+        else if (this.focus === 'transcript') this.scrollByLines(1);
         else if (this.focus === 'sessions' && this.editor.isEmpty) this.moveSessionDashboardSelection(1);
         else this.editor.historyNext();
       },
@@ -4719,7 +4779,7 @@ exportHistory(): string[] {
         // An empty composer in the dashboard means "leave the dashboard"; a
         // composer with text keeps Tab as the editor's own indent.
         if (this.focus === 'sessions' && this.editor.isEmpty) this.closeSessionsDashboard();
-        else if (this.focus === 'tasks' || this.editor.isEmpty) this.toggleFocus();
+        else if (this.focus === 'tasks' || this.focus === 'transcript' || this.editor.isEmpty) this.toggleFocus();
         else if (this.isBusyNow() && this.options.onQueueDraft !== undefined && !isControllerLine(this.editor.text)) {
           // Tab queues only while a turn runs; otherwise it stays the editor's
           // indent, and the completion popup above still owns its accept.
@@ -4733,14 +4793,9 @@ exportHistory(): string[] {
         else this.editor.insert('  ');
       },
       escape: () => {
-        // One step back, not all the way out: panel → list → input.
         if (this.focus === 'tasks') this.backOutOfTaskView();
         else if (this.focus === 'sessions') this.closeSessionsDashboard();
-        else if (this.watchedSubagentId !== null && this.editor.isEmpty) {
-          this.watchedSubagentId = null;
-          this.follow = true;
-          this.scrollTop = 0;
-        }
+        else if (this.viewedTranscript !== null) this.closeViewedTranscript();
         else if (this.completion.isOpen) this.completion.close();
         else if (this.isBusyNow()) {
           // Esc means "stop"; with prose in the composer it means "stop, then
@@ -4771,6 +4826,14 @@ exportHistory(): string[] {
       },
     };
 
+    // Exact project navigation commands should run even when a longer
+    // suggestion (such as /statusline) currently has the popup selection.
+    if (key === 'return' && this.options.workbenchProject !== undefined
+      && /^\/(?:status|sessions)(?:\s.*)?$/iu.test(this.editor.text.trim())) {
+      this.completion.close();
+      this.onEnter(true);
+      return;
+    }
     const selectingSlashOption = this.completion.snapshot.argumentCommand !== undefined;
     const result = this.completion.handleKey(key, this.editor.text);
     if (result.accepted !== null) {
@@ -4837,6 +4900,7 @@ exportHistory(): string[] {
       this.scheduler.requestImmediate();
       return;
     }
+    if (this.viewedTranscript !== null && this.interactivePrompt === null && !this.search.active && !this.windowMgr.isActive) return;
     // A paste must never accidentally answer a permission prompt.
     if (this.overlay.isActive) return;
     // Pasting into an open search appends to the query (newlines stripped by
@@ -5022,7 +5086,7 @@ exportHistory(): string[] {
    * text the user has since deleted.
    */
   private refreshCompletion(): void {
-    this.completion.update(this.editor.text, this.editor.cursor);
+    if (this.viewedTranscript === null) this.completion.update(this.editor.text, this.editor.cursor);
   }
 
   /** Keep the popup in sync with editor mutations and caret movement. */
@@ -5063,7 +5127,7 @@ exportHistory(): string[] {
       this.scheduler.requestImmediate();
       return;
     }
-    if (this.options.canSubmit?.() === false) return;
+    if (this.viewedTranscript !== null || this.options.canSubmit?.() === false) return;
     const at = now();
     if (!fromSlashOption && this.paste.isPastedEnter(at)) {
       // A pasted newline is CONTENT, not a submission. Treating it as a
@@ -5139,7 +5203,7 @@ exportHistory(): string[] {
   }
 
   private toggleFocus(): void {
-    if (this.focus === 'input') {
+    if (this.focus === 'input' || this.focus === 'transcript') {
       this.openTasks();
     } else {
       this.exitTaskView();
@@ -5148,29 +5212,11 @@ exportHistory(): string[] {
     }
   }
 
-  /**
-   * Leave the task view entirely: drop the watched panel and give the arrows
-   * back to the editor.
-   */
   private exitTaskView(): void {
-    this.watchedSubagentId = null;
-    this.focus = 'input';
+    this.focus = this.viewedTranscript === null ? 'input' : 'transcript';
   }
 
-  /**
-   * Esc inside the task view: one step BACK, not all the way out.
-   *
-   * Watching a child is a place the user went, so Esc walks the way they came —
-   * panel → list → input. Jumping straight to the input would make the list a
-   * one-way door, and the user would have to re-open it to pick a different
-   * agent.
-   */
   private backOutOfTaskView(): void {
-    if (this.watchedSubagentId !== null) {
-      this.watchedSubagentId = null;
-      this.scheduler.requestImmediate();
-      return;
-    }
     this.exitTaskView();
     this.scheduler.requestImmediate();
   }
@@ -5223,29 +5269,52 @@ exportHistory(): string[] {
     this.openTaskDetail(row.task);
   }
 
-  /** Render the detail window; output is read on demand (Phase 8). */
   private openTaskDetail(task: BackgroundTaskView): void {
-    if (task.kind === 'subagent') {
-      this.watchedSubagentId = this.watchedSubagentId === task.id ? null : task.id;
-      const child = this.subagentTranscripts.get(task.id);
-      if (this.watchedSubagentId !== null && child === undefined) {
-        this.subagentTranscripts.set(task.id, { model: new TranscriptModel(), toolIds: [], revision: 0, loadGeneration: 0 });
-      }
-      if (this.watchedSubagentId !== null && task.status !== 'running') {
-        const state = this.subagentTranscripts.get(task.id);
-        if (state) void this.loadSubagentTranscript(task, state);
-      }
-      const workspace = this.subagentTranscripts.get(task.id);
-      if (this.watchedSubagentId === task.id && workspace?.model.blocks.length === 0) {
-        workspace.model.addNotice(`Subagent · ${task.title}`);
-        workspace.revision += 1;
-      }
-      this.follow = true;
-      this.scrollTop = 0;
-      this.scheduler.requestImmediate();
+    if (task.kind !== 'subagent') {
+      this.options.onBackgroundTaskOpen?.(task);
       return;
     }
-    this.options.onBackgroundTaskOpen?.(task);
+    const child = this.subagentTranscript(task.id);
+    let timer: ReturnType<typeof setInterval> | undefined;
+    let loading = false;
+    const view = {
+      kind: 'subagent' as const, id: task.id, title: task.title, model: child.model,
+      onClose: () => clearInterval(timer),
+    };
+    this.viewTranscript(view);
+    if (task.status !== 'running') void this.loadSubagentTranscript(task, child);
+    const read = this.options.onSubagentOutput;
+    if (read === undefined || child.hasHistory) return;
+    const poll = async (): Promise<void> => {
+      if (loading || this.viewedTranscript !== view) return;
+      if (child.hasHistory) {
+        clearInterval(timer);
+        return;
+      }
+      // While the current run's SSE is supplying output, keep its model intact.
+      // After a late attach or parent settlement, the task log is the fallback.
+      if ((this.options.isBusy?.() ?? this.busy) && child.receivedProgress && !child.replaying) return;
+      loading = true;
+      try {
+        const output = await read(task);
+        if (output !== null && this.viewedTranscript === view && !child.hasHistory && child.replay(output)) {
+          this.noteTranscriptMutation();
+          this.scheduleRender();
+        }
+        const current = this.backgroundTasks.tasks().find(({ id }) => id === task.id);
+        if (this.viewedTranscript === view && current !== undefined && current.status !== 'running') {
+          await this.loadSubagentTranscript(current, child);
+          clearInterval(timer);
+        }
+      } catch {
+        // A transient task-index failure will be retried on the next poll.
+      } finally {
+        loading = false;
+      }
+    };
+    timer = setInterval(() => { void poll(); }, 800);
+    timer.unref();
+    void poll();
   }
 
   private stopSelectedSubagent(): void {
@@ -5341,7 +5410,7 @@ exportHistory(): string[] {
     const matches = this.transcriptPane.searchMatches(this.lastPaneWidth);
     if (matches.length === 0) return;
     const target = matches[Math.min(this.search.cursor, matches.length - 1)]!;
-    const total = this.transcript.totalLines(this.model, this.renderOptions());
+    const total = this.transcript.totalLines(this.activeTranscriptModel(), this.renderOptions());
     const maxTop = Math.max(0, total - this.visibleTranscriptRows());
     this.pointer.cancel();
     this.follow = false;
@@ -5412,7 +5481,7 @@ exportHistory(): string[] {
    */
   private effectiveScrollTop(): number {
     if (!this.follow) return this.scrollTop;
-    return Math.max(0, this.transcript.totalLines(this.model, this.renderOptions()) - this.visibleTranscriptRows());
+    return Math.max(0, this.transcript.totalLines(this.activeTranscriptModel(), this.renderOptions()) - this.visibleTranscriptRows());
   }
 
   /** The thumb for the bar as this frame should draw it, or null when hidden. */
@@ -5421,7 +5490,7 @@ exportHistory(): string[] {
     if (this.inlineSurface !== null || mode === 'hidden') return null;
     if (mode === 'auto' && this.follow) return null;
     return scrollbarThumb(
-      this.transcript.totalLines(this.model, this.renderOptions()),
+      this.transcript.totalLines(this.activeTranscriptModel(), this.renderOptions()),
       trackRows,
       this.effectiveScrollTop(),
       trackRows,
@@ -5438,7 +5507,7 @@ exportHistory(): string[] {
     if (phase === 'start') {
       const trackRows = this.visibleTranscriptRows();
       const thumb = scrollbarThumb(
-        this.transcript.totalLines(this.model, this.renderOptions()),
+        this.transcript.totalLines(this.activeTranscriptModel(), this.renderOptions()),
         trackRows,
         this.effectiveScrollTop(),
         trackRows,
@@ -5461,7 +5530,7 @@ exportHistory(): string[] {
   /** Put the thumb's top at `thumbStart`; the tail resumes only via Ctrl+End. */
   private scrollbarSeek(thumbStart: number): void {
     const rows = this.visibleTranscriptRows();
-    const total = this.transcript.totalLines(this.model, this.renderOptions());
+    const total = this.transcript.totalLines(this.activeTranscriptModel(), this.renderOptions());
     const top = scrollTopForThumbStart(thumbStart, total, rows, rows);
     this.follow = false;
     this.scrollTop = Math.max(0, Math.min(Math.max(0, total - rows), top));
@@ -5489,7 +5558,7 @@ exportHistory(): string[] {
     if (anchor === null) return;
     this.pointer.cancel();
     this.follow = false;
-    const total = this.transcript.totalLines(this.model, this.renderOptions());
+    const total = this.transcript.totalLines(this.activeTranscriptModel(), this.renderOptions());
     const maxTop = Math.max(0, total - this.visibleTranscriptRows());
     this.scrollTop = Math.max(0, Math.min(maxTop, anchor.line - ANCHOR_CONTEXT_ROWS));
     this.scheduler.requestImmediate();
@@ -5506,7 +5575,7 @@ exportHistory(): string[] {
     const boxes = regionBoxes({
       rows: size.rows,
       columns: size.columns,
-      statusRows: STATUS_ROWS,
+      statusRows: this.footerRows(),
       composerHeight,
       popupRows: this.popupRows(),
       overlayRows: 0,
@@ -5520,7 +5589,7 @@ exportHistory(): string[] {
     this.pointer.cancel();
     this.clearTranscriptSelection();
     const rows = this.visibleTranscriptRows();
-    const total = this.transcript.totalLines(this.model, this.renderOptions());
+    const total = this.transcript.totalLines(this.activeTranscriptModel(), this.renderOptions());
     const maxTop = Math.max(0, total - rows);
     // `scrollTop` grows DOWNWARDS, so a negative page count (up) shrinks it.
     const current = this.follow ? maxTop : Math.min(maxTop, this.scrollTop);
@@ -5542,7 +5611,7 @@ exportHistory(): string[] {
   private scrollByLines(lines: number): void {
     this.pointer.cancel();
     this.clearTranscriptSelection();
-    const total = this.transcript.totalLines(this.model, this.renderOptions());
+    const total = this.transcript.totalLines(this.activeTranscriptModel(), this.renderOptions());
     const maxTop = Math.max(0, total - this.visibleTranscriptRows());
     // Negative lines scroll UP: `scrollTop` counts from the top of the
     // document, so going back means a smaller number.
@@ -5652,11 +5721,7 @@ exportHistory(): string[] {
     }
     else
       this.expandedBlockIds.add(id);
-    if (activeModel === this.model) this.noteTranscriptMutation();
-    else {
-      const child = this.activeSubagentTranscript();
-      if (child) child.revision += 1;
-    }
+    this.noteTranscriptMutation();
     this.scheduler.requestImmediate();
   }
 
@@ -5753,6 +5818,7 @@ exportHistory(): string[] {
       this.pointer.commit(hits);
       return;
     }
+    this.addAgentSwitchHits(hits, this.terminalSize().rows - 1);
     if (this.focus === 'sessions') {
       // The dashboard is painted into the transcript region, so its rows are
       // addressed the same way the transcript's own rows are. The rows are

@@ -50,10 +50,13 @@ import * as http from 'node:http';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SessionId } from '@duya/agent-protocol';
 import { HostSessionHttpClient } from '../src/http-client.js';
 import { startLocalHost, type LocalHostHandle } from '../src/local-host.js';
+import {
+  CHANNEL_ID, CONNECTION_TOKEN, FakeTransport, GUILD_ID, MEMBER_ID, inboundCallback,
+} from './project-channels-fixture.js';
 
 const roots: string[] = [];
 const savedDataRoot = process.env.DUYA_DATA_ROOT;
@@ -102,6 +105,18 @@ function textStream(text: string, id: string): string {
   return events.map(({ event, data }) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`).join('');
 }
 
+function toolStream(round: number, name: string, input: Record<string, unknown>): string {
+  const events = [
+    { type: 'message_start', message: { id: `msg-${round}`, type: 'message', role: 'assistant', model: 'test-model', content: [], usage: { input_tokens: 1, output_tokens: 0 } } },
+    { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: `call-${round}`, name, input: {} } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify(input) } },
+    { type: 'content_block_stop', index: 0 },
+    { type: 'message_delta', delta: { stop_reason: 'tool_use', stop_sequence: null }, usage: { output_tokens: 1 } },
+    { type: 'message_stop' },
+  ];
+  return events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join('');
+}
+
 async function readRequest(request: http.IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
   for await (const chunk of request) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
@@ -115,7 +130,9 @@ async function readRequest(request: http.IncomingMessage): Promise<string> {
  * and never surfaces as a Host-side object, so the request is the only place
  * it can be observed.
  */
-async function startScriptedProvider(script?: (round: number) => string): Promise<{
+type ProviderScript = (round: number, request: ScriptedRequest) => string | Promise<string>;
+
+async function startScriptedProvider(script?: ProviderScript): Promise<{
   readonly origin: string;
   readonly requests: ScriptedRequest[];
   close(): Promise<void>;
@@ -139,8 +156,9 @@ async function startScriptedProvider(script?: (round: number) => string): Promis
         messages: payload.messages ?? [],
         raw,
       });
+      const body = await (script?.(requests.length, requests.at(-1)!) ?? textStream('SCRIPTED_FINAL_TEXT', String(requests.length)));
       response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
-      response.end(script?.(requests.length) ?? textStream('SCRIPTED_FINAL_TEXT', String(requests.length)));
+      response.end(body);
     } catch (error) {
       response.writeHead(500, { 'content-type': 'text/plain' }).end(error instanceof Error ? error.message : String(error));
     }
@@ -191,7 +209,7 @@ interface Harness {
  * bundle is what the product ships, and a worker built from source would test
  * a different artifact than the one that runs.
  */
-async function startHarness(script?: (round: number) => string): Promise<Harness> {
+async function startHarness(script?: ProviderScript, channels?: FakeTransport): Promise<Harness> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'duya-turn-provider-'));
   roots.push(root);
   const workspace = path.join(root, 'workspace');
@@ -225,6 +243,7 @@ async function startHarness(script?: (round: number) => string): Promise<Harness
     workerPath,
     betterSqlite3Path: path.join(process.cwd(), 'node_modules', 'better-sqlite3'),
     ephemeral: true,
+    ...(channels === undefined ? {} : { projectChannelTransport: channels }),
   });
   const client = new HostSessionHttpClient(host.origin, 'turn-provider-test-token');
   const sessionId = 'sess-turn-provider-contract' as SessionId;
@@ -242,23 +261,73 @@ function expectedBudget(effort: 'low' | 'medium' | 'high', maxTokens: number | u
   return Math.min(budget, (maxTokens ?? 4096) - 1);
 }
 
+describe('Project channel on the standalone Host', () => {
+  it('sends replies from the real Coordinator worker and drains the next mention at settlement', { timeout: 60_000 }, async () => {
+    const transport = new FakeTransport();
+    const firstResponse = Promise.withResolvers<void>();
+    const replied = new Set<string>();
+    const { host, client, provider, workspace } = await startHarness(async (round, request) => {
+      if (round === 1) await firstResponse.promise;
+      const userText = [...request.messages].reverse()
+        .filter((message) => message.role === 'user')
+        .map((message) => textOf(message.content))
+        .find((text) => text.includes('[project-channel:inbound]')) ?? '';
+      const bindingId = userText.match(/Channel binding: (\S+)/u)?.[1];
+      const replyToInboundId = userText.match(/^Inbound id: ([0-9a-f-]{36})$/mu)?.[1];
+      if (!bindingId || !replyToInboundId || replied.has(replyToInboundId)) {
+        return textStream('Private final text', String(round));
+      }
+      replied.add(replyToInboundId);
+      const tools = (JSON.parse(request.raw) as {
+        tools?: Array<{ name: string; input_schema: { properties: Record<string, unknown> } }>;
+      }).tools;
+      const send = tools?.find((tool) => tool.name === 'send_message');
+      expect(Object.keys(send?.input_schema.properties ?? {}).sort()).toEqual(
+        ['channelBindingId', 'replyToInboundId', 'requestId', 'text'],
+      );
+      return toolStream(round, 'send_message', {
+        channelBindingId: bindingId, replyToInboundId, requestId: `send-${replyToInboundId}`,
+        text: userText.includes('follow-up project status') ? 'Follow-up reply' : 'Initial reply',
+      });
+    }, transport);
+
+    try {
+      const project = await client.createProject({ name: 'Discord pilot', paths: [{ path: workspace, description: null }] });
+      const channel = host.projectChannels!;
+      const connection = await channel.configureDiscordConnection({
+        projectId: project.project_id, requestId: 'connect', token: CONNECTION_TOKEN,
+      });
+      await channel.createBinding({
+        projectId: project.project_id, requestId: 'bind', connectionId: connection.connectionId,
+        guildId: GUILD_ID, channelId: CHANNEL_ID, allowedUserIds: [MEMBER_ID],
+      });
+      const { handlers } = transport.starts[0]!;
+      await handlers.onInbound(inboundCallback(connection.connectionId, connection.generation));
+      await vi.waitFor(() => expect(provider.requests).toHaveLength(1), { timeout: 15_000 });
+      await handlers.onInbound(inboundCallback(connection.connectionId, connection.generation, {
+        platformMessageId: 'platform-message-2', text: 'follow-up project status',
+      }));
+      expect(provider.requests).toHaveLength(1);
+      firstResponse.resolve();
+      await vi.waitFor(() => expect(transport.sends).toHaveLength(2), { timeout: 20_000 });
+      expect(transport.sends.map((send) => send.text)).toEqual(['Initial reply', 'Follow-up reply']);
+      expect(transport.sends.map((send) => send.replyToPlatformMessageId)).toEqual([
+        'platform-message-1', 'platform-message-2',
+      ]);
+    } finally {
+      firstResponse.resolve();
+      await host.close();
+      await provider.close();
+    }
+  });
+});
+
 describe('Host turn input contract — production worker and provider', () => {
   // A real worker doing three real git operations (worktree add, write,
   // worktree remove). 180s keeps slow CI runners out of the picture; the
   // macos CI hang documented in plan 621 is not a timeout-budget problem
   // (it outlived 180s) and needs its own investigation.
   it('enters a worktree, writes there and exits through the production worker', { timeout: 180_000 }, async () => {
-    const toolStream = (round: number, name: string, input: Record<string, unknown>): string => {
-      const events = [
-        { type: 'message_start', message: { id: `msg-${round}`, type: 'message', role: 'assistant', model: 'test-model', content: [], usage: { input_tokens: 1, output_tokens: 0 } } },
-        { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: `call-${round}`, name, input: {} } },
-        { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify(input) } },
-        { type: 'content_block_stop', index: 0 },
-        { type: 'message_delta', delta: { stop_reason: 'tool_use', stop_sequence: null }, usage: { output_tokens: 1 } },
-        { type: 'message_stop' },
-      ];
-      return events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join('');
-    };
     const { host, client, provider, sessionId, workspace } = await startHarness((round) =>
       round === 1 ? toolStream(round, 'enter_worktree', { name: 'real-worker' })
       : round === 2 ? toolStream(round, 'write', { file_path: 'worker-result.txt', content: 'REAL_WORKER_CHECKOUT_RESULT' })

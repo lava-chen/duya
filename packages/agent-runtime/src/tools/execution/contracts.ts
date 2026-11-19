@@ -90,6 +90,9 @@ export interface SubagentProgressEvent {
   toolName?: string;
   toolInput?: Record<string, unknown>;
   toolResult?: string;
+  partial?: boolean;
+  toolCallId?: string;
+  toolError?: boolean;
   duration?: number;
   agentId?: string;
   agentType?: string;
