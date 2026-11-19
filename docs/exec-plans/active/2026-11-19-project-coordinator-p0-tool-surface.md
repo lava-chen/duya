@@ -68,7 +68,8 @@
 
 已实现：P0 工具面收窄（`project` 只剩 `get`，canonical `session` 去掉 `rename`，Coordinator 显式禁用 todo/fork/rename/catalog/invoke，提示词去掉已删 action 引用）。
 已验证：类型门禁、架构门禁、capabilities + host 全部测试通过。
-未提交路径：本 PR 全部改动尚未提交（见「下一步」）。
+已交付：提交 `46d257655`，分支 `codex/project-coordinator-p0-tool-surface` 已推送，Draft PR [#644](https://github.com/lava-chen/duya/pull/644)（base `master`，CI 待跑）。
+未提交路径：无。
 副作用：P0 到 P2 之间 Coordinator 没有知识写入面；`duya_app` 的 `session_rename` 保留给 bot。
 回收：未回收（worktree 与分支保留用于本次任务）。
-下一步：提交并推送分支、开 PR（review/CI 前保持 Draft）；合并需用户授权。
+下一步：等 PR #644 的 review 与 CI；合并需用户授权，合并后同步、重验并按 `scripts/remove-worktree.sh` 回收。
