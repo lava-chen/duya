@@ -63,6 +63,8 @@
 | 2a37f8fe6 + 本次改动（dirty，未提交） | 同上 | `npx vitest run packages/capabilities packages/host` | 0 | 334 个测试文件、2885 个用例通过（2 skipped） |
 | 2a37f8fe6 + 本次改动（dirty，未提交） | 同上 | `npm run check:encoding` | 0 | `no new violations (11 known)` |
 | 2a37f8fe6 + 本次改动（dirty，未提交） | 同上 | `git diff --check` | 0 | 无空白错误 |
+| 46d257655 / 236c6f183 | 同上 | CI `architecture`（首跑） | 1 | `bundle:verify` 判 STALE：12 个 bundle 输入在 bundle 提交后变更，需重建并提交 worker bundle |
+| f67a5ec08 | 同上 | `npm run bundle:worker` + `npm run bundle:verify` | 0 | bundle 重建后 `FRESH 0/1121 bundle inputs changed` |
 
 ## 接续 / 结果
 
