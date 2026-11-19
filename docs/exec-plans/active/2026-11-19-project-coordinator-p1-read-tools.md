@@ -11,7 +11,7 @@
 - 读根取 Coordinator 绑定项目的 `canonical_root`，由 Host 按调用注入；越界、`..`、符号链接逃逸一律拒绝。
 - 没有可信项目根时按失败关闭处理（读全部拒绝），不退回“无限制”。
 
-关联：前置 [P0 工具面](2026-11-19-project-coordinator-p0-tool-surface.md)（PR [#644](https://github.com/lava-chen/duya/pull/644)，未合并，本 PR 叠在其上）；设计 §14.1 / §14.4 / §14.6 T20 / §14.7。
+关联：前置 [P0 工具面](2026-11-19-project-coordinator-p0-tool-surface.md)（PR [#644](https://github.com/lava-chen/duya/pull/644)，Draft，未合并）；本 PR [#645](https://github.com/lava-chen/duya/pull/645)（Draft）叠在其上，base 为 `codex/project-coordinator-p0-tool-surface`。设计 §14.1 / §14.4 / §14.6 T20 / §14.7。
 
 不在本次范围：P2（`write/edit` 与文件化知识）、P3（`bash` 观察）、P4（canonical `session` 增加 `read/send`）、P5（`send_message`）；UI 与 IPC 形态不变；Host 侧项目写 API 与 HTTP 连续性投影不变。
 
@@ -66,12 +66,12 @@
 
 已验证：见上表。T20 五个子项逐条有用例：越界绝对路径、相对路径经 `..` 逃逸、根内符号链接指向根外、无绑定 / 无可信根全部拒绝、Coordinator 工具表不含写面。
 
-已交付：分支 `codex/project-coordinator-p1-read-tools`，commit `62e1d2c42`（feat）、`3a1aa453e`（bundle）、文档提交；PR 叠在 PR #644（P0）之上，待开 Draft。
+已交付：分支 `codex/project-coordinator-p1-read-tools`，commit `62e1d2c42`（feat）、`3a1aa453e`（bundle）、文档提交；PR [#645](https://github.com/lava-chen/duya/pull/645)（Draft，base `codex/project-coordinator-p0-tool-surface`），待 CI / review。
 
-未提交路径：无（worktree 内 `node_modules` junction 与 `docs-local` 之外的临时产物均未入库）。
+未提交路径：无（worktree 内 `node_modules` junction 与 `docs-local` 下的 PR 正文草稿均不在版本控制内）。
 
 副作用：未合并、未发布、未改动共享检出；未触碰 P2–P5 的任何范围。
 
 回收：未回收（worktree 与分支保留给本次任务的 PR 与后续集成）。
 
-下一步：开 stacked Draft PR 并等 CI / review；集成需用户授权。§14.7 第 3 项（多路径项目的其他 `paths[]` 与根外的 `docs-local/` 是否放开）仍待用户裁定，本次按最保守口径落地。
+下一步：等 PR #645 的 CI 与 review；集成需用户授权。§14.7 第 3 项（多路径项目的其他 `paths[]` 与根外的 `docs-local/` 是否放开）仍待用户裁定，本次按最保守口径落地。
