@@ -2,37 +2,63 @@ import { describe, it, expect } from 'vitest';
 import { PRESET_AGENT_PROFILES } from '../../src/worker-profiles/types.js';
 import {
   PROJECT_COORDINATOR_ALLOWED_TOOLS,
+  PROJECT_COORDINATOR_DISALLOWED_TOOLS,
   PROJECT_COORDINATOR_PROFILE_ID,
 } from '../../src/project/identity.js';
 import { isToolVisible, resolveAllowedTools } from '@duya/agent-runtime/authorization/tool-filter';
 import { sessionTool } from '../../src/worker-tool-bindings/session.js';
+import { projectTool } from '../../src/worker-tool-bindings/project.js';
+
+function actionEnum(schema: Record<string, unknown>): string[] {
+  const properties = schema.properties as { action?: { enum?: string[] } };
+  return properties.action?.enum ?? [];
+}
 
 describe('PRESET_AGENT_PROFILES', () => {
   it('project-coordinator runs on the dedicated project prompt system', () => {
     const coordinator = PRESET_AGENT_PROFILES.find((p) => p.id === PROJECT_COORDINATOR_PROFILE_ID)!;
-    expect(coordinator.allowedTools).toEqual(['session', 'project']);
-    expect(PROJECT_COORDINATOR_ALLOWED_TOOLS).toEqual(['session', 'project']);
+    expect(coordinator.allowedTools).toEqual(['session', 'project', 'read', 'glob', 'grep']);
+    expect(PROJECT_COORDINATOR_ALLOWED_TOOLS).toEqual(['session', 'project', 'read', 'glob', 'grep']);
     expect(PROJECT_COORDINATOR_ALLOWED_TOOLS).not.toContain('todo');
+    expect(coordinator.disallowedTools).toEqual([...PROJECT_COORDINATOR_DISALLOWED_TOOLS]);
+    expect(coordinator.disallowedTools).toEqual(expect.arrayContaining([
+      'todo', 'session_fork', 'session_rename', 'tool_catalog', 'tool_invoke',
+    ]));
     expect(coordinator.promptSystem).toBe('project');
     expect(coordinator.suppressIdentityBlock).toBe(true);
     expect(coordinator.identityPrompt).toBeUndefined();
     expect(coordinator.userVisible).toBe(false);
     const result = resolveAllowedTools(
       coordinator,
-      ['session', 'session_spawn', 'project', 'todo', 'read', 'write', 'bash', 'task', 'memory', 'tool_catalog', 'tool_invoke'],
+      [
+        'session', 'session_spawn', 'project', 'todo', 'read', 'glob', 'grep', 'write', 'edit',
+        'apply_patch', 'bash', 'powershell', 'task', 'memory',
+        'tool_catalog', 'tool_invoke', 'session_fork', 'session_rename', 'set_session_title',
+      ],
     );
-    expect(result.allowed.sort()).toEqual(['project', 'session']);
-    expect(result.denied).toEqual(expect.arrayContaining(['session_spawn', 'todo', 'tool_catalog', 'tool_invoke']));
+    expect(result.allowed.sort()).toEqual(['glob', 'grep', 'project', 'read', 'session']);
+    expect(result.denied).toEqual(expect.arrayContaining([
+      'session_spawn', 'todo', 'tool_catalog', 'tool_invoke',
+      'session_fork', 'session_rename', 'set_session_title',
+      'write', 'edit', 'apply_patch', 'bash', 'powershell',
+    ]));
     expect(result.isValid).toBe(true);
   });
 
-  it('registers the canonical session capability needed by Project Coordinator', () => {
+  it('project-coordinator keeps the canonical session capability without rename', () => {
     const definition = sessionTool.toTool();
     expect(definition.name).toBe('session');
     expect(definition.input_schema).toHaveProperty('properties.projectTask');
+    expect(actionEnum(definition.input_schema)).toEqual(['spawn', 'list', 'get', 'reply', 'cancel']);
     expect(isToolVisible(definition.name, 'deferred', new Set(), {
       profileAllowedPatterns: PROJECT_COORDINATOR_ALLOWED_TOOLS,
     })).toBe(true);
+  });
+
+  it('the project capability offers only the read action', () => {
+    const definition = projectTool.toTool();
+    expect(definition.name).toBe('project');
+    expect(actionEnum(definition.input_schema)).toEqual(['get']);
   });
   it('includes the memory-curator preset', () => {
     const curator = PRESET_AGENT_PROFILES.find((p) => p.id === 'memory-curator');

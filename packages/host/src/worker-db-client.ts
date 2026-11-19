@@ -128,7 +128,7 @@ function resolveTransport(): DbTransport {
 
 // Send DB request and wait for response
 async function sendDbRequest(action: string, payload: unknown): Promise<unknown> {
-  const execution = action.startsWith('session:spawn') || action === 'plugin-app:binding-current' || action === 'project:tool' || action === 'project:session-context'
+  const execution = action.startsWith('session:spawn') || action === 'plugin-app:binding-current' || action === 'project:tool' || action === 'project:session-context' || action === 'project:binding-root'
     ? workerDbRunContext()
     : undefined;
   // Legacy Desktop interagent turns have no Host run identity yet. Preserve
@@ -782,6 +782,15 @@ export const projectDb = {
    */
   tool: (input: { action: string; payload: Record<string, unknown> }) =>
     sendDbRequest('project:tool', input),
+
+  /**
+   * The trusted project root bound to the calling Coordinator session.
+   * The Host resolves it from the durable binding, so the worker never
+   * names a path. `canonicalRoot` is null when the caller holds no
+   * binding.
+   */
+  bindingRoot: () =>
+    sendDbRequest('project:binding-root', {}) as Promise<{ canonicalRoot: string | null }>,
 
   /**
    * Plan 536 L4: lightweight cwd -> projectId reverse-lookup. Returns

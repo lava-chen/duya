@@ -34,7 +34,7 @@ import type {
 import type { ToolPermissionContext } from '../permissions/types.js';
 import { checkPathReadPermission } from '../permissions/policy.js';
 import { expandPath } from '../utils/path.js';
-import { isPathWithinRoots } from '@duya/sandbox';
+import { checkAllowedRoots, describeAllowedRootsDenial } from '../utils/allowed-roots.js';
 import {
   validateReadInput,
   type ReadInput,
@@ -299,16 +299,18 @@ export class ReadTool extends BaseTool {
     if (!validation.valid) {
       return { id, name: 'read', result: `Input validation failed: ${validation.error}`, error: true };
     }
-    if (this.allowedRoots && this.allowedRoots.length > 0) {
-      const resolved = expandPath(validation.data.file_path, workingDirectory);
-      if (!isPathWithinRoots(resolved, [...this.allowedRoots])) {
-        return {
-          id,
-          name: 'read',
-          error: true,
-          result: `Path '${validation.data.file_path}' is outside the allowed roots for this tool.`,
-        };
-      }
+    const roots = checkAllowedRoots(
+      () => expandPath(validation.data.file_path, workingDirectory),
+      this.allowedRoots,
+      context,
+    );
+    if (!roots.allowed) {
+      return {
+        id,
+        name: 'read',
+        error: true,
+        result: describeAllowedRootsDenial(roots.denial!, `Path '${validation.data.file_path}'`),
+      };
     }
     const result = await this.dispatch(validation.data, id, workingDirectory, context);
     // Steer any read of DUYA's own config root toward the CLI / self-config

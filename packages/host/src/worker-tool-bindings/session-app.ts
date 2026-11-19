@@ -8,15 +8,18 @@ import {
   SessionInputStatusTool,
   SessionListTool,
   SessionReadTool,
+  SessionRenameTool,
   SessionSendTool,
   type AppServerCapabilityContributor,
   type AppServerTool,
+  type SessionRenameOutcome,
 } from '@duya/capabilities';
 import type { MCPServerConfig } from '@duya/capabilities/MCP/ports';
 import type { ToolUseContext as HostToolUseContext, Tool as HostTool } from '../worker-run-contracts.js';
 import { sessionSearchTool } from './session-search.js';
 import { sessionTool } from './session.js';
-import { sessionAppDb, sessionInputDb } from '../worker-db-client.js';
+import { sessionAppDb, sessionInputDb, sessionSpawnDb } from '../worker-db-client.js';
+import { resolveCallerSessionId } from '../worker-tool-services/session-management.js';
 
 type ExecutableTool = Pick<HostTool, 'name' | 'description' | 'input_schema'> & {
   execute(input: Record<string, unknown>, workingDirectory?: string, context?: HostToolUseContext): Promise<import('@duya/ai').ToolResult>;
@@ -71,6 +74,10 @@ const sessionControlTool = new SessionControlTool({
   releaseControlLease: (sessionId, revision) => sessionInputDb.releaseControlLease(sessionId, revision),
   readControlLease: (sessionId) => sessionInputDb.readControlLease(sessionId),
 });
+const sessionRenameTool = new SessionRenameTool({
+  rename: async ({ sessionId, callerSessionId, title }) =>
+    await sessionSpawnDb.rename(sessionId, resolveCallerSessionId(callerSessionId), title) as SessionRenameOutcome,
+});
 
 const sessionActionSchemas: Readonly<Record<string, {
   readonly description: string;
@@ -107,14 +114,6 @@ const sessionActionSchemas: Readonly<Record<string, {
     description: 'Request cancellation of a child Session run.',
     properties: { sessionId: { type: 'string', description: 'Child Session id.' } },
     required: ['sessionId'],
-  },
-  rename: {
-    description: 'Rename a child Session.',
-    properties: {
-      sessionId: { type: 'string', description: 'Child Session id.' },
-      title: { type: 'string', description: 'New title.' },
-    },
-    required: ['sessionId', 'title'],
   },
 };
 
@@ -176,6 +175,7 @@ const sessionContributor: AppServerCapabilityContributor = {
     adaptTool(sessionListTool, sessionListTool.name, sessionListTool.description, sessionListTool.input_schema),
     adaptTool(sessionReadTool, sessionReadTool.name, sessionReadTool.description, sessionReadTool.input_schema),
     adaptTool(sessionForkTool, sessionForkTool.name, sessionForkTool.description, sessionForkTool.input_schema),
+    adaptTool(sessionRenameTool, sessionRenameTool.name, sessionRenameTool.description, sessionRenameTool.input_schema),
     adaptTool(sessionSendTool, sessionSendTool.name, sessionSendTool.description, sessionSendTool.input_schema),
     adaptTool(sessionInputStatusTool, sessionInputStatusTool.name, sessionInputStatusTool.description, sessionInputStatusTool.input_schema),
     adaptTool(sessionControlTool, sessionControlTool.name, sessionControlTool.description, sessionControlTool.input_schema),

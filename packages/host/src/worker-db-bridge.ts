@@ -522,6 +522,14 @@ export function createHostWorkerDbBridge(options: HostWorkerDbBridgeOptions): Wo
           if (!caller) throw new WorkerDbBridgeError('invalid_payload', 'Project context requires trusted worker context.');
           return options.projectToolApi.getSessionContext(caller.sessionId);
         }
+        case 'project:binding-root': {
+          if (!options.projectToolApi) throw new WorkerDbBridgeError('unimplemented_domain', 'Project roots require the Host project service.');
+          if (!caller) throw new WorkerDbBridgeError('invalid_payload', 'Project roots require trusted worker context.');
+          // The root follows the durable Coordinator binding. The worker
+          // never names a path; it only asks what the Host trusts.
+          const canonicalRoot = await options.projectToolApi.resolveCoordinatorRoot(caller.sessionId);
+          return { canonicalRoot };
+        }
         case 'project:tool': {
           if (options.projectToolApi === undefined) {
             throw new WorkerDbBridgeError('unimplemented_domain', 'Project tools require the Host project tool service.');

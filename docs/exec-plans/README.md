@@ -26,6 +26,8 @@ Coordinator 的完整提示词设计见 [2026-11-06 提示词系统](active/2026
 | TUI 工具折叠与运行期输出 | [636 TUI 工具行的折叠与运行期输出](active/636-tui-live-shell-output.md) | 折叠行至少画一行、`[+ N]` 改为被隐藏行数并在标记内点名 `Ctrl+T`；新增 `tool.output_delta`（Host 惰性尾部轮询 → TUI 运行期预览 → Desktop/Web 既有 `chat:tool_output` 车道）与 worker bundle 重建；PR #610 已集成（merge `836f9ea9`），真机目视由用户判定按现有证据接受 |
 | TUI 输入框透明背景 | [2026-11-03 TUI 输入框透明背景](archive/2026-11-03-tui-transparent-composer-background.md) | `DUYA_TUI_COMPOSER_BG=transparent` 已合并（PR #595，`cccab45e`）；master 临时 CLI 已安装并加入用户 PATH |
 | TUI 集中反馈修复 | [2026-11-03 TUI 反馈修复](active/2026-11-03-tui-feedback-fixes.md) | 弹窗（worker `windowsHide`）、slash 命令清理、描述中文化、bash 染色、steer 提示残留已实现并过门禁；PR #589 待合并，真机冒烟待用户 |
+| Coordinator 工具面收窄（P0） | [2026-11-19 P0 工具面](active/2026-11-19-project-coordinator-p0-tool-surface.md) | 按设计 §14 的 P0：删 project 四个写 action、canonical `session` 的 `rename`、Coordinator 白名单里的 todo/fork/set_session_title；`project get` 只回 Activity + Task |
+| Coordinator 只读工作区（P1） | [2026-11-19 P1 只读工作区](active/2026-11-19-project-coordinator-p1-read-tools.md) | 按设计 §14 的 P1：Coordinator 白名单加 `read` / `glob` / `grep`，读根按调用取自 Coordinator 绑定的 `canonical_root`，越界 / `..` / 符号链接逃逸与无绑定一律拒绝；叠在 P0（PR #644）之上 |
 | Project Coordinator（当前主线） | [三个总体任务](active/2026-11-02-project-coordinator.md) | 任务一交付见 #582；任务二连续性 Host/Data 接口已实现，下一步任务三接入 Task/Activity/transcript refs UI 与用户验收操作 |
 | Session CLI 发布收尾 | [A/B 两项与 Plugin 边界](backlog/2026-11-01-bot-session-coordination.md) | Project 首个闭环后接续；Linux x64 候选已打包，待用户产品测试与反馈 |
 | TUI 学 codex 表面 | [2026-11-01 输入框纯色背景与已发命令 UI](active/2026-11-01-tui-codex-surface.md) | 背景槽 + composer 纯色背景 + 已发命令背景带已实现并合并（PR #567，`203d7d51`）；本计划待归档 |

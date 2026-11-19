@@ -53,7 +53,6 @@ export interface SessionToolPort {
   get(sessionId: string, callerSessionId: string): Promise<SessionSpawnOperation<{ session: SessionSpawnDetails }>>;
   reply(input: { sessionId: string; callerSessionId: string; prompt: string; model?: string }): Promise<SessionSpawnOperation<{ sessionId: string } & SessionCompletionReceipt>>;
   cancel(sessionId: string, callerSessionId: string): Promise<SessionSpawnOperation<{ sessionId: string }>>;
-  rename(sessionId: string, callerSessionId: string, title: string): Promise<SessionSpawnOperation<{ sessionId: string }>>;
 }
 
 /** Input schema for the session tool (spawn + continuous management). */
@@ -75,10 +74,10 @@ const SESSION_SCHEMA: Record<string, unknown> = {
     },
     action: {
       type: 'string',
-      enum: ['spawn', 'list', 'get', 'reply', 'cancel', 'rename'],
+      enum: ['spawn', 'list', 'get', 'reply', 'cancel'],
       default: 'spawn',
       description:
-        'The operation to perform. spawn: create a new child session in a project and run it async. list: list work sessions the Host authorizes you to manage. get: status + diff stats of a child. reply: send a follow-up prompt to a child (another async run). cancel: interrupt a child run. rename: rename a child.',
+        'The operation to perform. spawn: create a new child session in a project and run it async. list: list work sessions the Host authorizes you to manage. get: status + diff stats of a child. reply: send a follow-up prompt to a child (another async run). cancel: interrupt a child run.',
     },
     workingDirectory: {
       type: 'string',
@@ -98,11 +97,7 @@ const SESSION_SCHEMA: Record<string, unknown> = {
     sessionId: {
       type: 'string',
       description:
-        'For get/reply/cancel/rename: the child session id returned by spawn. The Host authorizes parent-owned sessions and, for the current Project Coordinator, durably linked project work.',
-    },
-    title: {
-      type: 'string',
-      description: 'For rename: the new title for the child session.',
+        'For get/reply/cancel: the child session id returned by spawn. The Host authorizes parent-owned sessions and, for the current Project Coordinator, durably linked project work.',
     },
   },
   required: [],
@@ -131,7 +126,7 @@ export class SessionTool extends BaseTool {
   others require action "get" to retrieve the tracked run's result.
 - Management is scoped by the Host: ordinary parents manage their children; a
   currently bound Project Coordinator also manages linked work from earlier
-  Coordinators. Use list/get/reply/cancel/rename across turns.
+  Coordinators. Use list/get/reply/cancel across turns.
 
 ## Actions
 - spawn: workingDirectory (required) + prompt (required) + model (optional).
@@ -146,7 +141,6 @@ export class SessionTool extends BaseTool {
   follow the returned completion policy).
 - cancel: sessionId → request interruption; query to verify it stopped. This does
   not undo file changes, delete artifacts, or cancel every descendant.
-- rename: sessionId + title → rename the child.
 
 ## Restrictions
 - The Host enforces parent ownership or current Project Coordinator binding.
@@ -263,7 +257,7 @@ export class SessionTool extends BaseTool {
               `Working directory: ${s.workingDirectory}\n` +
               (s.runId ? `Run: ${s.runId}\n` : '') +
               (s.output ? `Result:\n${s.output.slice(0, 16000)}${s.output.length > 16000 ? '\n[Result truncated]' : ''}\n` : '') +
-              `Use action "reply" to send a follow-up, "cancel" to interrupt, or "rename" to title it.`,
+              `Use action "reply" to send a follow-up, "cancel" to interrupt, or "list" to see every child.`,
           };
         }
 
@@ -297,18 +291,6 @@ export class SessionTool extends BaseTool {
             id: randomUUID(),
             name: this.name,
             result: `Requested cancellation of the active run for ${sessionId}.`,
-          };
-        }
-
-        case 'rename': {
-          const title = (input.title as string) || '';
-          if (!sessionId || !title.trim()) return err('sessionId and title are required for rename.');
-          const result = await this.port.rename(sessionId, callerSessionId, title);
-          if (!result.ok) return err(`Could not rename ${sessionId}: ${result.reason}`);
-          return {
-            id: randomUUID(),
-            name: this.name,
-            result: `Renamed ${sessionId} to "${title.trim()}".`,
           };
         }
 

@@ -106,4 +106,23 @@ describe('Host-owned duya_app Session MCP', () => {
       await manager.disconnectAll();
     }
   });
+
+  it('renames a Session through the standalone session_rename tool', async () => {
+    hostPorts.rename.mockResolvedValue({ ok: true, sessionId: 'child-session' });
+    const manager = new MCPManager();
+
+    await manager.addServer(createDuyaAppMcpServerConfig());
+    try {
+      const result = await withAppToolContext(
+        { options: { sessionId: 'caller-session' } },
+        () => manager.callTool('duya_app', 'session_rename', { sessionId: 'child-session', title: 'Renamed' }),
+      );
+
+      expect(result.error).toBeUndefined();
+      expect(hostPorts.rename).toHaveBeenCalledWith('child-session', 'caller-session', 'Renamed');
+      expect(String(result.content?.[0]?.text ?? result.result)).toContain('Renamed');
+    } finally {
+      await manager.disconnectAll();
+    }
+  });
 });

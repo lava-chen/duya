@@ -60,7 +60,6 @@ describe('migrated worker tool capabilities', () => {
       get: vi.fn(async () => ({ ok: false, reason: 'missing' })),
       reply: vi.fn(async () => ({ ok: true, sessionId: 'child-1' })),
       cancel: vi.fn(async () => ({ ok: true, sessionId: 'child-1' })),
-      rename: vi.fn(async () => ({ ok: true, sessionId: 'child-1' })),
     };
     const result = await new SessionTool(port).execute(
       { action: 'spawn', workingDirectory: 'E:/project', prompt: 'inspect the build' },

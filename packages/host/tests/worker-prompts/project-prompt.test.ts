@@ -66,12 +66,15 @@ describe('project prompt system', () => {
     const byName = new Map(partition.stable.map((section) => [section.name, section.content]));
     const identity = byName.get('projectIdentity') ?? '';
     expect(identity).toContain('Project Coordinator');
-    expect(identity).toContain('project records and work Sessions');
-    expect(coordinator?.allowedTools).toEqual(['session', 'project']);
+    expect(identity).toContain('read project records, read the workspace of the project you are');
+    expect(identity).toContain('bound to, and manage work Sessions.');
+    expect(coordinator?.allowedTools).toEqual(['session', 'project', 'read', 'glob', 'grep']);
 
     const operation = byName.get('projectOperation') ?? '';
     expect(operation).toContain('project');
-    expect(operation).toContain('revision just read');
+    expect(operation).toContain('project get');
+    expect(operation).toContain("Read the bound project's workspace");
+    expect(operation).toContain('a read outside that workspace is refused rather than retried.');
 
     const delegation = byName.get('projectDelegation') ?? '';
     expect(delegation.trim()).not.toBe('');
@@ -80,5 +83,15 @@ describe('project prompt system', () => {
     expect(reporting).toContain('accept');
     expect(byName.get('projectContextPolicy')).toContain('A changed context section replaces');
     expect(names).not.toContain('system');
+  });
+
+  it('does not promise the capabilities P0 removed', async () => {
+    const system = PromptsRegistry.getOrCreate('project');
+    const partition = await system!.buildSystemPromptPartition(projectPromptContext());
+    const rendered = partition.stable.map((section) => section.content).join('\n');
+
+    for (const removed of ['project context', 'update_state', 'record_decision', 'record_memory', 'todo', 'rename']) {
+      expect(rendered).not.toContain(removed);
+    }
   });
 });

@@ -11,6 +11,7 @@ import type { RiskTier } from '@duya/agent-runtime/authorization/permissions/pol
 import { activateConditionalSkills, getPendingConditionalSkillCount } from './skills/conditionalSkills.js';
 import type { Tool, ToolResult, ToolUseContext } from './worker-run-contracts.js';
 import { checkCheckoutToolWrite } from './workspace/tool-write-gate.js';
+import { bindCoordinatorReadRoots } from './project/read-roots.js';
 import { acquireExecutionLocation } from './workspace/execution-location-fence.js';
 
 export type { ToolExposure } from '@duya/agent-runtime/tools/catalog/catalog-types';
@@ -62,7 +63,11 @@ export class ToolRegistry extends RuntimeToolRegistry<Tool, ToolResult, ToolUseC
     try {
       const boundContext = context && this.getExecutor(name)?.controlsExecutionLocation && lease.beginSwitch
         ? { ...context, beginExecutionLocationSwitch: lease.beginSwitch } : context;
-      return await super.execute(name, input, workingDirectory, boundContext);
+      // The Coordinator's read scope is resolved per call, from the Host's
+      // own binding, so it follows a re-bound project instead of a value
+      // captured when the tool was built.
+      const scopedContext = await bindCoordinatorReadRoots(name, boundContext);
+      return await super.execute(name, input, workingDirectory, scopedContext);
     } finally {
       lease.release();
     }

@@ -13,9 +13,10 @@ import { BaseTool } from '../BaseTool.js';
 import type {
   RenderedToolMessage,
   ToolInterruptBehavior,
+  ToolUseContext,
 } from '../contracts/tool.js';
 import { sanitizeWorkingDirectory } from './sanitize.js';
-import { isPathWithinRoots } from '@duya/sandbox';
+import { checkAllowedRoots, describeAllowedRootsDenial } from '../utils/allowed-roots.js';
 import { expandPath } from '../utils/path.js';
 
 const execAsync = promisify(exec);
@@ -750,7 +751,7 @@ export class GrepTool extends BaseTool {
   /**
    * Execute search
    */
-  async execute(input: Record<string, unknown>, workingDirectory?: string): Promise<ToolResult> {
+  async execute(input: Record<string, unknown>, workingDirectory?: string, toolContext?: ToolUseContext): Promise<ToolResult> {
     const id = crypto.randomUUID();
 
     const validation = validateGrepInput(input);
@@ -821,18 +822,17 @@ export class GrepTool extends BaseTool {
       };
     }
 
-    if (this.allowedRoots && this.allowedRoots.length > 0) {
-      if (!isPathWithinRoots(searchPath, [...this.allowedRoots])) {
-        return {
-          id,
-          name: this.name,
-          error: true,
-          result: JSON.stringify({
-            success: false,
-            error: `Search path '${searchPath}' is outside the allowed roots for this tool.`,
-          }),
-        };
-      }
+    const searchRoot = checkAllowedRoots(() => searchPath, this.allowedRoots, toolContext);
+    if (!searchRoot.allowed) {
+      return {
+        id,
+        name: this.name,
+        error: true,
+        result: JSON.stringify({
+          success: false,
+          error: describeAllowedRootsDenial(searchRoot.denial!, `Search path '${searchPath}'`),
+        }),
+      };
     }
 
     try {

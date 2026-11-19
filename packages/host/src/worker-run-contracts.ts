@@ -220,6 +220,13 @@ export interface ToolUseContextOptions {
     agentProfileId?: string | null;
     workingDirectory?: string;
     projectHome?: string;
+    /**
+     * Roots the Host trusts for this call, injected by the caller. Tools
+     * that support `allowedRoots` enforce it in addition to their own
+     * roots. `undefined` means no caller-level restriction; an empty array
+     * means no root is trusted and every access is refused.
+     */
+    allowedRoots?: readonly string[];
     language?: string;
     apiKey?: string;
     baseURL?: string;

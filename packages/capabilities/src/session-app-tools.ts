@@ -442,3 +442,64 @@ export class SessionControlTool extends BaseTool {
     return { id: randomUUID(), name: this.name, result: `Error: ${message}`, error: true };
   }
 }
+
+export interface SessionRenameOutcome {
+  readonly ok: boolean;
+  readonly reason?: string;
+}
+
+export interface SessionRenamePort {
+  rename(request: {
+    readonly sessionId: string;
+    readonly callerSessionId: string | undefined;
+    readonly title: string;
+  }): Promise<SessionRenameOutcome>;
+}
+
+const RENAME_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    sessionId: { type: 'string', description: 'Session to rename.' },
+    title: { type: 'string', maxLength: 200, description: 'New title for the Session.' },
+  },
+  required: ['sessionId', 'title'],
+};
+
+/**
+ * Rename a Host-owned Session.
+ *
+ * Renaming lives here rather than in the canonical `session` capability so the
+ * Coordinator's session tool keeps a management-only surface: it dispatches and
+ * follows work, it does not retitle Sessions.
+ */
+export class SessionRenameTool extends BaseTool {
+  readonly name = 'session_rename';
+  readonly description = 'Rename a Session. The Host authorizes parent-owned Sessions and, for the current Project Coordinator, durably linked project work.';
+  readonly input_schema = RENAME_SCHEMA;
+
+  constructor(private readonly port: SessionRenamePort) { super(); }
+
+  async execute(input: Record<string, unknown>, _workingDirectory?: string, context?: ToolUseContext): Promise<ToolResult> {
+    const unexpected = unknownField(input, ['sessionId', 'title']);
+    if (unexpected) return this.error(unexpected);
+    const sessionId = typeof input.sessionId === 'string' ? input.sessionId.trim() : '';
+    const title = typeof input.title === 'string' ? input.title.trim() : '';
+    if (!sessionId || !title) return this.error('sessionId and title are required.');
+    try {
+      const result = await this.port.rename({
+        sessionId,
+        callerSessionId: context?.options?.sessionId,
+        title,
+      });
+      if (!result.ok) return this.error(result.reason ?? 'The Host refused the rename.');
+      return { id: randomUUID(), name: this.name, result: `Renamed ${sessionId} to "${title}".` };
+    } catch (error) {
+      return this.error(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  private error(message: string): ToolResult {
+    return { id: randomUUID(), name: this.name, result: `Error: ${message}`, error: true };
+  }
+}
