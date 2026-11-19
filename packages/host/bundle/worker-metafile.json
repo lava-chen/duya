@@ -17,7 +17,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-db-client.ts": {
-      "bytes": 53462,
+      "bytes": 53851,
       "imports": [
         {
           "path": "packages/host/src/worker-db-context.ts",
@@ -21904,7 +21904,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/contracts/tool.ts": {
-      "bytes": 10651,
+      "bytes": 11178,
       "imports": [],
       "format": "esm"
     },
@@ -21936,6 +21936,17 @@
           "path": "../../../../../.codex/worktrees/project-coordinator-tool-picker/duya/node_modules/zod/index.js",
           "kind": "import-statement",
           "original": "zod"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/capabilities/src/utils/allowed-roots.ts": {
+      "bytes": 2433,
+      "imports": [
+        {
+          "path": "packages/sandbox/src/index.ts",
+          "kind": "import-statement",
+          "original": "@duya/sandbox"
         }
       ],
       "format": "esm"
@@ -22004,7 +22015,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/ReadTool/ReadTool.ts": {
-      "bytes": 42459,
+      "bytes": 42450,
       "imports": [
         {
           "path": "node:fs/promises",
@@ -22042,9 +22053,9 @@
           "original": "../utils/path.js"
         },
         {
-          "path": "packages/sandbox/src/index.ts",
+          "path": "packages/capabilities/src/utils/allowed-roots.ts",
           "kind": "import-statement",
-          "original": "@duya/sandbox"
+          "original": "../utils/allowed-roots.js"
         },
         {
           "path": "packages/capabilities/src/ReadTool/schema.ts",
@@ -22552,7 +22563,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/GlobTool/GlobTool.ts": {
-      "bytes": 20605,
+      "bytes": 22012,
       "imports": [
         {
           "path": "../../../../../.codex/worktrees/project-coordinator-tool-picker/duya/node_modules/picomatch/index.js",
@@ -22585,15 +22596,15 @@
           "original": "../GrepTool/sanitize.js"
         },
         {
-          "path": "packages/sandbox/src/index.ts",
+          "path": "packages/capabilities/src/utils/allowed-roots.ts",
           "kind": "import-statement",
-          "original": "@duya/sandbox"
+          "original": "../utils/allowed-roots.js"
         }
       ],
       "format": "esm"
     },
     "packages/capabilities/src/GrepTool/GrepTool.ts": {
-      "bytes": 34708,
+      "bytes": 34768,
       "imports": [
         {
           "path": "node:fs/promises",
@@ -22626,9 +22637,9 @@
           "original": "./sanitize.js"
         },
         {
-          "path": "packages/sandbox/src/index.ts",
+          "path": "packages/capabilities/src/utils/allowed-roots.ts",
           "kind": "import-statement",
-          "original": "@duya/sandbox"
+          "original": "../utils/allowed-roots.js"
         },
         {
           "path": "packages/capabilities/src/utils/path.ts",
@@ -31762,7 +31773,7 @@
       "format": "esm"
     },
     "packages/host/src/project/identity.ts": {
-      "bytes": 1885,
+      "bytes": 2076,
       "imports": [],
       "format": "esm"
     },
@@ -33172,7 +33183,7 @@
       "format": "esm"
     },
     "packages/host/src/project/tool-service.ts": {
-      "bytes": 5074,
+      "bytes": 5626,
       "imports": [],
       "format": "esm"
     },
@@ -33841,7 +33852,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-db-bridge.ts": {
-      "bytes": 77804,
+      "bytes": 78401,
       "imports": [
         {
           "path": "node:crypto",
@@ -35584,8 +35595,24 @@
       ],
       "format": "esm"
     },
+    "packages/host/src/project/read-roots.ts": {
+      "bytes": 2334,
+      "imports": [
+        {
+          "path": "packages/host/src/project/identity.ts",
+          "kind": "import-statement",
+          "original": "./identity.js"
+        },
+        {
+          "path": "packages/host/src/worker-db-client.ts",
+          "kind": "import-statement",
+          "original": "../worker-db-client.js"
+        }
+      ],
+      "format": "esm"
+    },
     "packages/host/src/worker-tool-registry.ts": {
-      "bytes": 2912,
+      "bytes": 3254,
       "imports": [
         {
           "path": "packages/agent-runtime/src/tools/catalog/index.ts",
@@ -35601,6 +35628,11 @@
           "path": "packages/host/src/workspace/tool-write-gate.ts",
           "kind": "import-statement",
           "original": "./workspace/tool-write-gate.js"
+        },
+        {
+          "path": "packages/host/src/project/read-roots.ts",
+          "kind": "import-statement",
+          "original": "./project/read-roots.js"
         },
         {
           "path": "packages/host/src/workspace/execution-location-fence.ts",
@@ -35890,7 +35922,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-run-contracts.ts": {
-      "bytes": 9407,
+      "bytes": 9743,
       "imports": [],
       "format": "esm"
     },
@@ -43505,7 +43537,7 @@
           "bytesInOutput": 213
         },
         "packages/host/src/worker-db-client.ts": {
-          "bytesInOutput": 15305
+          "bytesInOutput": 15379
         },
         "packages/data/src/data-paths.ts": {
           "bytesInOutput": 921
@@ -43760,7 +43792,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/doctor.ts": {
-          "bytesInOutput": 84
+          "bytesInOutput": 97
         },
         "packages/agent-protocol/src/checkout-api.ts": {
           "bytesInOutput": 30
@@ -45176,10 +45208,10 @@
           "bytesInOutput": 588
         },
         "../../../../../.codex/worktrees/project-coordinator-tool-picker/duya/node_modules/handlebars/dist/cjs/handlebars/helpers.js": {
-          "bytesInOutput": 519
+          "bytesInOutput": 523
         },
         "../../../../../.codex/worktrees/project-coordinator-tool-picker/duya/node_modules/handlebars/dist/cjs/handlebars/decorators/inline.js": {
-          "bytesInOutput": 342
+          "bytesInOutput": 346
         },
         "../../../../../.codex/worktrees/project-coordinator-tool-picker/duya/node_modules/handlebars/dist/cjs/handlebars/decorators.js": {
           "bytesInOutput": 195
@@ -45674,7 +45706,7 @@
           "bytesInOutput": 1916
         },
         "packages/host/src/managed-shell/paths.ts": {
-          "bytesInOutput": 321
+          "bytesInOutput": 308
         },
         "packages/host/src/managed-shell/output-stream.ts": {
           "bytesInOutput": 370
@@ -47099,7 +47131,7 @@
           "bytesInOutput": 3130
         },
         "packages/host/src/worker-tool-bindings/app-connection-tools.ts": {
-          "bytesInOutput": 989
+          "bytesInOutput": 1002
         },
         "packages/capabilities/src/shell/prepare-sandbox.ts": {
           "bytesInOutput": 117
@@ -47108,10 +47140,10 @@
           "bytesInOutput": 3315
         },
         "packages/host/src/authorization/connector-approval-cache.ts": {
-          "bytesInOutput": 411
+          "bytesInOutput": 424
         },
         "packages/host/src/worker-tool-pool.ts": {
-          "bytesInOutput": 9965
+          "bytesInOutput": 9982
         },
         "packages/host/src/worker-subagents/built-in/exploreAgent.ts": {
           "bytesInOutput": 1913
@@ -48068,7 +48100,10 @@
           "bytesInOutput": 17
         },
         "packages/capabilities/src/ReadTool/ReadTool.ts": {
-          "bytesInOutput": 15199
+          "bytesInOutput": 15122
+        },
+        "packages/capabilities/src/utils/allowed-roots.ts": {
+          "bytesInOutput": 536
         },
         "packages/capabilities/src/ReadTool/schema.ts": {
           "bytesInOutput": 2056
@@ -48116,13 +48151,13 @@
           "bytesInOutput": 12029
         },
         "packages/capabilities/src/GlobTool/GlobTool.ts": {
-          "bytesInOutput": 6684
+          "bytesInOutput": 7010
         },
         "packages/capabilities/src/GrepTool/sanitize.ts": {
           "bytesInOutput": 232
         },
         "packages/capabilities/src/GrepTool/GrepTool.ts": {
-          "bytesInOutput": 11418
+          "bytesInOutput": 11354
         },
         "packages/capabilities/src/ApplyPatchTool/ApplyPatchTool.ts": {
           "bytesInOutput": 7666
@@ -48557,7 +48592,7 @@
           "bytesInOutput": 1564
         },
         "packages/host/src/project/identity.ts": {
-          "bytesInOutput": 176
+          "bytesInOutput": 197
         },
         "packages/host/src/host-diagnostics-log.ts": {
           "bytesInOutput": 1434
@@ -48791,7 +48826,7 @@
           "bytesInOutput": 3913
         },
         "packages/host/src/project/tool-service.ts": {
-          "bytesInOutput": 1652
+          "bytesInOutput": 1790
         },
         "packages/host/src/permission-request-api.ts": {
           "bytesInOutput": 1152
@@ -48872,7 +48907,7 @@
           "bytesInOutput": 1099
         },
         "packages/host/src/worker-db-bridge.ts": {
-          "bytesInOutput": 28457
+          "bytesInOutput": 28760
         },
         "packages/host/src/bot/service.ts": {
           "bytesInOutput": 343
@@ -49042,8 +49077,11 @@
         "packages/host/src/workspace/tool-write-gate.ts": {
           "bytesInOutput": 2095
         },
+        "packages/host/src/project/read-roots.ts": {
+          "bytesInOutput": 373
+        },
         "packages/host/src/worker-tool-registry.ts": {
-          "bytesInOutput": 671
+          "bytesInOutput": 688
         },
         "packages/host/src/worker-subagents/prompt-composition.ts": {
           "bytesInOutput": 541
@@ -49607,7 +49645,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 5769794
+      "bytes": 5771492
     }
   }
 }
