@@ -152,3 +152,125 @@ describe('SendMessage validation and message persistence', () => {
     expect(effects.appendChannelActivity).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * The Project Coordinator's `send_message` branch.
+ *
+ * Same tool name, different contract: a binding id, the text, and an optional
+ * reply reference. The wording of the success reply is part of the contract —
+ * `queued` and `unknown` must not be reported as delivered, or the model stops
+ * retrying something that never left the Host.
+ */
+describe('send_message to a project channel', () => {
+  const channelContext = { toolUseId: 'test', options: { sessionId: 'coordinator-1' } };
+
+  function withProjectChannel(
+    outcome: Awaited<ReturnType<NonNullable<SendMessagePort['sendToProjectChannel']>>>,
+  ) {
+    const sendToProjectChannel = vi.fn(async () => outcome);
+    return { tool: new SendMessageTool({ ...effects, sendToProjectChannel }), sendToProjectChannel };
+  }
+
+  it('sends the narrow payload and reports a delivered message as sent', async () => {
+    const { tool: channelTool, sendToProjectChannel } = withProjectChannel(
+      { ok: true, deliveryId: 'delivery-1', status: 'sent' },
+    );
+
+    const result = await channelTool.execute(
+      { channelBindingId: 'binding-1', text: 'status is green', requestId: 'req-1' },
+      undefined,
+      channelContext,
+    );
+
+    expect(result.error).toBeUndefined();
+    // No legacy fields leak into the outgoing request.
+    expect(sendToProjectChannel).toHaveBeenCalledWith({
+      requestId: 'req-1', channelBindingId: 'binding-1', text: 'status is green',
+    });
+    expect(result.result).toContain('Sent');
+    expect(result.result).toContain('delivery-1');
+  });
+
+  it('passes the reply reference when answering an external message', async () => {
+    const { tool: channelTool, sendToProjectChannel } = withProjectChannel(
+      { ok: true, deliveryId: 'delivery-2', status: 'sent' },
+    );
+
+    await channelTool.execute(
+      { channelBindingId: 'binding-1', text: 'answering', requestId: 'req-2', replyToInboundId: 'inbound-9' },
+      undefined,
+      channelContext,
+    );
+
+    expect(sendToProjectChannel).toHaveBeenCalledWith(expect.objectContaining({ replyToInboundId: 'inbound-9' }));
+  });
+
+  it('does not call a queued send delivered', async () => {
+    const { tool: channelTool } = withProjectChannel(
+      { ok: true, deliveryId: 'delivery-3', status: 'queued' },
+    );
+
+    const result = await channelTool.execute(
+      { channelBindingId: 'binding-1', text: 'hi', requestId: 'req-3' },
+      undefined,
+      channelContext,
+    );
+
+    expect(result.result).toContain('queued');
+    expect(result.result).toContain('not delivered');
+  });
+
+  it('does not call an unknown outcome delivered', async () => {
+    const { tool: channelTool } = withProjectChannel(
+      { ok: true, deliveryId: 'delivery-4', status: 'unknown' },
+    );
+
+    const result = await channelTool.execute(
+      { channelBindingId: 'binding-1', text: 'hi', requestId: 'req-4' },
+      undefined,
+      channelContext,
+    );
+
+    expect(result.result).toContain('unknown');
+    expect(result.result).toContain('do not resend');
+  });
+
+  it('reports a domain refusal as an error with its code', async () => {
+    const { tool: channelTool } = withProjectChannel({ ok: false, reason: 'proactive_not_allowed' });
+
+    const result = await channelTool.execute(
+      { channelBindingId: 'binding-1', text: 'hi', requestId: 'req-5' },
+      undefined,
+      channelContext,
+    );
+
+    expect(result.error).toBe(true);
+    expect(result.result).toContain('proactive_not_allowed');
+  });
+
+  it('refuses the branch when the Host composed no channel support', async () => {
+    // `effects` has no sendToProjectChannel: a bot session, or a Host without
+    // the project channel domain. Falling through to the in-app path would post
+    // the text where the model never asked for it.
+    const result = await tool.execute(
+      { channelBindingId: 'binding-1', text: 'hi', requestId: 'req-6' },
+      undefined,
+      channelContext,
+    );
+
+    expect(result.error).toBe(true);
+    expect(result.result).toContain('channel_support_unavailable');
+    expect(effects.appendMessage).not.toHaveBeenCalled();
+    expect(effects.deliverToChannel).not.toHaveBeenCalled();
+  });
+
+  it('requires requestId and text', async () => {
+    const { tool: channelTool, sendToProjectChannel } = withProjectChannel(
+      { ok: true, deliveryId: 'delivery-5', status: 'sent' },
+    );
+
+    expect((await channelTool.execute({ channelBindingId: 'binding-1', text: 'hi' }, undefined, channelContext)).error).toBe(true);
+    expect((await channelTool.execute({ channelBindingId: 'binding-1', requestId: 'r' }, undefined, channelContext)).error).toBe(true);
+    expect(sendToProjectChannel).not.toHaveBeenCalled();
+  });
+});

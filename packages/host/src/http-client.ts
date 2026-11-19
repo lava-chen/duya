@@ -2514,6 +2514,12 @@ export class HostSessionHttpClient implements
     return result.deleted;
   }
 
+  async ensureCoordinatorSession(projectId: string) {
+    const result = await this.request<{ coordinator: import('@duya/agent-protocol/projects').ProjectCoordinatorSessionResult }>(
+      'POST', `/v1/projects/${encodeURIComponent(projectId)}/coordinator/ensure`, {});
+    return result.coordinator;
+  }
+
   async bindCoordinatorSession(projectId: string, sessionId: string): Promise<HostProjectRecord | null> {
     const result = await this.request<{ project: HostProjectRecord | null }>(
       'PUT', `/v1/projects/${encodeURIComponent(projectId)}/coordinator`, { sessionId });
@@ -2579,7 +2585,21 @@ export class HostSessionHttpClient implements
     return result.memory;
   }
 
-  async updateProjectTaskAcceptance(input: { projectId: string; taskId: string; status: 'accepted' | 'rejected'; source: { type: string; id: string } }) {
+  async createProjectTask(input: import('@duya/agent-protocol/projects').ProjectTaskCreateInput) {
+    const { projectId, ...body } = input;
+    const result = await this.request<{ task: import('@duya/agent-protocol/projects').ProjectTaskSnapshot }>(
+      'POST', `/v1/projects/${encodeURIComponent(projectId)}/task-records`, body);
+    return result.task;
+  }
+
+  async updateProjectTask(input: import('@duya/agent-protocol/projects').ProjectTaskUpdateInput) {
+    const { projectId, taskId, ...body } = input;
+    const result = await this.request<{ task: import('@duya/agent-protocol/projects').ProjectTaskSnapshot }>(
+      'PATCH', `/v1/projects/${encodeURIComponent(projectId)}/task-records/${encodeURIComponent(taskId)}`, body);
+    return result.task;
+  }
+
+  async updateProjectTaskAcceptance(input: import('@duya/agent-protocol/projects').ProjectTaskReviewInput) {
     const { projectId, taskId, ...body } = input;
     const result = await this.request<{ task: HostProjectTaskLink | null }>(
       'PUT', `/v1/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}/acceptance`, body);

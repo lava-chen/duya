@@ -29,6 +29,18 @@ import { runChatCommand, type ChatCommandOptions } from './chat.js';
 // to `chat.ts`. Keeping it out of the client entry is what lets gate G11-1
 // hold `chat.ts` free of the execution engine.
 import { runTuiCommand, type TuiCommandOptions } from './tui-command.js';
+import { parseFormat } from './api/format.js';
+import {
+  PROJECT_CHANNEL_TOKEN_ENV,
+  runProjectChannelBind,
+  runProjectChannelConnect,
+  runProjectChannelDisconnect,
+  runProjectChannelList,
+  runProjectChannelStatus,
+  runProjectChannelUnbind,
+  runProjectChannelUpdate,
+  type ProjectChannelCommandOptions,
+} from './commands/project-channel.js';
 import { resolveHostWorkerPath } from './worker-path.js';
 
 export { CLI_DESCRIPTORS } from './program/descriptors.js';
@@ -57,6 +69,10 @@ export function buildProgram(): Command {
     .name('duya')
     .description('DUYA Host control plane (serve, status, plugins, sessions, crons, channels, ...)')
     .version(process.env.DUYA_CLI_VERSION ?? '0.1.0');
+  addTuiOptions(program, { includeSession: true, includeWorkspace: true, includePort: true });
+  program.action(async () => {
+    process.exitCode = await runTuiCommand(readTuiOptions(program));
+  });
   buildControlPlane(program);
 
   // The Host is a long-running process command, so it is intentionally kept
@@ -130,15 +146,15 @@ export function buildProgram(): Command {
     const asString = (value: unknown): string | undefined =>
       typeof value === 'string' && value.length > 0 ? value : undefined;
     const options: ChatCommandOptions = {
-      origin: asString(chat.getOptionValue('origin')),
-      token: asString(chat.getOptionValue('token')),
-      runtimeFile: asString(chat.getOptionValue('runtimeFile')),
-      session: asString(chat.getOptionValue('session')),
-      workingDirectory: asString(chat.getOptionValue('workspace')),
-      model: asString(chat.getOptionValue('model')),
-      providerId: asString(chat.getOptionValue('provider')),
-      apiFormat: asString(chat.getOptionValue('apiFormat')) as 'anthropic' | 'openai' | undefined,
-      print: asString(chat.getOptionValue('print')),
+      origin: asString(optionValue(chat, 'origin')),
+      token: asString(optionValue(chat, 'token')),
+      runtimeFile: asString(optionValue(chat, 'runtimeFile')),
+      session: asString(optionValue(chat, 'session')),
+      workingDirectory: asString(optionValue(chat, 'workspace')),
+      model: asString(optionValue(chat, 'model')),
+      providerId: asString(optionValue(chat, 'provider')),
+      apiFormat: asString(optionValue(chat, 'apiFormat')) as 'anthropic' | 'openai' | undefined,
+      print: asString(optionValue(chat, 'print')),
     };
     process.exitCode = await runChatCommand(options);
   });
@@ -148,34 +164,229 @@ export function buildProgram(): Command {
   const tui = program
     .command('tui')
     .description('Open the TUI against the Duya Host that owns this data directory (DUYA_TUI_INLINE=1 for the inline screen model)');
-  tui.option('--port <port>', 'HTTP port for the embedded Host (0 = auto)', '0');
-  tui.option('--session <id>', 'Continue an existing session instead of creating one');
-  tui.option('--workspace <dir>', 'Working directory for a new session (defaults to the current directory)');
-  tui.option('--model <model>', 'Default model override');
-  tui.option('--provider <id>', 'Default provider override (e.g. deepseek, glm-cn)');
-  tui.option('--api-format <format>', 'API format override: anthropic | openai');
+  addTuiOptions(tui, { includeSession: true, includeWorkspace: true, includePort: true });
   tui.action(async () => {
-    const asString = (value: unknown): string | undefined =>
-      typeof value === 'string' && value.length > 0 ? value : undefined;
-    const asInt = (value: unknown): number | undefined => {
-      if (typeof value === 'string') {
-        const n = Number(value);
-        return Number.isInteger(n) && n >= 0 && n <= 65535 ? n : undefined;
-      }
-      return undefined;
-    };
-    const options: TuiCommandOptions = {
-      port: asInt(tui.getOptionValue('port')),
-      session: asString(tui.getOptionValue('session')),
-      workingDirectory: asString(tui.getOptionValue('workspace')),
-      model: asString(tui.getOptionValue('model')),
-      providerId: asString(tui.getOptionValue('provider')),
-      apiFormat: asString(tui.getOptionValue('apiFormat')) as 'anthropic' | 'openai' | undefined,
-    };
-    process.exitCode = await runTuiCommand(options);
+    process.exitCode = await runTuiCommand(readTuiOptions(tui));
   });
 
+  const project = program.command('project').description('Open a Project Coordinator TUI (or manage its channel bot)');
+  addTuiOptions(project, { includeProject: true, includePort: true });
+  project.action(async () => {
+    process.exitCode = await runTuiCommand({
+      ...readTuiOptions(project),
+      projectMode: true,
+      projectId: asString(optionValue(project, 'project')),
+    });
+  });
+  addProjectChannelCommands(project);
+
   return program;
+}
+
+/**
+ * `duya project channel …` — a local operator surface, not a model surface.
+ *
+ * These are registered on the commander tree only. The `duya_cli` tool resolves
+ * commands through `program/descriptors.ts`, so by never adding this path there
+ * the credential-carrying subcommands are structurally unreachable from a model
+ * turn — not merely discouraged in a prompt.
+ *
+ * `duya project` on its own keeps opening the Coordinator TUI: the subcommands
+ * do not change the parent's action.
+ */
+function addProjectChannelCommands(project: Command): void {
+  const channel = project.command('channel').description("Manage this Project's own Discord bot: connect, bind channels, revoke, disconnect");
+
+  const withFormat = (command: Command): Command =>
+    command.option('--format <format>', 'Output format: text | json', 'text');
+
+  /** `--member` may be repeated or comma-separated; both mean the same list. */
+  const memberOption = (command: Command): Command =>
+    command.option('--member <userId>', 'Allowed Discord user id; repeat the flag or comma-separate', collectOption, [] as string[]);
+
+  const list = withFormat(
+    channel.command('list')
+      .description("List this Project's channel bindings, their members and send permissions")
+      .option('--project <id>', 'Project id'),
+  );
+  list.action(async (): Promise<void> => {
+    process.exitCode = await runProjectChannelList(readChannelOptions(list));
+  });
+
+  const status = withFormat(
+    channel.command('status')
+      .description('Show the connection, transport state and recent deliveries')
+      .option('--project <id>', 'Project id'),
+  );
+  status.action(async (): Promise<void> => {
+    process.exitCode = await runProjectChannelStatus(readChannelOptions(status));
+  });
+
+  const connect = withFormat(
+    channel.command('connect')
+      .description(`Configure or rotate the Project's Discord bot (credential from ${PROJECT_CHANNEL_TOKEN_ENV} or stdin)`)
+      .option('--project <id>', 'Project id')
+      .option('--label <label>', 'Operator-facing label for the connection')
+      .option('--revision <n>', 'Current revision; required to rotate an existing connection', (value) => Number(value))
+      // Declared only to be refused with instructions; never read as a value.
+      .option('--token <token>', 'Refused: credentials must not appear on the command line'),
+  );
+  connect.action(async (): Promise<void> => {
+    process.exitCode = await runProjectChannelConnect(readChannelOptions(connect));
+  });
+
+  const bind = memberOption(withFormat(
+    channel.command('bind')
+      .description('Authorize one guild channel and a non-empty member allowlist')
+      .option('--project <id>', 'Project id')
+      .option('--connection <id>', 'Connection id from `channel status`')
+      .option('--guild <id>', 'Discord guild (server) id')
+      .option('--channel <id>', 'Discord text channel id')
+      .option('--allow-proactive', 'Let the Coordinator send without a triggering message (default off)')
+      .option('--label <label>', 'Operator-facing label for the binding'),
+  ));
+  bind.action(async (): Promise<void> => {
+    process.exitCode = await runProjectChannelBind(readChannelOptions(bind));
+  });
+
+  const update = memberOption(withFormat(
+    channel.command('update')
+      .description('Change members, proactive permission or enabled state (compare-and-set)')
+      .option('--project <id>', 'Project id')
+      .option('--binding <id>', 'Binding id')
+      .option('--revision <n>', 'Expected revision; the write fails if it moved', (value) => Number(value))
+      .option('--proactive <on|off>', 'Set the proactive permission explicitly')
+      .option('--state <enabled|disabled>', 'Enable or stop the binding'),
+  ));
+  update.action(async (): Promise<void> => {
+    process.exitCode = await runProjectChannelUpdate(readChannelOptions(update));
+  });
+
+  const unbind = withFormat(
+    channel.command('unbind')
+      .description('Revoke a binding (the bot credential is kept)')
+      .option('--project <id>', 'Project id')
+      .option('--binding <id>', 'Binding id')
+      .option('--revision <n>', 'Expected revision', (value) => Number(value)),
+  );
+  unbind.action(async (): Promise<void> => {
+    process.exitCode = await runProjectChannelUnbind(readChannelOptions(unbind));
+  });
+
+  const disconnect = withFormat(
+    channel.command('disconnect')
+      .description('Disable the connection locally; the Discord application is not deleted')
+      .option('--project <id>', 'Project id')
+      .option('--connection <id>', 'Connection id')
+      .option('--revision <n>', 'Expected revision', (value) => Number(value)),
+  );
+  disconnect.action(async (): Promise<void> => {
+    process.exitCode = await runProjectChannelDisconnect(readChannelOptions(disconnect));
+  });
+}
+
+/** Collect repeated `--member` values, splitting any comma-separated ones. */
+function collectOption(value: string, previous: string[]): string[] {
+  return [...previous, ...value.split(',').map((part) => part.trim()).filter((part) => part !== '')];
+}
+
+/**
+ * Read a channel subcommand's own flags.
+ *
+ * Each subcommand declares `--project` itself rather than inheriting it: the
+ * parent also carries `--project` for the TUI, and commander would otherwise
+ * parse the value in one shape and look for it in another.
+ */
+/**
+ * Read an option from a command or any of its ancestors.
+ *
+ * `--project` exists on both `duya project` (for the TUI) and the channel
+ * subcommands, and Commander resolves the flag against the nearest ancestor
+ * that declares it — so the value the operator typed after the subcommand
+ * still lands on `project`. Reading only the leaf command would see
+ * `undefined` and silently target no project at all.
+ */
+function ancestorOption(command: Command, name: string): unknown {
+  let current: Command | null = command;
+  while (current !== null) {
+    const value = current.getOptionValue(name);
+    if (value !== undefined) return value;
+    // Commander types `parent` as the untyped base class; the walk only needs
+    // `getOptionValue`, which every command has.
+    current = (current.parent ?? null) as Command | null;
+  }
+  return undefined;
+}
+
+function readChannelOptions(command: Command): ProjectChannelCommandOptions {
+  const proactive = asString(ancestorOption(command, 'proactive'));
+  const state = asString(ancestorOption(command, 'state'));
+  const members = ancestorOption(command, 'member');
+  // Two shapes for the same permission: `bind --allow-proactive` (one-way) and
+  // `update --proactive on|off` (explicit). Absent from both means "leave the
+  // binding's own setting alone", so the key must stay out of the patch.
+  const allowProactive = ancestorOption(command, 'allowProactive') === true
+    ? true
+    : proactive === undefined ? undefined : proactive === 'on' || proactive === 'true';
+  return {
+    projectId: asString(ancestorOption(command, 'project')),
+    connectionId: asString(ancestorOption(command, 'connection')),
+    bindingId: asString(ancestorOption(command, 'binding')),
+    guildId: asString(ancestorOption(command, 'guild')),
+    channelId: asString(ancestorOption(command, 'channel')),
+    members: Array.isArray(members)
+      ? members.filter((value): value is string => typeof value === 'string')
+      : typeof members === 'string' ? [members] : [],
+    // One flag name for every compare-and-set write: `--revision`.
+    expectedRevision: typeof ancestorOption(command, 'revision') === 'number'
+      ? ancestorOption(command, 'revision') as number
+      : undefined,
+    ...(allowProactive === undefined ? {} : { allowProactive }),
+    ...(state === undefined ? {} : { enabled: state === 'enabled' }),
+    label: asString(ancestorOption(command, 'label')),
+    plaintextToken: asString(ancestorOption(command, 'token')),
+    format: parseFormat(asString(ancestorOption(command, 'format'))),
+  };
+}
+
+function addTuiOptions(
+  command: Command,
+  options: { includePort?: boolean; includeSession?: boolean; includeWorkspace?: boolean; includeProject?: boolean } = {},
+): void {
+  if (options.includePort) command.option('--port <port>', 'HTTP port for the embedded Host (0 = auto)', '0');
+  if (options.includeSession) command.option('--session <id>', 'Continue an existing session instead of creating one');
+  if (options.includeWorkspace) command.option('--workspace <dir>', 'Working directory for a new session (defaults to the current directory)');
+  command.option('--model <model>', 'Default model override');
+  command.option('--provider <id>', 'Default provider override (e.g. deepseek, glm-cn)');
+  command.option('--api-format <format>', 'API format override: anthropic | openai');
+  if (options.includeProject) command.option('--project <id>', 'Open this project directly without the selector');
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function asInt(value: unknown): number | undefined {
+  if (typeof value === 'string') {
+    const n = Number(value);
+    return Number.isInteger(n) && n >= 0 && n <= 65535 ? n : undefined;
+  }
+  return undefined;
+}
+
+function optionValue(command: Command, name: string): unknown {
+  return command.getOptionValue(name) ?? command.parent?.getOptionValue(name);
+}
+
+function readTuiOptions(command: Command): TuiCommandOptions {
+  return {
+    port: asInt(optionValue(command, 'port')),
+    session: asString(optionValue(command, 'session')),
+    workingDirectory: asString(optionValue(command, 'workspace')),
+    model: asString(optionValue(command, 'model')),
+    providerId: asString(optionValue(command, 'provider')),
+    apiFormat: asString(optionValue(command, 'apiFormat')) as 'anthropic' | 'openai' | undefined,
+  };
 }
 
 // Standalone entry: when run as `node packages/cli/dist/index.js`,

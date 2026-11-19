@@ -15,6 +15,22 @@ export * from './core-stores.js';
 export * from './session-store.js';
 export * from './mailbox.js';
 export * from './project-store.js';
+// Project Channel: durable connection/binding/inbound/delivery evidence (migration 69).
+export {
+  ProjectChannelStore,
+  ProjectChannelStoreError,
+  PROJECT_CHANNEL_MIGRATIONS,
+} from './project-channel-store.js';
+export type {
+  AcceptInboundInput,
+  Acceptance,
+  CreateBindingInput,
+  CreateConnectionInput,
+  CreateDeliveryInput,
+  ObserveInput,
+  RevokeBindingInput,
+  UpdateBindingInput,
+} from './project-channel-store.js';
 export * from './projects-import.js';
 export * from './research-store.js';
 export * from './pending-wakes.js';

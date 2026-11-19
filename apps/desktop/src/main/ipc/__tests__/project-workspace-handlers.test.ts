@@ -107,14 +107,6 @@ beforeEach(async () => {
   sessions = new Map();
   createdCount = 0;
 
-  mocks.hostProjectApi = createHostProjectApi(dataHost.stores.projects, dataHost.stores.tasks, {
-    sessions: dataHost.stores.sessions,
-    spawnEdges: dataHost.stores.spawnEdges,
-  });
-  mocks.hostSessionInputApi = createHostSessionInputApi({
-    stores: dataHost.stores,
-    actor: { kind: 'user', id: 'local' },
-  });
   mocks.hostSessionApi = {
     get: async (id: string) => sessions.get(id) ?? null,
     registerLocalDirectory: async (directory: string) => ({
@@ -130,6 +122,17 @@ beforeEach(async () => {
       return { id };
     },
   };
+  mocks.hostSessionInputApi = createHostSessionInputApi({
+    stores: dataHost.stores,
+    actor: { kind: 'user', id: 'local' },
+  });
+  mocks.hostProjectApi = createHostProjectApi(dataHost.stores.projects, dataHost.stores.tasks, {
+    sessions: dataHost.stores.sessions,
+    spawnEdges: dataHost.stores.spawnEdges,
+  }, {
+    sessions: mocks.hostSessionApi as never,
+    workspaces: mocks.hostSessionApi as never,
+  });
   mocks.agentServerPort = null;
 
   const { registerProjectWorkspaceHandlers } = await import('../project-workspace-handlers');
@@ -183,10 +186,29 @@ describe('projects:coordinator:ensure', () => {
     expect(second.created).toBe(false);
     expect(second.sessionId).toBe(first.sessionId);
     expect(createdCount).toBe(1);
+    expect(sessions.get(first.sessionId)).toMatchObject({ agentProfileId: 'project-coordinator' });
 
     // The binding is what makes it durable: it is on the project row.
     const state = await mocks.hostProjectApi.getProjectState(project.project_id);
     expect(state?.coordinatorSessionId).toBe(first.sessionId);
+  });
+
+  it('serializes concurrent first-entry requests into one session', async () => {
+    const project = await mocks.hostProjectApi.createProject({
+      name: 'codex',
+      paths: [{ path: '/projects/codex', description: null }],
+    });
+
+    const [first, second] = await Promise.all([
+      invoke('projects:coordinator:ensure', project.project_id),
+      invoke('projects:coordinator:ensure', project.project_id),
+    ]);
+
+    expect(first.success).toBe(true);
+    expect(second.success).toBe(true);
+    expect(first.sessionId).toBe(second.sessionId);
+    expect([first.created, second.created].sort()).toEqual([false, true]);
+    expect(createdCount).toBe(1);
   });
 
   it('replaces a coordinator whose session is gone', async () => {

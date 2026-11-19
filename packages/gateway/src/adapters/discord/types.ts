@@ -13,6 +13,12 @@ export interface DiscordAttachment {
 export interface DiscordMessage {
   id: string;
   channel_id: string;
+  /**
+   * Absent for direct messages. A guild text message always carries it, and the
+   * project-channel transport fails closed when it is missing rather than
+   * treating an unidentified source as allowed.
+   */
+  guild_id?: string;
   author: {
     id: string;
     username: string;
@@ -20,6 +26,13 @@ export interface DiscordMessage {
   };
   content: string;
   timestamp: string;
+  /**
+   * Present when the message was posted by an incoming webhook. Such authors are
+   * not project members, so the project-channel transport drops them.
+   */
+  webhook_id?: string;
+  /** Native mention resolution. Populated even without MESSAGE_CONTENT. */
+  mentions?: Array<{ id: string; username?: string; bot?: boolean }>;
   referenced_message?: DiscordMessage;
   /** Uploaded files. Requires the MESSAGE_CONTENT intent to be populated. */
   attachments?: DiscordAttachment[];

@@ -52,6 +52,7 @@ export type { ModeStateRow } from '@duya/agent-protocol/mode-state';
 import { SessionStore } from './session-store.js';
 import { Mailbox } from './mailbox.js';
 import { ProjectStore } from './project-store.js';
+import { PROJECT_CHANNEL_MIGRATIONS } from './project-channel-store.js';
 import { ResearchStore } from './research-store.js';
 import { PendingWakeStore } from './pending-wakes.js';
 import {
@@ -123,7 +124,7 @@ export interface UnassignTeammateResult {
 }
 
 export class TaskStore {
-  /** Migration id=5: create tasks table. */
+  /** Migration 5 creates tasks; 68 detaches the obsolete chat-session cascade. */
   static readonly migrations: Migration[] = [
     {
       id: 5,
@@ -147,6 +148,28 @@ export class TaskStore {
           CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id, created_at);
           CREATE INDEX IF NOT EXISTS idx_tasks_owner ON tasks(session_id, owner);
         `);
+      },
+    },
+    {
+      id: 68,
+      name: 'tasks_outlive_legacy_chat_sessions',
+      rebuildWithForeignKeysOff: true,
+      up: (db) => {
+        const keys = db.pragma('foreign_key_list(tasks)') as Array<{ table: string; from: string }>;
+        if (!keys.some((key) => key.table === 'chat_sessions' && key.from === 'session_id')) return;
+        const definition = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tasks'").get() as { sql: string };
+        const detached = definition.sql.replace(/,\s*FOREIGN KEY\s*\(session_id\)\s*REFERENCES\s+chat_sessions\(id\)\s+ON DELETE CASCADE/iu, '');
+        if (detached === definition.sql) throw new Error('Unsupported legacy Task session constraint');
+        const rebuilt = detached.replace(/^CREATE TABLE\s+(?:IF NOT EXISTS\s+)?["`]?tasks["`]?\s*\(/iu, 'CREATE TABLE tasks_detached_from_legacy_session (');
+        if (rebuilt === detached) throw new Error('Unsupported legacy Task table definition');
+        const dependents = db.prepare("SELECT sql FROM sqlite_master WHERE tbl_name = 'tasks' AND type IN ('index', 'trigger') AND sql IS NOT NULL")
+          .all() as Array<{ sql: string }>;
+        // Keep incoming Project FKs pointing at tasks, never at a renamed old table.
+        db.exec(rebuilt);
+        db.exec('INSERT INTO tasks_detached_from_legacy_session SELECT * FROM tasks');
+        db.exec('DROP TABLE tasks');
+        db.exec('ALTER TABLE tasks_detached_from_legacy_session RENAME TO tasks');
+        for (const dependent of dependents) db.exec(dependent.sql);
       },
     },
   ];
@@ -1299,6 +1322,7 @@ export function collectCoreDataMigrations(): Migration[] {
     ...PluginAppGrantStore.migrations,
     ...SESSION_INPUT_MIGRATIONS,
     ...SESSION_CONTROL_LEASE_MIGRATIONS,
+    ...PROJECT_CHANNEL_MIGRATIONS,
   ].sort((a, b) => a.id - b.id);
 }
 

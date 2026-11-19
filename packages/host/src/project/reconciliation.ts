@@ -27,6 +27,8 @@ import { randomUUID } from 'node:crypto';
 import type { Mailbox, MailboxItem } from '@duya/data/mailbox';
 import type { ProjectActivityRow, ProjectStore } from '@duya/data/project-store';
 import type { RunRow, RunStore } from '@duya/data/run-store';
+import type { ProjectTaskLifecycle } from './task-lifecycle.js';
+export { createProjectTaskLifecycle } from './task-lifecycle.js';
 
 export interface ProjectRunTaskPort {
   get(id: string): { id: string; subject: string; status: string } | null;
@@ -81,6 +83,7 @@ export interface ProjectRunSettlementLogger {
 
 export interface ProjectRunSettlementOptions {
   readonly stores: ProjectRunSettlementStores;
+  readonly taskLifecycle?: ProjectTaskLifecycle;
   /** Best-effort surface wake; the durable mailbox row is already written. */
   readonly wake?: (request: ProjectRunSettlementWakeRequest) => void;
   readonly summaryBudget?: number;
@@ -132,6 +135,7 @@ export function createProjectRunSettlementService(
     const project = stores.projects.get(link.project_id);
     if (project === null) return { state: 'skipped', reason: 'project_not_found' };
 
+    options.taskLifecycle?.settle(run.id, run.session_id, run.status === 'completed');
     const task = stores.tasks.get(link.task_id);
     const summary = readRunSummary(stores.runs, run, summaryBudget);
     const notice: ProjectRunNotice = {
@@ -211,6 +215,7 @@ export function createProjectRunSettlementService(
   }
 
   function reconcile(): { settled: number; skipped: number } {
+    options.taskLifecycle?.recover((sessionId) => stores.runs.listRunsBySession(sessionId));
     const horizon = now() - reconcileWindowMs;
     let settled = 0;
     let skipped = 0;

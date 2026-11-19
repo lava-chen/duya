@@ -106,6 +106,7 @@ export interface ChatCommandOptions {
   readonly model?: string;
   readonly providerId?: string;
   readonly apiFormat?: 'anthropic' | 'openai';
+  readonly project?: { readonly projectId: string; readonly name: string };
 }
 
 interface ResolvedConnection {
@@ -1276,7 +1277,7 @@ export async function chatTui(
   }
 
   const tui = new TUIApp({
-    title: 'duya',
+    title: options.project === undefined ? 'duya' : `${options.project.name || 'Project'} Coordinator`,
     // The tab bar is the only surface that distinguishes two windows once the
     // terminal is not focused. A session that has not been named yet falls back
     // to its id prefix — the same eight characters the status bar shows — which
@@ -2094,6 +2095,7 @@ export async function chatTui(
             {
               client,
               session: activeSession,
+              ...(options.project === undefined ? {} : { projectId: options.project.projectId }),
               tui,
               busy,
               // Actions only this loop can perform: they touch the queue, the

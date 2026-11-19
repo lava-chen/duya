@@ -140,6 +140,8 @@ export interface TuiSlashContext {
   readonly client: HostSessionHttpClient;
   /** Snapshot of the session this command was typed into. */
   readonly session: HostSessionRecord;
+  /** Present only in the `duya project` Coordinator workbench. */
+  readonly projectId?: string;
   readonly tui: TuiSlashHost;
   /** True while a turn is streaming. Read-only commands still work. */
   readonly busy: boolean;

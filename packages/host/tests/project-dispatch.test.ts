@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { projectTaskFixture } from './project-task-fixture.js';
 import {
   createProjectDispatchPort,
   type ProjectDispatchStores,
@@ -11,90 +12,25 @@ import {
 const PROJECT_ID = 'project-1';
 const COORDINATOR_ID = 'coordinator-1';
 
-interface FakeLink {
-  project_id: string;
-  task_id: string;
-  coordinator_session_id: string;
-  work_session_id: string | null;
-  updated_at: number;
-  acceptance_status: 'pending' | 'accepted' | 'rejected';
-}
-
-interface FakeTask {
-  id: string;
-  sessionId: string;
-  subject: string;
-  description: string;
-  status: string;
-}
-
 function createHarness(options: { failTaskCreate?: boolean } = {}) {
-  const links: FakeLink[] = [{
-    project_id: PROJECT_ID,
-    task_id: 'task-old',
-    coordinator_session_id: COORDINATOR_ID,
-    work_session_id: 'work-old',
-    updated_at: 1,
-    acceptance_status: 'pending',
-  }];
-  const tasks = new Map<string, FakeTask>();
-  const calls = { create: 0, bindTask: 0, bindWork: 0, update: 0 };
-  const stores = {
-    projects: {
-      getByCoordinatorSession: (sessionId: string) =>
-        sessionId === COORDINATOR_ID ? { project_id: PROJECT_ID } : null,
-      listTaskLinks: (projectId: string) => projectId === PROJECT_ID ? links : [],
-      bindTask: (projectId: string, taskId: string, coordinatorSessionId: string) => {
-        calls.bindTask += 1;
-        const row: FakeLink = {
-          project_id: projectId,
-          task_id: taskId,
-          coordinator_session_id: coordinatorSessionId,
-          work_session_id: null,
-          updated_at: 2,
-          acceptance_status: 'pending',
-        };
-        links.push(row);
-        return row;
-      },
-      bindWorkSession: (projectId: string, taskId: string, workSessionId: string) => {
-        calls.bindWork += 1;
-        const row = links.find((link) => link.project_id === projectId && link.task_id === taskId);
-        if (!row) return null;
-        row.work_session_id = workSessionId;
-        return row;
-      },
-    },
-    tasks: {
-      create: (input: {
-        id: string;
-        sessionId: string;
-        subject: string;
-        description: string;
-        status?: string;
-      }) => {
-        calls.create += 1;
-        if (options.failTaskCreate) throw new Error('disk full');
-        const row: FakeTask = {
-          id: input.id,
-          sessionId: input.sessionId,
-          subject: input.subject,
-          description: input.description,
-          status: input.status ?? 'pending',
-        };
-        tasks.set(input.id, row);
-        return row;
-      },
-      update: (id: string, patch: { status?: string }) => {
-        calls.update += 1;
-        const row = tasks.get(id);
-        if (!row) return null;
-        if (patch.status !== undefined) row.status = patch.status;
-        return row;
-      },
-    },
-  } as unknown as ProjectDispatchStores;
-  return { links, tasks, calls, port: createProjectDispatchPort(stores) };
+  const fixture = projectTaskFixture(COORDINATOR_ID, PROJECT_ID);
+  const { projects, tasks } = fixture;
+  tasks.create({ id: 'task-old', sessionId: COORDINATOR_ID, subject: 'Old work', description: 'Continue it' });
+  projects.bindTask(PROJECT_ID, 'task-old', COORDINATOR_ID);
+  projects.bindWorkSession(PROJECT_ID, 'task-old', 'work-old');
+  const create = vi.spyOn(tasks, 'create');
+  const bindTask = vi.spyOn(projects, 'bindTask');
+  const bindWork = vi.spyOn(projects, 'bindWorkSession');
+  const update = vi.spyOn(tasks, 'update');
+  if (options.failTaskCreate) create.mockImplementation(() => { throw new Error('disk full'); });
+  const calls = {
+    get create() { return create.mock.calls.length; },
+    get bindTask() { return bindTask.mock.calls.length; },
+    get bindWork() { return bindWork.mock.calls.length; },
+    get update() { return update.mock.calls.length; },
+  };
+  return { ...fixture, get links() { return projects.listTaskLinks(PROJECT_ID); }, calls,
+    port: createProjectDispatchPort(fixture.stores) };
 }
 
 const caller = {
@@ -176,9 +112,9 @@ describe('project dispatch planning', () => {
     expect(harness.port.bindWorkSession(plan, created.taskId, 'work-1')).toBe(true);
     expect(harness.links.find((link) => link.task_id === created.taskId)?.work_session_id).toBe('work-1');
 
-    harness.port.setTaskStatus(created.taskId, 'in_progress');
+    harness.port.recordStartResult(created.taskId, 'running', undefined, 'run-1');
     expect(harness.tasks.get(created.taskId)?.status).toBe('in_progress');
-    harness.port.setTaskStatus(created.taskId, 'pending');
+    harness.port.recordStartResult(created.taskId, 'failed', 'worker failed', 'run-1');
     expect(harness.tasks.get(created.taskId)?.status).toBe('pending');
   });
 

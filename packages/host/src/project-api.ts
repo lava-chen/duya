@@ -2,6 +2,7 @@ import type {
   HostProjectApiV1,
   HostProjectCreateInput,
   HostProjectPatch,
+  ProjectCoordinatorSessionResult,
   HostProjectPathEntry,
   HostProjectRecord,
   ProjectContinuitySnapshot,
@@ -12,6 +13,7 @@ import type {
   HostProjectTaskState,
   HostProjectWorkSession,
 } from '@duya/agent-protocol/projects';
+import type { HostSessionApiV1, HostWorkspaceRegistrationApiV1 } from '@duya/agent-protocol/session-api';
 import type { Task } from '@duya/agent-protocol';
 import type { CoreDataHostStores } from '@duya/data/core-data-host';
 import {
@@ -23,6 +25,8 @@ import {
 } from '@duya/data/project-store';
 import { validateProjectMemoryKey } from '@duya/memory';
 import { buildProjectContext } from './project/context.js';
+import { createProjectCoordinatorSessionService } from './project/coordinator-session.js';
+import { createProjectTaskLifecycle } from './project/task-lifecycle.js';
 
 export class HostProjectApiError extends Error {
   constructor(readonly code: 'project_conflict', message: string) {
@@ -57,10 +61,38 @@ export interface HostProjectSessionScope {
 
 /** Build the asynchronous project API over the Host-owned Data store. */
 export function createHostProjectApi(
-  projects: Pick<ProjectStore, 'list' | 'get' | 'insert' | 'update' | 'delete' | 'deleteBotsByProject' | 'bindCoordinatorSession' | 'listTaskLinks' | 'bindTask' | 'bindWorkSession' | 'setTaskAcceptance' | 'getContinuityState' | 'updateContinuityState' | 'listDecisions' | 'upsertDecision' | 'listMemories' | 'upsertMemory' | 'listMemoryHistory' | 'listDecisionHistory' | 'appendActivity' | 'listActivity' | 'listRecentActivity'>,
-  tasks?: Pick<CoreDataHostStores['tasks'], 'get'>,
+  projects: ProjectStore,
+  tasks?: Pick<CoreDataHostStores['tasks'], 'get' | 'create' | 'update'>,
   scope?: HostProjectSessionScope,
+  coordinator?: {
+    readonly sessions: Pick<HostSessionApiV1, 'get' | 'create'>;
+    readonly workspaces: Pick<HostWorkspaceRegistrationApiV1, 'registerLocalDirectory'>;
+  },
 ): HostProjectApiV1 {
+  const lifecycle = tasks ? createProjectTaskLifecycle({ projects, tasks }) : null;
+  function taskSnapshot(projectId: string, taskId: string) {
+    const link = projects.getTaskLink(taskId);
+    if (!link || link.project_id !== projectId) throw new Error('project_task_not_found');
+    return { task: toProjectTask(tasks?.get(taskId) ?? null), link: taskLink(link), attempts: taskAttempts(taskId) };
+  }
+  function taskAttempts(taskId: string) {
+    return projects.listTaskAttempts(taskId).map((attempt) => ({ attemptId: attempt.attempt_id,
+      workSessionId: attempt.work_session_id, runId: attempt.run_id, status: attempt.status, reason: attempt.reason }));
+  }
+  const coordinatorSessions = coordinator === undefined ? null : createProjectCoordinatorSessionService({
+    projects: {
+      getProject: async (projectId) => {
+        const row = projects.get(projectId);
+        return row ? toRecord(row) : null;
+      },
+      bindCoordinatorSession: async (projectId, sessionId) => {
+        const row = projects.bindCoordinatorSession(projectId, sessionId);
+        return row ? toRecord(row) : null;
+      },
+    },
+    sessions: coordinator.sessions,
+    workspaces: coordinator.workspaces,
+  });
   return {
     async listProjects() {
       return projects.list().map(toRecord);
@@ -128,30 +160,26 @@ export function createHostProjectApi(
       return row ? toRecord(row) : null;
     },
 
+    async ensureCoordinatorSession(projectId): Promise<ProjectCoordinatorSessionResult> {
+      if (coordinatorSessions === null) throw new Error('Project Coordinator session service is unavailable');
+      return coordinatorSessions.ensureCoordinatorSession(projectId);
+    },
+
     async listProjectTasks(projectId) {
       if (!projects.get(projectId)) return [];
-      return projects.listTaskLinks(projectId).map((link) => ({
-        projectId: link.project_id,
-        taskId: link.task_id,
-        coordinatorSessionId: link.coordinator_session_id,
-        workSessionId: link.work_session_id,
-        updatedAt: link.updated_at,
-        acceptanceStatus: link.acceptance_status,
-      }));
+      return projects.listTaskLinks(projectId).map(taskLink);
     },
 
     async bindProjectTask(projectId, taskId, coordinatorSessionId) {
       if (!projects.get(projectId)) throw new Error(`Project "${projectId}" does not exist`);
       if (!tasks?.get(taskId)) throw new Error(`Task "${taskId}" does not exist`);
       const link = projects.bindTask(projectId, taskId, coordinatorSessionId);
-      return { projectId: link.project_id, taskId: link.task_id, coordinatorSessionId: link.coordinator_session_id,
-        workSessionId: link.work_session_id, updatedAt: link.updated_at, acceptanceStatus: link.acceptance_status };
+      return taskLink(link);
     },
 
     async bindWorkSession(projectId, taskId, workSessionId) {
       const link = projects.bindWorkSession(projectId, taskId, workSessionId);
-      return link ? { projectId: link.project_id, taskId: link.task_id, coordinatorSessionId: link.coordinator_session_id,
-        workSessionId: link.work_session_id, updatedAt: link.updated_at, acceptanceStatus: link.acceptance_status } : null;
+      return link ? taskLink(link) : null;
     },
 
     async getProjectContinuity(projectId, options = {}) {
@@ -160,9 +188,9 @@ export function createHostProjectApi(
       const projectRecord = toRecord(project);
       const links = projects.listTaskLinks(projectId);
       const taskRows = await Promise.all(links.map(async (link) => ({
-        link: { projectId, taskId: link.task_id, coordinatorSessionId: link.coordinator_session_id,
-          workSessionId: link.work_session_id, updatedAt: link.updated_at, acceptanceStatus: link.acceptance_status },
+        link: taskLink(link),
         task: tasks ? toProjectTask(await tasks.get(link.task_id)) : null,
+        attempts: taskAttempts(link.task_id),
       })));
       const stateRow = projects.getContinuityState(projectId);
       const decisions = projects.listDecisions(projectId).map((row) => ({
@@ -230,13 +258,20 @@ export function createHostProjectApi(
         source: { type: row.source_type, id: row.source_id }, updatedAt: row.updated_at } satisfies ProjectMemory;
     },
 
+    async createProjectTask(input) {
+      if (!lifecycle) throw new Error('project_task_store_unavailable');
+      return taskSnapshot(input.projectId, lifecycle.create(input));
+    },
+
+    async updateProjectTask(input) {
+      if (!lifecycle) throw new Error('project_task_store_unavailable');
+      lifecycle.update(input);
+      return taskSnapshot(input.projectId, input.taskId);
+    },
+
     async updateProjectTaskAcceptance(input) {
-      assertProjectSource(input.source);
-      if (input.source.type !== 'user_message') throw new Error('Task acceptance must cite an explicit user message');
-      const link = projects.setTaskAcceptance(input.projectId, input.taskId, input.status, input.source.type, input.source.id);
-      if (!link) return null;
-      return { projectId: link.project_id, taskId: link.task_id, coordinatorSessionId: link.coordinator_session_id,
-        workSessionId: link.work_session_id, updatedAt: link.updated_at, acceptanceStatus: link.acceptance_status };
+      if (!lifecycle) throw new Error('project_task_store_unavailable');
+      return taskLink(lifecycle.review(input));
     },
 
     async listProjectMemoryHistory(projectId, key, limit = 20) {
@@ -288,6 +323,11 @@ export function createHostProjectApi(
       };
     },
   };
+}
+
+function taskLink(link: ProjectTaskLinkRow) {
+  return { projectId: link.project_id, taskId: link.task_id, coordinatorSessionId: link.coordinator_session_id,
+    workSessionId: link.work_session_id, updatedAt: link.updated_at, acceptanceStatus: link.acceptance_status, revision: link.revision ?? 0 };
 }
 
 function assertProjectSource(source: { type: string; id: string }): void {

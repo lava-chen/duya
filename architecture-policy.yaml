@@ -786,7 +786,17 @@ modules:
   - id: legacy-gateway
     roots: [packages/gateway]
     managed: false
-    requires: []
+    # `agent-protocol` (2026-11-17): the multi-instance Project channel transport
+    # implements the neutral `ProjectChannelTransportPort`, its callback/observed
+    # types and its closed error-code set from
+    # `@duya/agent-protocol/project-channels` (plan `2026-11-17-project-channels`,
+    # slice B). Declared rather than baselined: that subpath is the entire
+    # contract between the transport and the Host domain, so a second copy of
+    # the DTOs in Gateway is exactly the drift this policy exists to prevent,
+    # and `@duya/agent-protocol` has zero runtime dependencies (drift test #1),
+    # so the edge adds no cycle and no IO. The legacy Discord adapter and the
+    # gateway process entry keep no protocol import.
+    requires: [agent-protocol]
     owner: platform
 
   - id: legacy-voice

@@ -16,6 +16,8 @@ import type {
 } from '@duya/agent-protocol/session-api';
 import type { CoreSession } from '@duya/data/session-store';
 import { createHostSessionService, type SessionServiceCaller } from '../src/session-service.js';
+import { createProjectDispatchPort } from '../src/project/dispatch.js';
+import { projectTaskFixture } from './project-task-fixture.js';
 
 const tempRoots: string[] = [];
 
@@ -25,6 +27,7 @@ afterEach(async () => {
 
 interface Harness {
   service: ReturnType<typeof createHostSessionService>;
+  projectFixture?: ReturnType<typeof projectTaskFixture>;
   caller: SessionServiceCaller;
   workingDirectory: string;
   parent: HostSessionRecord;
@@ -47,6 +50,12 @@ async function createHarness(options: {
   readonly expireDuringCreate?: boolean;
   readonly deferStartPrompt?: string;
   readonly throwRunningIdentityUpdate?: boolean;
+  readonly project?: boolean;
+  readonly createFailure?: boolean;
+  readonly checkoutFailure?: boolean;
+  readonly loseStartReceipt?: boolean;
+  readonly replaceCoordinatorDuringCreate?: boolean;
+  readonly replaceCoordinatorDuringCheckout?: boolean;
 } = {}): Promise<Harness> {
   const workingDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'duya-host-session-service-'));
   tempRoots.push(workingDirectory);
@@ -65,7 +74,7 @@ async function createHarness(options: {
     providerId: 'parent-provider',
     mode: 'chat',
     permissionMode: 'auto',
-    agentProfileId: 'profile-1',
+    agentProfileId: options.project ? 'project-coordinator' : 'profile-1',
     parentSessionId: null,
     agentType: 'chat',
     agentName: '',
@@ -76,6 +85,7 @@ async function createHarness(options: {
     recencyAt: null,
     lastTurnStartedAt: null,
   };
+  const projectFixture = options.project ? projectTaskFixture(parent.id) : undefined;
   const otherParent: HostSessionRecord = { ...parent, id: 'other-parent' };
   const childRecords = new Map<string, HostSessionRecord>();
   const runRecords = new Map<string, AgentRunRecord>();
@@ -99,6 +109,7 @@ async function createHarness(options: {
       return record;
     },
     async create(input: HostSessionCreateInput) {
+      if (options.createFailure) throw new Error('session create failed');
       const id = `child-${++nextSession}`;
       const record: HostSessionRecord = {
         ...parent,
@@ -122,6 +133,7 @@ async function createHarness(options: {
       };
       childRecords.set(id, record);
       if (options.expireDuringCreate) attemptExpired = true;
+      if (options.replaceCoordinatorDuringCreate) projectFixture!.projects.bindCoordinatorSession(projectFixture!.projectId, 'replacement');
       return record;
     },
     async list(query?: { parentSessionId?: string; cursor?: string; limit?: number }) {
@@ -208,6 +220,7 @@ async function createHarness(options: {
         traceId: runId,
         payload: { type: 'assistant.text_block', messageId: `${runId}:message`, index: 0, text: `result:${input.prompt}` },
       } as RunEventEnvelope]);
+      if (options.loseStartReceipt) throw new Error('start response lost');
       return { accepted: true, stage: 'dispatched', runId } as const;
     },
     async cancelAgentRun(runId: string) {
@@ -220,6 +233,15 @@ async function createHarness(options: {
 
   const caller: SessionServiceCaller = { sessionId: parent.id, runId: 'parent-run', epoch: 7 };
   const service = createHostSessionService({
+    ...(projectFixture ? { projectDispatch: createProjectDispatchPort(projectFixture.stores) } : {}),
+    ...(options.checkoutFailure || options.replaceCoordinatorDuringCheckout ? { checkoutService: {
+      read: () => ({ checkout: null }),
+      createChildCheckout: async () => {
+        if (options.checkoutFailure) throw new Error('checkout failed');
+        projectFixture!.projects.bindCoordinatorSession(projectFixture!.projectId, 'replacement');
+        return { state: { cwd: workingDirectory, checkout: null } };
+      },
+    } as never } : {}),
     sessions,
     runs,
     execution,
@@ -237,6 +259,7 @@ async function createHarness(options: {
   });
   return {
     service,
+    ...(projectFixture ? { projectFixture } : {}),
     caller,
     workingDirectory,
     parent,
@@ -259,6 +282,69 @@ async function createHarness(options: {
     },
   };
 }
+
+describe('Project launch failure reconciliation through Session service', () => {
+  async function prepare(options: Parameters<typeof createHarness>[0] = {}) {
+    const h = await createHarness({ ...options, project: true });
+    const f = h.projectFixture!;
+    const taskId = f.lifecycle.create({ projectId: f.projectId, coordinatorSessionId: h.parent.id,
+      requestId: 'create', subject: 'Ship feature', description: 'Implement and test feature' });
+    function spawn(prompt = 'work') {
+      return h.service.dispatch('session:spawn', { prompt, workingDirectory: h.workingDirectory, use_worktree: false,
+        projectTask: { taskId, expectedRevision: f.projects.getTaskLink(taskId)!.revision! } }, h.caller);
+    }
+    return { ...h, f, taskId, spawn };
+  }
+  it.each([
+    ['Session creation', { createFailure: true }, 'session create failed'],
+    ['checkout setup', { checkoutFailure: true }, 'checkout failed'],
+    ['Run admission', { refusePrompt: 'work' }, 'worker unavailable'],
+    ['expired caller', { expireDuringCreate: true }, 'caller_attempt_not_current'],
+    ['replaced Coordinator', { replaceCoordinatorDuringCreate: true }, 'not_project_coordinator'],
+    ['Coordinator replaced during checkout', { replaceCoordinatorDuringCheckout: true }, 'not_current_project_work'],
+  ] as const)('records a failed attempt after %s, leaving canonical Task pending', async (_name, options, reason) => {
+    const h = await prepare(options);
+    expect(await h.spawn()).toMatchObject({ ok: false, taskId: h.taskId, reason: expect.stringContaining(reason) });
+    expect(h.f.projects.listTaskAttempts(h.taskId)[0]).toMatchObject({ status: 'failed', reason: expect.stringContaining(reason) });
+    expect(h.f.tasks.get(h.taskId)?.status).toBe('pending');
+    expect(h.f.projects.getTaskLink(h.taskId)?.acceptance_status).toBe('pending');
+    if (h.childRecords.size) expect(h.childRecords.get('child-1')?.status).toBe('error');
+  });
+  it('cancels a launch accepted after Coordinator authority changed and keeps an unknown receipt', async () => {
+    const h = await prepare({ deferStartPrompt: 'work' });
+    const pending = h.spawn();
+    await h.deferredStartEntered;
+    h.f.projects.bindCoordinatorSession(h.f.projectId, 'replacement');
+    h.releaseDeferredStart();
+    expect(await pending).toMatchObject({ ok: false, taskId: h.taskId, reason: 'not_current_project_work' });
+    expect(h.cancellations).toEqual(['run-1']);
+    expect(h.f.projects.listTaskAttempts(h.taskId)[0]).toMatchObject({ status: 'unknown', run_id: 'run-1' });
+    expect(await h.service.dispatch('session:spawnRename', { sessionId: 'child-1', title: 'Stale parent' }, h.caller))
+      .toMatchObject({ ok: false, reason: 'not_found_or_not_owned' });
+  });
+
+  it('retries the same Task after a known admission failure and rejects concurrent duplicate launches', async () => {
+    const h = await prepare({ refusePrompt: 'bad', deferStartPrompt: 'retry' });
+    expect(await h.spawn('bad')).toMatchObject({ ok: false, taskId: h.taskId });
+    const retry = h.spawn('retry');
+    await h.deferredStartEntered;
+    expect(await h.spawn('duplicate')).toMatchObject({ ok: false, reason: expect.stringContaining('task_execution_active') });
+    h.releaseDeferredStart();
+    expect(await retry).toMatchObject({ ok: true, taskId: h.taskId, runId: 'run-1' });
+    expect(h.f.projects.listTaskAttempts(h.taskId)).toHaveLength(2);
+    expect(h.f.tasks.getBySession(h.parent.id)).toHaveLength(1);
+  });
+  it('keeps a lost Run-start response unknown and blocks retry until durable Run reconciliation', async () => {
+    const h = await prepare({ loseStartReceipt: true });
+    expect(await h.spawn()).toMatchObject({ ok: false, taskId: h.taskId });
+    expect(h.f.projects.listTaskAttempts(h.taskId)[0]?.status).toBe('unknown');
+    expect(await h.spawn()).toMatchObject({ ok: false, reason: expect.stringContaining('task_execution_active') });
+    h.f.lifecycle.recover((sessionId) => [...h.runRecords.values()].filter((run) => run.sessionId === sessionId)
+      .map((run) => ({ id: run.runId, status: run.status, terminal: run.terminal, created_at: run.createdAt })));
+    expect(h.f.projects.listTaskAttempts(h.taskId)[0]).toMatchObject({ status: 'running', run_id: 'run-1' });
+    expect(h.starts).toHaveLength(1);
+  });
+});
 
 describe('Host session service', () => {
   it('spawns two independent child sessions and reads each result from its durable run', async () => {

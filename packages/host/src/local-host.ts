@@ -40,6 +40,9 @@ import {
   migratePreviousDefaultDatabases,
   resolveDataRoot,
   resolveDatabasePaths,
+  ProjectChannelStore,
+  SessionInputStore,
+  SessionControlLeaseStore,
   type SqliteCtor,
 } from '@duya/data';
 import {
@@ -103,8 +106,15 @@ import { createHostGoalApi } from './goal-api.js';
 import { createHostModeStateApi } from './mode-state-api.js';
 import { createHostTaskApi } from './task-api.js';
 import { createHostProjectApi } from './project-api.js';
-import { createProjectRunSettlementService } from './project/reconciliation.js';
+import { createProjectRunSettlementService, createProjectTaskLifecycle } from './project/reconciliation.js';
 import { createProjectToolService } from './project/tool-service.js';
+import {
+  createProjectChannelHostService,
+  createProjectChannelPendingIndex,
+  createProjectChannelSecretStore,
+  type ProjectChannelHostService,
+} from './project-channels/index.js';
+import type { ProjectChannelTransportPort } from '@duya/agent-protocol/project-channels';
 import { createHostPermissionRequestApi } from './permission-request-api.js';
 import { createHostToolApprovalApi } from './tool-approval-api.js';
 import { createHostLockApi } from './lock-api.js';
@@ -260,12 +270,28 @@ export interface StartLocalHostOptions {
    * UI and must not write to it. See `host-diagnostics-log.ts`.
    */
   readonly diagnostics?: HostDiagnosticsSink;
+  /**
+   * The neutral Project channel transport, built by the composition that owns
+   * the Gateway. Absent means the Host composes no channel support at all:
+   * `project.list_channels` refuses, no connection is started, and nothing
+   * about ordinary Sessions changes.
+   *
+   * The transport carries tokens, so it must never be reachable from a Worker
+   * or the DB bridge — it enters here and stays inside the Host process.
+   */
+  readonly projectChannelTransport?: ProjectChannelTransportPort;
 }
 
 export interface LocalHostHandle {
   /** Trusted in-process admission for verified inputs; no client-supplied policy. */
   readonly botInputs?: BotDispatcher;
   readonly botChannels?: BotChannels;
+  /**
+   * The Project channel control plane, present when the caller injected a
+   * transport. It is the same instance the Worker bridge and the HTTP surface
+   * read, so a binding created through one is visible to the other.
+   */
+  readonly projectChannels?: ProjectChannelHostService;
   readonly origin: string;
   readonly port: number;
   /** Defined when the Host was started with a stable token; undefined in ephemeral mode. */
@@ -461,6 +487,13 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
   let shutdownHost: (() => Promise<void>) | null = null;
   let botDispatcher: BotDispatcher | undefined;
   let botChannels: BotChannels | undefined;
+  /**
+   * The Project channel domain, present only when the composition injected a
+   * transport. The Host never builds one: the Gateway is a composition
+   * dependency (CLI/Desktop), so a Host that imported it would invert the
+   * boundary this whole slice is built around.
+   */
+  let projectChannels: ProjectChannelHostService | undefined;
 
   try {
     const previousPath = explicitDatabasePath ? undefined : previousDefaultPath;
@@ -538,7 +571,6 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       stores: core.stores,
       legacyAttachments: new MainAttachmentStore(mainDatabase.db),
     });
-    const workspaceApi = createHostWorkspaceRegistrationApi(workspaceAccess);
     // One instance for the HTTP surface and the worker db bridge: the bridge
     // serves the legacy session row shape, and it must be the same rows the
     // HTTP surface reads.
@@ -552,9 +584,13 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
     const goalApi = createHostGoalApi(core.stores);
     const modeStateApi = createHostModeStateApi(core.stores);
     const taskApi = createHostTaskApi(core.stores, core.stores.projects);
+    const workspaceApi = createHostWorkspaceRegistrationApi(workspaceAccess);
     const projectApi = createHostProjectApi(core.stores.projects, core.stores.tasks, {
       sessions: core.stores.sessions,
       spawnEdges: core.stores.spawnEdges,
+    }, {
+      sessions: api,
+      workspaces: workspaceApi,
     });
     const lockApi = createHostLockApi(core.stores);
     // ONE instance per API, shared by the HTTP surface and the worker db
@@ -624,12 +660,64 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
         runExecution.validateSessionCaller({ sessionId: actor.sessionId, runId: actor.runId, epoch: actor.epoch });
       },
     });
+    /**
+     * Project channels.
+     *
+     * Composed only when the caller injected a transport: the Gateway lives in
+     * the composition that owns it (CLI/Desktop), so this Host never imports it
+     * and never builds a token-bearing socket on its own. The execution port is
+     * the SAME admission the TUI uses — a channel message starts a run through
+     * `startAgentRun`, not through a second launcher — and `isCurrentAttempt`
+     * reads the run controller so a settled run or a superseded epoch cannot
+     * send. Both are closures because the controller is assembled below.
+     */
+    if (options.projectChannelTransport !== undefined) {
+      const projectChannelStore = new ProjectChannelStore(core.database.db);
+      projectChannels = createProjectChannelHostService({
+        stores: {
+          channels: projectChannelStore,
+          projects: core.stores.projects,
+          sessions: core.stores.sessions,
+          sessionInputs: new SessionInputStore(core.database.db),
+          leases: new SessionControlLeaseStore(core.database.db),
+        },
+        pending: createProjectChannelPendingIndex(projectChannelStore),
+        transport: options.projectChannelTransport,
+        secrets: createProjectChannelSecretStore({ dataRoot }),
+        execution: {
+          // Unknown execution state must read as "busy": waiting is always
+          // recoverable, starting a second run for one Session is not.
+          isSessionBusy: (sessionId) => runExecution?.isSessionBusy(sessionId) ?? true,
+          isCurrentAttempt: (sessionId, runId, epoch) =>
+            runExecution?.isCurrentSessionAttempt(sessionId, runId, epoch) ?? false,
+          startRun: async (input) => {
+            if (!runExecution) return { accepted: false as const, stage: 'host_run_execution_unavailable' };
+            const started = await runExecution.startAgentRun({
+              sessionId: input.sessionId,
+              prompt: input.prompt,
+            });
+            return started.accepted
+              ? { accepted: true as const, runId: started.runId }
+              : {
+                  accepted: false as const,
+                  stage: started.stage,
+                  ...(started.reason === undefined ? {} : { reason: started.reason }),
+                };
+          },
+        },
+        ensureCoordinator: async (projectId) => ({
+          sessionId: (await projectApi.ensureCoordinatorSession(projectId)).sessionId,
+        }),
+        logger: executionLogger,
+      });
+    }
     if (options.workerPath !== undefined) {
       const sessionService = createHostSessionService({
         checkoutService,
         projectDispatch: createProjectDispatchPort({
           projects: core.stores.projects,
           tasks: core.stores.tasks,
+          runs: core.stores.runs,
         }),
         sessions: api,
         runs: createHostRunApi(core.stores),
@@ -663,6 +751,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       // idle dispatcher here, so the row is delivered on the Coordinator's
       // next turn (or by whichever surface drains the mailbox).
       const projectRunSettlement = createProjectRunSettlementService({
+        taskLifecycle: createProjectTaskLifecycle(core.stores),
         stores: {
           runs: core.stores.runs,
           projects: core.stores.projects,
@@ -738,6 +827,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
           projectToolApi: createProjectToolService({
             stores: { projects: core.stores.projects },
             projectApi,
+            ...(projectChannels === undefined ? {} : { channels: projectChannels }),
           }),
           pluginAppInvocationApi,
           mailboxApi: localMailboxApi,
@@ -1070,6 +1160,8 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       modeStateApi,
       taskApi,
       projectApi,
+      // Same instance the tool layer uses: one ledger, one transport lifecycle.
+      ...(projectChannels === undefined ? {} : { projectChannelApi: projectChannels }),
       researchApi: createHostResearchApi(core.stores),
       permissionRequestApi: runExecution?.permissionRequests ?? createHostPermissionRequestApi(core.stores),
       toolApprovalApi: createHostToolApprovalApi(mainDatabase.db),
@@ -1103,6 +1195,20 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
     });
     await server.listen();
     botDispatcher?.start();
+    // A client-scoped Host stops with its clients, so it must not hold a
+    // Project's Bot connection open while nobody is watching. Foreground
+    // `duya serve` (not client-scoped) owns the connection, and a failed start
+    // is logged rather than fatal: the persisted queue keeps the work.
+    if (projectChannels !== undefined && options.clientScoped !== true) {
+      try {
+        await projectChannels.start();
+      } catch (error) {
+        executionLogger.error(
+          'Project channel start failed',
+          error instanceof Error ? error : new Error(String(error)),
+        );
+      }
+    }
     runtime = {
       apiVersion: 1,
       host: HOST,
@@ -1119,7 +1225,12 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       closed = true;
       try {
         try { await botDispatcher?.close(); }
-        finally { await server?.close(); }
+        finally {
+          // Stop receiving before the database goes away: an in-flight inbound
+          // must land as `host_shutdown` in the durable queue, not as a crash.
+          try { await projectChannels?.close(); }
+          finally { await server?.close(); }
+        }
       } finally {
         // Stop supervised workers before the database handles they were
         // writing through the bridge disappear underneath them.
@@ -1156,6 +1267,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       close: shutdownHost,
       ...(botDispatcher ? { botInputs: botDispatcher } : {}),
       ...(botChannels ? { botChannels } : {}),
+      ...(projectChannels ? { projectChannels } : {}),
     };
   } catch (error) {
     try { await botDispatcher?.close(); await server?.close(); } finally {
