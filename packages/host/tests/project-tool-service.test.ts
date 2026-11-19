@@ -54,31 +54,18 @@ function snapshot(): ProjectContinuitySnapshot {
   };
 }
 
-function harness(options: { coordinator?: string | null; updateState?: 'ok' | 'conflict' } = {}) {
+function harness(options: { coordinator?: string | null } = {}) {
   const projectApi = {
     getProjectContinuity: vi.fn(async () => snapshot()),
     getProjectContext: vi.fn(async () => ({
       text: 'Durable project context',
       sourceRefs: [{ type: 'project', id: PROJECT_ID }],
     })),
-    updateProjectState: vi.fn(async (input: { currentState: string; nextStep: string }) =>
-      options.updateState === 'conflict'
-        ? null
-        : {
-            revision: 4,
-            currentState: input.currentState,
-            nextStep: input.nextStep,
-            source: { type: 'session', id: COORDINATOR_ID },
-            updatedAt: 11,
-          }),
-    updateProjectDecision: vi.fn(async () => ({
-      key: 'api-shape', content: 'Use the REST endpoint', status: 'proposed' as const, revision: 3,
-      source: { type: 'session', id: COORDINATOR_ID }, updatedAt: 12,
-    })),
-    updateProjectMemory: vi.fn(async () => ({
-      key: 'style', content: 'Prefer small modules', status: 'candidate' as const, revision: 2,
-      source: { type: 'session', id: COORDINATOR_ID }, updatedAt: 13,
-    })),
+    // The durable write APIs stay in the Host for the control plane; the tool
+    // must never reach them.
+    updateProjectState: vi.fn(),
+    updateProjectDecision: vi.fn(),
+    updateProjectMemory: vi.fn(),
   };
   const service = createProjectToolService({
     stores: {
@@ -92,11 +79,7 @@ function harness(options: { coordinator?: string | null; updateState?: 'ok' | 'c
     },
     projectApi: projectApi as unknown as Pick<
       HostProjectApiV1,
-      | 'getProjectContinuity'
-      | 'getProjectContext'
-      | 'updateProjectState'
-      | 'updateProjectDecision'
-      | 'updateProjectMemory'
+      'getProjectContinuity' | 'getProjectContext'
     >,
   });
   return { service, projectApi };
@@ -125,103 +108,41 @@ describe('project tool service', () => {
     expect(result).toMatchObject({
       ok: true,
       snapshot: {
-        project: { projectId: PROJECT_ID },
-        state: { revision: 3 },
         tasks: [{ taskId: 'task-1', acceptanceStatus: 'pending', workSessionId: 'work-1', recordAvailable: true }],
-        decisions: [{ key: 'api-shape', status: 'accepted' }],
-        memories: [{ key: 'style', status: 'active' }],
         activity: [{ cursor: 7, type: 'run.terminal', runId: 'run-1' }],
         nextCursor: 7,
       },
     });
   });
 
-  it('writes state with the calling Session as provenance', async () => {
-    const { service, projectApi } = harness();
+  it('projects tasks and activity only', async () => {
+    const { service } = harness();
 
-    const result = await service.dispatch({
-      action: 'update_state',
-      payload: { expectedRevision: 3, currentState: 'Merged', nextStep: 'Ask for acceptance' },
-      callerSessionId: COORDINATOR_ID,
-    });
+    const result = await service.dispatch({ action: 'get', payload: {}, callerSessionId: COORDINATOR_ID });
 
-    expect(projectApi.updateProjectState).toHaveBeenCalledWith({
-      projectId: PROJECT_ID,
-      expectedRevision: 3,
-      currentState: 'Merged',
-      nextStep: 'Ask for acceptance',
-      source: { type: 'session', id: COORDINATOR_ID },
-    });
-    expect(result).toMatchObject({ ok: true, state: { revision: 4 } });
+    const projected = (result as { snapshot?: Record<string, unknown> }).snapshot ?? {};
+    expect(Object.keys(projected).sort()).toEqual(['activity', 'nextCursor', 'tasks']);
   });
 
-  it('maps a stale revision to a conflict without inventing a write', async () => {
-    const { service } = harness({ updateState: 'conflict' });
-
-    const result = await service.dispatch({
-      action: 'update_state',
-      payload: { expectedRevision: 2, currentState: 'Stale' },
-      callerSessionId: COORDINATOR_ID,
-    });
-
-    expect(result).toEqual({ ok: false, reason: 'revision_conflict' });
-  });
-
-  it('refuses decision acceptance and memory activation as user-only actions', async () => {
+  it('never reaches the durable write APIs', async () => {
     const { service, projectApi } = harness();
 
-    const decision = await service.dispatch({
-      action: 'record_decision',
-      payload: { expectedRevision: 0, key: 'k', content: 'c', status: 'accepted' },
-      callerSessionId: COORDINATOR_ID,
-    });
-    const memory = await service.dispatch({
-      action: 'record_memory',
-      payload: { expectedRevision: 0, key: 'k', content: 'c', status: 'active' },
-      callerSessionId: COORDINATOR_ID,
-    });
+    await service.dispatch({ action: 'get', payload: {}, callerSessionId: COORDINATOR_ID });
 
-    expect(decision).toEqual({ ok: false, reason: 'user_action_required' });
-    expect(memory).toEqual({ ok: false, reason: 'user_action_required' });
+    expect(projectApi.updateProjectState).not.toHaveBeenCalled();
     expect(projectApi.updateProjectDecision).not.toHaveBeenCalled();
     expect(projectApi.updateProjectMemory).not.toHaveBeenCalled();
   });
 
-  it('records proposals and candidates with a session source', async () => {
+  it('refuses the removed context and write actions', async () => {
     const { service, projectApi } = harness();
 
-    const decision = await service.dispatch({
-      action: 'record_decision',
-      payload: { expectedRevision: 2, key: 'api-shape', content: 'Use REST', status: 'proposed' },
-      callerSessionId: COORDINATOR_ID,
-    });
-    const memory = await service.dispatch({
-      action: 'record_memory',
-      payload: { expectedRevision: 1, key: 'style', content: 'Small modules', status: 'candidate' },
-      callerSessionId: COORDINATOR_ID,
-    });
+    for (const action of ['context', 'update_state', 'record_decision', 'record_memory']) {
+      const result = await service.dispatch({ action, payload: {}, callerSessionId: COORDINATOR_ID });
 
-    expect(decision).toMatchObject({ ok: true, decision: { key: 'api-shape', status: 'proposed' } });
-    expect(memory).toMatchObject({ ok: true, memory: { key: 'style', status: 'candidate' } });
-    expect(projectApi.updateProjectDecision).toHaveBeenCalledWith(expect.objectContaining({
-      source: { type: 'session', id: COORDINATOR_ID },
-    }));
-    expect(projectApi.updateProjectMemory).toHaveBeenCalledWith(expect.objectContaining({
-      source: { type: 'session', id: COORDINATOR_ID },
-    }));
-  });
-
-  it('builds bounded context for one task', async () => {
-    const { service, projectApi } = harness();
-
-    const result = await service.dispatch({
-      action: 'context',
-      payload: { taskId: 'task-1', maxCharacters: 1200 },
-      callerSessionId: COORDINATOR_ID,
-    });
-
-    expect(projectApi.getProjectContext).toHaveBeenCalledWith(PROJECT_ID, 'task-1', 1200);
-    expect(result).toMatchObject({ ok: true, context: { text: 'Durable project context' } });
+      expect(result).toEqual({ ok: false, reason: `unsupported_action:${action}` });
+    }
+    expect(projectApi.getProjectContinuity).not.toHaveBeenCalled();
   });
 
   it('rejects an unknown action before resolving the project', async () => {
@@ -231,5 +152,14 @@ describe('project tool service', () => {
 
     expect(result).toEqual({ ok: false, reason: 'unsupported_action:accept_task' });
     expect(projectApi.getProjectContinuity).not.toHaveBeenCalled();
+  });
+
+  it('builds the bounded prompt context for a bound session', async () => {
+    const { service, projectApi } = harness();
+
+    const result = await service.getSessionContext(COORDINATOR_ID);
+
+    expect(projectApi.getProjectContext).toHaveBeenCalledWith(PROJECT_ID, undefined, 8000);
+    expect(result).toMatchObject({ text: 'Durable project context', role: 'coordinator', projectId: PROJECT_ID });
   });
 });

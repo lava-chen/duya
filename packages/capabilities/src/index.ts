@@ -107,8 +107,8 @@ export {
 export type { AppToolContext } from './AppServer/app-tool-context.js';
 export { collectAppServerTools } from './AppServer/contributors.js';
 export type { AppServerCapabilityContributor } from './AppServer/contributors.js';
-export { SessionListTool, SessionReadTool, SessionForkTool, SessionSendTool, SessionInputStatusTool, SessionControlTool } from './session-app-tools.js';
-export type { SessionInputPort, SessionListPort, SessionListRequest, SessionReadPort, SessionReadRequest, SessionForkPort, SessionControlPort } from './session-app-tools.js';
+export { SessionListTool, SessionReadTool, SessionForkTool, SessionSendTool, SessionInputStatusTool, SessionControlTool, SessionRenameTool } from './session-app-tools.js';
+export type { SessionInputPort, SessionListPort, SessionListRequest, SessionReadPort, SessionReadRequest, SessionForkPort, SessionControlPort, SessionRenamePort, SessionRenameOutcome } from './session-app-tools.js';
 export {
   DUYA_APP_SERVER_NAME,
   DUYA_APP_TOOL_PREFIX,

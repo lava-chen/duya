@@ -8,7 +8,6 @@ function port(): SessionToolPort {
     reply: async () => ({ ok: true, sessionId: 'child', completionNotification: 'query' }),
     list: async () => ({ ok: true, sessions: [] }),
     cancel: async () => ({ ok: true, sessionId: 'child' }),
-    rename: async () => ({ ok: true, sessionId: 'child' }),
     get: async () => ({ ok: true, session: {
       id: 'child', title: 'Task', status: 'completed', workingDirectory: '/project',
       filesChanged: 0, linesAdded: 0, linesRemoved: 0, updatedAt: 1, createdAt: 1,

@@ -8,6 +8,7 @@
 import type { AgentProfile } from '@duya/agent-core';
 import {
   PROJECT_COORDINATOR_ALLOWED_TOOLS,
+  PROJECT_COORDINATOR_DISALLOWED_TOOLS,
   PROJECT_COORDINATOR_PROFILE_ID,
 } from '../project/identity.js';
 
@@ -58,7 +59,7 @@ export const MAIN_AGENT_PROFILES: AgentProfile[] = [
     // Canonical Tasks are managed through project/session, never the shared
     // todo list. This role needs no deferred discovery or arbitrary routing.
     allowedTools: [...PROJECT_COORDINATOR_ALLOWED_TOOLS],
-    disallowedTools: ['tool_catalog', 'tool_invoke'],
+    disallowedTools: [...PROJECT_COORDINATOR_DISALLOWED_TOOLS],
     // Dedicated composition: the coordinator must not inherit the general
     // agent's file-editing, shell, or desktop-tool guidance. Its identity is
     // the first section of that system, so the runtime's generic identity

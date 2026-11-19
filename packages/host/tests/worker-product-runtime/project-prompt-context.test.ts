@@ -61,11 +61,11 @@ describe('Project prompt at the model boundary', () => {
     const registry = worker.activeMCPRegistry;
     const project = new ProjectTool({ dispatch: async () => {
       state = 'UPDATED-PROJECT-MARKER';
-      return { ok: true, state: { revision: 2, currentState: state, nextStep: 'review', source: { type: 'session', id: 'coordinator-proof' }, updatedAt: 2 } };
+      return { ok: true, snapshot: { tasks: [], activity: [], nextCursor: 0 } };
     } });
     registry.register(project.toTool(), project);
     for (const name of ['todo', 'read', 'bash']) registry.register({ name, description: 'Excluded execution capability', input_schema: { type: 'object' } }, { execute: async () => { throw new Error('Excluded tool executed'); } });
-    scripts = [[{ type: 'tool_use', data: { id: 'update', name: 'project', input: { action: 'update_state', expectedRevision: 1, currentState: 'updated', nextStep: 'review' } } }, done], [{ type: 'text', data: 'ready' }, done]];
+    scripts = [[{ type: 'tool_use', data: { id: 'read', name: 'project', input: { action: 'get' } } }, done], [{ type: 'text', data: 'ready' }, done]];
     await driveTurn(worker, 'Continue the authorized project work', { options: { agentProfileId: 'project-coordinator', toolRegistry: registry }, maxTurns: 3 });
     expect(seen).toHaveLength(2);
     expect(snapshotText(seen[0])).toContain('INITIAL-PROJECT-MARKER');

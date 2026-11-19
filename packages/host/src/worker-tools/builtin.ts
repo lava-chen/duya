@@ -87,7 +87,7 @@ export function createBuiltinRegistry( services: BuiltinRegistryServices, deps: 
     registry.register(briefTool, briefTool, { exposure: 'deferred' });
     registry.register(projectTool.toTool(), projectTool, {
       exposure: 'deferred',
-      inputSchemaSummary: 'get project state/tasks/decisions/memories/activity, context, update_state, record_decision, record_memory',
+      inputSchemaSummary: 'get project tasks and activity',
     });
     const visionTool = new VisionTool();
     registry.register(visionTool, visionTool, { exposure: 'eager' });

@@ -22,6 +22,21 @@ export const PROJECT_WORK_SESSION_PROFILE_ID = 'code-expert';
  */
 export const PROJECT_COORDINATOR_ALLOWED_TOOLS = ['session', 'project'] as const;
 
+/**
+ * Tools the Coordinator must never see. The allowlist already excludes them,
+ * so this list states the constraint instead of relying on the allowlist alone:
+ * the shared todo list can delete canonical Tasks, Session forking and
+ * renaming duplicate the Coordinator's own dispatch surface, and the catalog
+ * routers would expose tools outside its management-only scope.
+ */
+export const PROJECT_COORDINATOR_DISALLOWED_TOOLS = [
+  'todo',
+  'session_fork',
+  'session_rename',
+  'tool_catalog',
+  'tool_invoke',
+] as const;
+
 export const PROJECT_TASK_SUBJECT_MAX_LENGTH = 160;
 export const PROJECT_TASK_DESCRIPTION_MAX_LENGTH = 12_000;
 

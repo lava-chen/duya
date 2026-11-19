@@ -53,7 +53,7 @@ export function buildProjectContext(input: BuildProjectContextInput): ProjectCon
   if (snapshot.state) {
     const state = snapshot.state;
     add(`### Current state (revision ${state.revision}; updatedAt ${state.updatedAt})\n${state.currentState}\nNext step: ${state.nextStep}\n[source: ${state.source.type}:${state.source.id}]`, state.source);
-  } else add('Current state: not recorded; use expectedRevision=0 for the first state write.');
+  } else add('Current state: not recorded.');
   // Task identity and acceptance precede long descriptions and less relevant
   // memory. Missing records remain visible instead of disappearing as done.
   for (const { task: item, link } of tasks) {

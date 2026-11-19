@@ -5,32 +5,16 @@
  * owned by the Host. The capability therefore describes only what the model
  * asks for; the Host resolves the caller's project from the trusted session
  * identity and returns the durable rows.
+ *
+ * The tool is read-only by contract: the Coordinator reads Tasks and Activity,
+ * and the Host (with the user) owns every durable write.
  */
 
-export type ProjectToolAction =
-  | 'get'
-  | 'context'
-  | 'update_state'
-  | 'record_decision'
-  | 'record_memory';
+export type ProjectToolAction = 'get';
 
 export interface ProjectToolSource {
   readonly type: string;
   readonly id: string;
-}
-
-export interface ProjectToolProject {
-  readonly projectId: string;
-  readonly name: string;
-  readonly coordinatorSessionId: string | null;
-}
-
-export interface ProjectToolState {
-  readonly revision: number;
-  readonly currentState: string;
-  readonly nextStep: string;
-  readonly source: ProjectToolSource;
-  readonly updatedAt: number;
 }
 
 export interface ProjectToolTask {
@@ -42,24 +26,6 @@ export interface ProjectToolTask {
   readonly workSessionId: string | null;
   readonly updatedAt: number;
   readonly recordAvailable: boolean;
-}
-
-export interface ProjectToolDecision {
-  readonly key: string;
-  readonly content: string;
-  readonly status: 'proposed' | 'accepted' | 'superseded';
-  readonly revision: number;
-  readonly source: ProjectToolSource;
-  readonly updatedAt: number;
-}
-
-export interface ProjectToolMemory {
-  readonly key: string;
-  readonly content: string;
-  readonly status: 'candidate' | 'active' | 'superseded' | 'retired';
-  readonly revision: number;
-  readonly source: ProjectToolSource;
-  readonly updatedAt: number;
 }
 
 export interface ProjectToolActivity {
@@ -74,26 +40,13 @@ export interface ProjectToolActivity {
 }
 
 export interface ProjectToolSnapshot {
-  readonly project: ProjectToolProject;
-  readonly state: ProjectToolState | null;
   readonly tasks: readonly ProjectToolTask[];
-  readonly decisions: readonly ProjectToolDecision[];
-  readonly memories: readonly ProjectToolMemory[];
   readonly activity: readonly ProjectToolActivity[];
   readonly nextCursor: number;
 }
 
-export interface ProjectToolContext {
-  readonly text: string;
-  readonly sourceRefs: readonly ProjectToolSource[];
-}
-
 export interface ProjectToolPayload {
   readonly snapshot?: ProjectToolSnapshot;
-  readonly context?: ProjectToolContext;
-  readonly state?: ProjectToolState;
-  readonly decision?: ProjectToolDecision;
-  readonly memory?: ProjectToolMemory;
 }
 
 export type ProjectToolOperation<T> =
